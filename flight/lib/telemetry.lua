@@ -97,7 +97,8 @@ local function slotView(cfg)
   local slots = {}
   for _, t in ipairs(cfg.hardware.thrusters or {}) do
     if t.id ~= "" and t.peripheral ~= "" then
-      slots[t.group .. ":" .. t.id] = t.peripheral
+      -- Config.slotKey, not t.id: an older craft spells the same slot "lift_fl".
+      slots[t.group .. ":" .. require("lib.config").slotKey(t)] = t.peripheral
     end
   end
   for _, entry in ipairs(cfg.hardware.sensors.velocityVector or {}) do

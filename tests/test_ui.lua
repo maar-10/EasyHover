@@ -571,6 +571,30 @@ T.it("pulse stays in milliseconds, because that is the unit it lives in", functi
   T.eq(panel.elements.pulse:getText(), "400ms", "shown in ms")
 end)
 
+T.it("SHOWS WHAT THE CRAFT SAID when a configSet is refused", function()
+  -- A refused command used to change nothing and say nothing, which is indistinguishable from
+  -- a dead button -- and is exactly how it got reported twice.
+  local panel = configRig()
+  panel.update(model())
+  T.eq(panel.elements.ackFlight:getText(), "", "quiet until something happens")
+
+  configAck = { ack = false, cmd = "configSet",
+                detail = { errors = { "engine.intervalMs must be >= 15000" } } }
+  panel.update(model())
+  T.isTrue(panel.elements.ackTimes:getText():find("15000") ~= nil,
+    "the craft's own reason is shown: " .. panel.elements.ackTimes:getText())
+  T.eq(panel.elements.ackTimes:getForeground(), Theme.warning, "and coloured as a refusal")
+end)
+
+T.it("confirms an accepted configSet too, so silence never means success", function()
+  local panel = configRig()
+  panel.update(model())
+  configAck = { ack = true, cmd = "configSet", detail = {} }
+  panel.update(model())
+  T.eq(panel.elements.ackFlight:getText(), "applied", "said so")
+  T.eq(panel.elements.ackFlight:getForeground(), Theme.ok, "and coloured as success")
+end)
+
 -- ------------------------------------------------------------------ slots
 
 T.suite("slot pickers")

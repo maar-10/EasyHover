@@ -22,6 +22,19 @@ local OPTICAL_DIRECTIONS =
   { down = true, forward = true, back = true, left = true, right = true }
 Config.OPTICAL_DIRECTIONS = OPTICAL_DIRECTIONS
 
+--- The slot key a thruster fills, as the config screens address it.
+---
+--- Ids used to carry their group ("lift_fl"); the screens address the bare corner ("fl"),
+--- because the group is already the page you are on. Rather than RENAME existing ids -- the
+--- mixer addresses thrusters by id, so a rename reaches much further than a display fix -- both
+--- spellings resolve to the same slot. An old craft therefore shows its four lift thrusters on
+--- the LIFT page without anything on disk changing.
+function Config.slotKey(thruster)
+  local id, group = thruster.id, thruster.group
+  if type(id) ~= "string" or type(group) ~= "string" then return id end
+  return id:match("^" .. group .. "_(.+)$") or id
+end
+
 --- A single thruster's defaults. Every configured thruster is merged over this.
 local function thrusterTemplate()
   return {
@@ -446,6 +459,7 @@ end
 --- vehicle's behaviour silently.
 function Config.migrate(cfg)
   local changes = {}
+
   local engine = cfg.engine
   if type(engine) == "table" and type(engine.intervalMs) == "number" then
     -- The feed interval used to allow 200 ms. It must now match a fuel unit's burn time, so

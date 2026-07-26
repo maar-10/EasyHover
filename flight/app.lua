@@ -493,7 +493,14 @@ function App:handleSetSlot(cmd)
   if kind == "lift" or kind == "main" or kind == "lateral" then
     local geometry = (SLOT_GEOMETRY[kind] or {})[key]
     if not geometry then return false, { errors = { "unknown " .. kind .. " slot: " .. tostring(key) } } end
-    dropWhere(self.cfg.hardware.thrusters, "id", key)
+    -- Drop whatever already fills this slot under EITHER spelling. Missing the old one would
+    -- leave two entries for the same physical thruster, and the mixer would command it twice.
+    for i = #self.cfg.hardware.thrusters, 1, -1 do
+      local t = self.cfg.hardware.thrusters[i]
+      if t.group == kind and Config.slotKey(t) == key then
+        table.remove(self.cfg.hardware.thrusters, i)
+      end
+    end
     if name ~= "" then
       local entry = Util.deepMerge(self.cfg.hardware.thrusterTemplate or {}, {
         id = key, peripheral = name, group = kind,

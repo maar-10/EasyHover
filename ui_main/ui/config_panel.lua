@@ -318,7 +318,8 @@ function ConfigPanel.build(frame, opts)
 
   -- ---------------------------------------------------------------- tank
 
-  sections.tank = Slots.build(tankPage, 1, 1, width, height - 3, {
+  -- height - 4: the picker's own footer must not land on the ack line below it.
+  sections.tank = Slots.build(tankPage, 1, 1, width, height - 4, {
     title = "FUEL TANK",
     slots = SECTION_SLOTS.tank.slots,
     candidates = function() return live.candidates.tanks or {} end,
@@ -409,6 +410,16 @@ function ConfigPanel.build(frame, opts)
 
   local staleBanner = Theme.staleBanner(frame, 1, width)
 
+  --- A refused command used to be INVISIBLE: the value simply did not move, which is
+  --- indistinguishable from a dead button -- and that is exactly how it got reported. Every
+  --- page that sends configSet carries this line, and it reports what the CRAFT said.
+  local ackLines = {
+    [timesPage] = Theme.line(timesPage, 9, width, "", Theme.dim),
+    [flightPage] = Theme.line(flightPage, height - 1, width, "", Theme.dim),
+    [tankPage] = Theme.line(tankPage, height - 3, width, "", Theme.dim),
+  }
+  local lastSeenAck = nil
+
   local function update(model)
     local t = model.telemetry or {}
     live.stale = model.stale
@@ -461,6 +472,28 @@ function ConfigPanel.build(frame, opts)
       :format(tostring(disk.onDisk or 0), tostring(disk.localConfigs or 0)), width))
 
     local ack = opts.lastAck and opts.lastAck()
+
+    -- configSet is the command every tunable on every page sends, so its verdict belongs
+    -- wherever the pilot is standing when it comes back.
+    if ack ~= lastSeenAck then
+      lastSeenAck = ack
+      if ack and ack.cmd == "configSet" then
+        local text, colour
+        if ack.ack then
+          text, colour = "applied", Theme.ok
+        else
+          -- The TAIL of a validator message carries the constraint ("must be >= 15000");
+          -- the head is the path, which the pilot already knows -- they are standing on it.
+          local errors = (ack.detail or {}).errors or {}
+          text, colour = Theme.fitEnd(tostring(errors[1] or "REFUSED"), width), Theme.warning
+        end
+        for _, line in pairs(ackLines) do
+          line:setText(text)
+          line:setForeground(colour)
+        end
+      end
+    end
+
     if ack and (ack.cmd == "diskSave" or ack.cmd == "diskLoad") then
       local detail = ack.detail or {}
       local text
@@ -496,6 +529,8 @@ function ConfigPanel.build(frame, opts)
       diskStatus = diskStatus, diskLocal = diskLocal, diskResult = diskResult,
       bank = bankRow, pitch = pitchRow, climb = climbRow, sink = sinkRow,
       yaw = yawRow, brake = brakeRow,
+      ackTimes = ackLines[timesPage], ackFlight = ackLines[flightPage],
+      ackTank = ackLines[tankPage],
     },
   }
 end

@@ -460,6 +460,40 @@ local function appRig(overrides)
   return app, path
 end
 
+T.it("RESOLVES an old group-prefixed id to the slot the screens address", function()
+  -- An existing craft has ids like "lift_fl"; the config screens address "fl". Without this the
+  -- LIFT page would read "0 of 4 set" with four thrusters assigned. Renaming the id was the
+  -- wrong fix: the mixer addresses thrusters BY ID, so a rename reaches far past a display bug.
+  T.eq(Config.slotKey({ id = "lift_fl", group = "lift" }), "fl", "the group prefix resolves away")
+  T.eq(Config.slotKey({ id = "lateral_rr", group = "lateral" }), "rr", "for every group")
+  T.eq(Config.slotKey({ id = "fr", group = "lift" }), "fr", "a new-style id is already the key")
+  T.eq(Config.slotKey({ id = "lifter", group = "lift" }), "lifter",
+    "and only a group_ PREFIX resolves, not a coincidental start")
+end)
+
+T.it("the id on disk is NOT rewritten -- the mixer still addresses what it always did", function()
+  local cfg = Config.withDefaults({
+    hardware = { thrusters = {
+      { id = "lift_fl", peripheral = "vector_thruster_0", group = "lift" },
+    } },
+  })
+  T.eq(cfg.hardware.thrusters[1].id, "lift_fl", "left exactly as written")
+end)
+
+T.it("reassigning an old-style slot REPLACES it instead of duplicating the thruster", function()
+  local app, path = appRig({ hardware = { thrusters = {
+    { id = "lift_fl", peripheral = "vector_thruster_0", group = "lift" },
+  } } })
+  T.isTrue((app:handleCommand({ cmd = "setSlot", kind = "lift", key = "fl",
+    peripheral = "vector_thruster_3" })), "accepted")
+  local count = 0
+  for _, t in ipairs(app.cfg.hardware.thrusters) do
+    if t.group == "lift" and Config.slotKey(t) == "fl" then count = count + 1 end
+  end
+  T.eq(count, 1, "one entry for the slot, not two -- the mixer must not command it twice")
+  fs.delete(path)
+end)
+
 T.it("assigns a lift thruster to a named corner, with a real moment arm", function()
   local app, path = appRig()
   local ok = app:handleCommand({ cmd = "setSlot", kind = "lift", key = "fr", peripheral = "vector_thruster_1" })
