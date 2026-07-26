@@ -96,6 +96,18 @@ else
   fail "deletes are not guarded" "a repair could cost the operator their config"
 fi
 
+# 8b. The updater stamp must match the actual Suite file. If it does not, every run tells the
+# operator their Suite is out of date, fetches a replacement, fails to verify it, and repeats
+# for ever -- the manifest sync check above covers this, but assert it directly because the
+# failure mode is a silent infinite nag rather than an error.
+SUITE_BYTES=$(wc -c < easyhover_suite.lua | tr -d ' ')
+STAMP_BYTES=$(grep -A2 '\["updater"\]' manifest.lua | grep '\["size"\]' | grep -o '[0-9]\+')
+if [[ "$SUITE_BYTES" == "$STAMP_BYTES" ]]; then
+  pass "the updater stamp matches easyhover_suite.lua ($SUITE_BYTES bytes)"
+else
+  fail "updater stamp is stale (manifest says $STAMP_BYTES, file is $SUITE_BYTES)"     "every run would nag that the Suite is out of date and never succeed"
+fi
+
 # 8a. An UPDATE must tell the operator to reboot. CC loads a program once, so a cockpit that
 # was updated while running keeps executing the OLD code -- which looks exactly like the new
 # features being broken, and is how it was reported from the cockpit.

@@ -118,6 +118,41 @@ Run it after **any** change to a role's files, then commit both the files and `m
 Forget it and the Suite will keep telling computers they are current when they are not —
 `tests/run_suite.sh` asserts the manifest is in sync, so the test catches it.
 
+## Update, or repair?
+
+They look identical on disk — the installed files disagree with the manifest — and **the version
+stamp is the only thing that tells them apart**:
+
+| On the computer | Verdict |
+|---|---|
+| Nothing installed | **install** |
+| Stamp differs from the release | **update** — drift from an older release is expected |
+| Stamp matches the release, bytes do not | **repair** — the stamp claims *these exact files*, so something damaged them |
+| Files present, no install record | **repair** — nothing says what they are, so verify everything |
+| `--repair` given | **repair**, always |
+
+The Suite originally treated any difference as corruption, which meant it could only ever *fix*
+a computer and never *update* one — and told the operator their install was broken every time a
+release shipped. `Suite.choosePlan` is pure and unit-tested, because this is the kind of logic
+that quietly regresses.
+
+**Missing files alone prove nothing.** A release that adds a module leaves an older install
+legitimately missing it, which is exactly the case this distinction exists for.
+
+An update also **prunes** files the new release no longer ships — after the new ones are safely
+committed, never before, since clearing up front would turn a failed download into a destroyed
+install.
+
+## The updater stamp
+
+`manifest.updater` records the size and checksum of `easyhover_suite.lua` itself. If it ever
+drifts from the published file, every run tells the operator their Suite is out of date, fetches
+a replacement, fails to verify it, and repeats **for ever** — a silent infinite nag rather than
+an error. `tests/run_suite.sh` asserts the stamp matches the file, and the Suite now names the
+release as the fault rather than blaming the operator's computer.
+
+Regenerate the manifest **after** any edit to `easyhover_suite.lua`.
+
 ## Testing it
 
 ```bash

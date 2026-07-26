@@ -371,6 +371,59 @@ function Suite.clearRole(spec, dryRun)
   return removed
 end
 
+--- Decide what this run is: "install" | "repair" | "current" | "update".
+---
+--- UPDATE AND CORRUPTION LOOK IDENTICAL ON DISK, and the version stamp is what tells them
+--- apart. Files differing from a manifest they were never built from is exactly what an update
+--- IS -- so treating that as corruption, as this once did, meant the Suite could only ever
+--- "fix" a computer and never update one. The files ended up right either way, but it told the
+--- operator their install was broken every single time a release shipped.
+---
+--- It is corruption only when the stamp claims THESE EXACT FILES are already correct and the
+--- bytes disagree, or when files are present and nothing on the computer records what they are.
+--- MISSING FILES ALONE PROVE NOTHING: a release that adds a module leaves an older install
+--- legitimately missing it.
+---
+--- Pure, so the decision is testable without a network or a filesystem.
+function Suite.choosePlan(s)
+  if not s.anyInstall then return "install" end
+  if s.forceRepair then return "repair" end
+  if s.noRecord then return "repair" end
+  if s.sameVersion then
+    return s.mismatched and "repair" or "current"
+  end
+  return "update"
+end
+
+--- Delete files under the role's own directories that the release no longer ships.
+---
+--- An update rewrites every file it knows about, but a module the new release DROPPED would
+--- otherwise sit there for ever -- invisible to the integrity check, which only looks for the
+--- files the manifest lists. Run AFTER the new files are committed, never before: clearing up
+--- front would turn a failed download into a destroyed install.
+function Suite.pruneRole(spec, dryRun)
+  local keep = {}
+  for _, entry in ipairs(spec.files) do keep["/" .. entry.dst] = true end
+
+  local removed = {}
+  local function walk(dir)
+    if not fs.exists(dir) or not fs.isDir(dir) then return end
+    for _, name in ipairs(fs.list(dir)) do
+      local path = fs.combine(dir, name)
+      if not path:match("^/") then path = "/" .. path end
+      if fs.isDir(path) then
+        walk(path)
+      elseif not keep[path] and not Suite.isProtected(path) and not path:find("%" .. STAGE .. "$") then
+        guard(path, "delete")
+        if not dryRun then fs.delete(path) end
+        removed[#removed + 1] = path
+      end
+    end
+  end
+  for _, dir in ipairs(spec.dirs or {}) do walk("/" .. dir) end
+  return removed
+end
+
 -- ---------------------------------------------------------------- role picker
 
 --- How should the role list be laid out on THIS terminal?
@@ -638,26 +691,26 @@ function Suite.main(args)
   end
 
   local anyInstall = (report.present > 0)
-  local broken = (not report.ok) and anyInstall
   local fresh = not anyInstall
-
-  local plan
-  if fresh then
-    plan = "install"
-  elseif broken or forceRepair then
-    plan = "repair"
-  elseif report.ok and sameVersion then
-    plan = "current"
-  else
-    plan = "update"
-  end
+  local mismatched = not report.ok
+  local noRecord = (state.version == nil)
+  local corrupt = anyInstall and ((sameVersion and mismatched) or noRecord)
+  local plan = Suite.choosePlan({
+    anyInstall = anyInstall, mismatched = mismatched,
+    sameVersion = sameVersion, noRecord = noRecord, forceRepair = forceRepair,
+  })
 
   print("")
   if plan == "install" then
     good("Fresh install.")
   elseif plan == "repair" then
-    bad(("Broken install: %d missing, %d corrupt of %d file(s)."):format(
-      #report.missing, #report.corrupt, report.total))
+    if noRecord then
+      bad("Broken install: files are here but nothing records what they are.")
+    else
+      bad(("Broken install: version %s says these files are correct, but %d missing "
+        .. "and %d differ of %d."):format(tostring(state.version), #report.missing,
+        #report.corrupt, report.total))
+    end
     for _, name in ipairs(report.missing) do dim("  missing  " .. name) end
     for _, name in ipairs(report.corrupt) do dim("  corrupt  " .. name) end
     say("Repairing: the role's own files will be cleared and reinstalled.")
@@ -666,6 +719,8 @@ function Suite.main(args)
     good("Already current: " .. manifest.version)
   else
     say(("Update available: %s -> %s"):format(state.version or "unknown", manifest.version))
+    dim(("%d new, %d changed, %d unchanged"):format(#report.missing, #report.corrupt,
+      report.total - #report.missing - #report.corrupt))
   end
 
   local schemaBump = (state.schema ~= nil and (manifest.schema or 1) > state.schema)
@@ -774,6 +829,10 @@ function Suite.main(args)
     end
   end
 
+  -- ---- drop anything this release no longer ships (after the new files are safely in place)
+  local pruned = Suite.pruneRole(spec, false)
+  for _, path in ipairs(pruned) do dim("removed " .. path .. " (no longer shipped)") end
+
   -- ---- record what is now installed
   writeRaw(STATE_FILE, Suite.formatState({
     version = manifest.version,
@@ -821,16 +880,27 @@ function Suite.selfUpdateNotice(base, manifest)
     return
   end
 
+  -- Dim, not yellow. This is a routine step that then SUCCEEDS, and a warning colour at the
+  -- very end of a clean install reads as "something is wrong" -- which is how it was reported.
+  -- The warning colours below are for the cases that actually leave the Suite stale.
   print("")
-  warn("The Suite itself is out of date; fetching the new one.")
+  dim("The Suite itself is out of date; fetching the new one.")
   local body = fetch(base .. "/easyhover_suite.lua")
   if not body then
-    dim("could not fetch it. Update by hand with:")
+    warn("could not fetch the new Suite. Update by hand with:")
     dim("  wget " .. base .. "/easyhover_suite.lua easyhover_suite.lua")
     return
   end
   if #body ~= manifest.updater.size or Suite.checksum(body) ~= manifest.updater.sum then
-    dim("the new Suite arrived corrupt; keeping the current one.")
+    -- The PUBLISHED Suite does not match the stamp in the PUBLISHED manifest, so the release
+    -- is inconsistent -- nothing is wrong with this computer. Saying "arrived corrupt" pointed
+    -- the blame the wrong way, and because the local copy can never match either, every single
+    -- run repeated the whole dance. Name the real fault so it is fixable at the source.
+    warn("release inconsistency: the published Suite does not match the manifest.")
+    dim(("  manifest expects %d bytes / %s, the server sent %d / %s")
+      :format(manifest.updater.size, tostring(manifest.updater.sum), #body,
+        tostring(Suite.checksum(body))))
+    dim("  the role's files are fine; regenerate the manifest at the source.")
     return
   end
   local stagePath = selfPath .. STAGE

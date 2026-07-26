@@ -399,8 +399,8 @@
   },
   ["schema"] = 1,
   ["updater"] = {
-    ["size"] = 32897,
-    ["sum"] = "7db7d950",
+    ["size"] = 36872,
+    ["sum"] = "305c58ce",
   },
   ["version"] = "837dc82a",
 }

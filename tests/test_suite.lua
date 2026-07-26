@@ -200,6 +200,57 @@ end)
 
 -- ------------------------------------------------------------------ protection
 
+T.suite("suite: update vs corruption")
+
+--- The four inputs the decision actually turns on.
+local function plan(over)
+  local input = { anyInstall = true, mismatched = false, sameVersion = false,
+                  noRecord = false, forceRepair = false }
+  for k, v in pairs(over or {}) do input[k] = v end
+  return Suite.choosePlan(input)
+end
+
+T.it("files differing from an OLDER release is an update, not a broken install", function()
+  -- This is the whole point. Treating drift as corruption meant the Suite could only ever
+  -- "fix" a computer and never update one -- and told the operator their install was broken
+  -- every single time a release shipped.
+  T.eq(plan({ mismatched = true, sameVersion = false }), "update", "different version")
+  T.eq(plan({ mismatched = false, sameVersion = false }), "update",
+    "even when every shipped file happens to match, a version bump is still an update")
+end)
+
+T.it("files differing while the stamp says they are CORRECT is corruption", function()
+  T.eq(plan({ mismatched = true, sameVersion = true }), "repair",
+    "the stamp claims these exact files; the bytes disagree")
+end)
+
+T.it("everything matching at the current version is simply current", function()
+  T.eq(plan({ mismatched = false, sameVersion = true }), "current")
+end)
+
+T.it("files present but nothing recording what they are is corruption", function()
+  T.eq(plan({ noRecord = true, mismatched = false }), "repair",
+    "no install record: nothing can be trusted, so verify everything")
+  T.eq(plan({ noRecord = true, mismatched = true }), "repair")
+end)
+
+T.it("a bare computer is an install whatever else is true", function()
+  T.eq(plan({ anyInstall = false, noRecord = true }), "install")
+  T.eq(plan({ anyInstall = false, mismatched = true, forceRepair = true }), "install",
+    "there is nothing to repair yet")
+end)
+
+T.it("--repair always wins over a clean bill of health", function()
+  T.eq(plan({ forceRepair = true, sameVersion = true, mismatched = false }), "repair")
+end)
+
+T.it("MISSING FILES ALONE DO NOT MEAN CORRUPT", function()
+  -- A release that ADDS a module leaves an older install legitimately missing it. That is the
+  -- case this distinction exists for: ui/slots.lua did not exist one release ago.
+  T.eq(plan({ mismatched = true, sameVersion = false, noRecord = false }), "update",
+    "an older install missing a newly added module is out of date, not damaged")
+end)
+
 T.suite("suite: protected paths")
 
 T.it("configs, waypoints and routes are protected", function()
