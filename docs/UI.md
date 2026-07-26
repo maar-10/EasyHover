@@ -56,9 +56,8 @@ wrong choice is undoable, and the assigned row highlighted. Longer lists page wi
 > dry run killed it. You could not see what you were choosing between, reaching candidate three
 > took three taps, and it interacted with the double-click bug below to look completely dead.
 
-The assignment appears **on the tap**, before the craft confirms it, and a refusal shows as
-`CRAFT REFUSED` on the count line. Silently reverting on the next telemetry frame is
-indistinguishable from a dead button.
+The assignment appears **only when the craft reports it**. Until then the count line reads
+`sent, waiting`; a refusal shows as `CRAFT REFUSED`. See *No optimistic feedback* below.
 
 **The candidate list comes from the flight computer over telemetry**, not from the UI's own
 peripheral scan. Both computers see the same wired network, but the flight computer is the one
@@ -114,6 +113,42 @@ Available: `engineMaster`, `engineFeed`, `setAux`, `setFeel`, `setLateral`, `set
 
 `identify` is gated on the craft actually being in `GROUND` state — on the flight side, not on
 the sender's say-so.
+
+## No optimistic feedback
+
+**A panel never draws a state it only asked for.** Every gauge, label and highlight reads what
+the flight computer *reported*; a button press sends a command and changes nothing on screen by
+itself. This is a standing rule across EasyKey and DriveByWire too, and it is not stylistic.
+
+The panels run on a different computer from the thing they control, over rednet. A screen that
+draws its own request is lying whenever the command is refused, rate-limited, dropped, or the
+link is down — and the pilot cannot tell that apart from a screen that worked. It also *hides
+transport bugs*: while the UI computer was flooding its own event queue (see below) and dropping
+telemetry, the single control that still looked healthy was the one that had been made optimistic.
+
+Two things are legitimately local and do render immediately, because this computer genuinely is
+the authority on them:
+
+- **Which panel is on which monitor** — that lives in the UI computer's own config.
+- **A choice staged before anything is assigned** — the relay *side* with no relay assigned yet.
+
+Saying that a request went out is also fine, because it is a fact about this computer rather
+than a claim about the craft: `sent, waiting` on the hardware picker, `saving...` on the disk
+page. These clear when the real state confirms, and a refusal is shown rather than swallowed.
+
+## The event-queue trap
+
+`basalt.onEvent("timer", ...)` fires for **every** timer on the computer, including Basalt's own
+— a lazy-element pass every 0.2 s, and a `sleep(0.1)` after every single `monitor_touch`. A
+heartbeat handler that re-arms itself without checking the id therefore spawns a **new,
+permanent** refresh chain out of every stray timer, several times a second. They accumulate;
+within a minute hundreds of chains are each pushing a full model into every monitor, CC's
+256-event queue overflows, and it starts **dropping `monitor_touch` and `rednet_message`**.
+
+The cockpit symptom is not a crash. It is sluggish buttons, controls that do nothing, and gauges
+that stop tracking — exactly what a "the UI is broken" report looks like. `App:onTimer` checks
+the id and returns early, and `tests/test_ui.lua` fires 50 foreign timers to prove none of them
+refresh or re-arm anything.
 
 ## Two Basalt details worth remembering
 

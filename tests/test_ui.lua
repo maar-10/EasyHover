@@ -563,6 +563,18 @@ T.it("tank max shows auto when there is no configured capacity", function()
     "0 means trust the tank own reading")
 end)
 
+T.it("tank max says SET TANK rather than showing -- over two dead buttons", function()
+  -- With no tank assigned there is no capacity to edit, and -/+ silently refuse. A row that
+  -- just reads "--" is indistinguishable from a broken button, which is how it was reported.
+  local panel, commands = overheadRig()
+  local m = model()
+  m.telemetry.config.tankCapacityMb = nil
+  panel.update(m)
+  T.eq(panel.elements.capacity.display:getText(), "set tank", "says what is missing")
+  click(panel.elements.capacity.plus)
+  T.eq(#commands, 0, "and the buttons genuinely have nothing to send")
+end)
+
 -- ------------------------------------------------------------------ hardware
 
 T.suite("hardware assignment")
@@ -650,13 +662,43 @@ T.it("marks the row that is currently assigned", function()
   T.eq(rowFor(widget, "redstone_relay_0"):getBackground(), Theme.buttonBg, "the others do not")
 end)
 
-T.it("the assignment shows immediately, without waiting for telemetry", function()
-  -- The pilot's finger is on the row. If the highlight only moves when the next frame arrives,
-  -- a dropped frame looks exactly like a dead button.
+T.it("NEVER shows an assignment the craft has not confirmed", function()
+  -- No optimistic feedback anywhere in this cockpit: a panel that draws what it ASKED for is
+  -- lying whenever the request is refused, dropped, or the link is down -- and a pilot cannot
+  -- tell the difference. The gauge reads the craft, never the request.
+  local widget, commands = hardwareRig(30, 12)
+  widget.update(model())
+  click(rowFor(widget, "redstone_relay_0"))
+  T.eq(#commands, 1, "the command went out")
+  T.isTrue(widget.elements.value:getText():find("not set") ~= nil,
+    "but the value line still reports the craft's state: " .. widget.elements.value:getText())
+  T.eq(rowFor(widget, "redstone_relay_0"):getBackground(), Theme.buttonBg,
+    "and no row is marked as assigned yet")
+end)
+
+T.it("says it is WAITING, which is a fact about us rather than about the craft", function()
   local widget = hardwareRig(30, 12)
   widget.update(model())
   click(rowFor(widget, "redstone_relay_0"))
-  T.eq(widget.elements.value:getText(), "redstone_relay_0", "value line updated on the tap")
+  T.isTrue(widget.elements.count:getText():find("waiting") ~= nil,
+    "tap acknowledged: " .. widget.elements.count:getText())
+
+  -- ...and it clears only when the craft actually reports the new assignment.
+  local m = model()
+  m.telemetry.config.engineRelay = "redstone_relay_0"
+  widget.update(m)
+  T.isFalse(widget.elements.count:getText():find("waiting") ~= nil, "cleared on confirmation")
+  T.eq(widget.elements.value:getText(), "redstone_relay_0", "and NOW the value line moves")
+end)
+
+T.it("keeps waiting when the craft never confirms", function()
+  local widget = hardwareRig(30, 12)
+  widget.update(model())
+  click(rowFor(widget, "redstone_relay_0"))
+  for _ = 1, 5 do widget.update(model()) end          -- frames that never carry the change
+  T.isTrue(widget.elements.count:getText():find("waiting") ~= nil,
+    "still waiting, not quietly pretending it worked")
+  T.isTrue(widget.elements.value:getText():find("not set") ~= nil, "value unchanged")
 end)
 
 T.it("SIDE cycles the relay side", function()
@@ -880,6 +922,62 @@ T.it("sync is a no-op when nothing changed", function()
 end)
 
 -- ------------------------------------------------------------------ link
+
+-- ------------------------------------------------------- the heartbeat timer
+
+T.suite("stale heartbeat")
+
+--- A stand-in for App's timer bookkeeping, exercised without basalt.run(). The real method is
+--- App:onTimer; this rig gives it the two fields it touches.
+local function timerRig()
+  local App = require("app")
+  local refreshes = 0
+  local app = setmetatable({
+    staleTimer = os.startTimer(9999),
+    rebuildPending = false,
+    refresh = function() refreshes = refreshes + 1 end,
+    syncPanels = function() end,
+  }, { __index = App })
+  return app, function() return refreshes end
+end
+
+T.it("IGNORES a timer that is not its own -- the cockpit-wide sluggishness bug", function()
+  -- Basalt runs timers of its own: a lazy-element pass every 0.2 s and a sleep(0.1) after
+  -- EVERY monitor_touch. An unguarded handler re-arms itself on each of them, so every stray
+  -- timer spawns another permanent 0.5 s refresh chain. They accumulate several times a
+  -- second until CC's event queue overflows and starts dropping touches and telemetry.
+  local app, refreshes = timerRig()
+  local mine = app.staleTimer
+  for i = 1, 50 do
+    local handled = app:onTimer(mine + 1000 + i)     -- 50 timers belonging to Basalt
+    T.isFalse(handled, "a foreign timer is not ours")
+  end
+  T.eq(refreshes(), 0, "and none of them caused a refresh")
+  T.eq(app.staleTimer, mine, "nor re-armed the heartbeat -- no new chain was spawned")
+end)
+
+T.it("handles its OWN timer, and re-arms exactly once", function()
+  local app, refreshes = timerRig()
+  local first = app.staleTimer
+  T.isTrue(app:onTimer(first), "ours")
+  T.eq(refreshes(), 1, "refreshed once")
+  T.isFalse(app.staleTimer == first, "re-armed with a new id")
+
+  -- The old id must now be foreign: a late duplicate cannot start a second chain.
+  T.isFalse(app:onTimer(first), "the previous timer is no longer ours")
+  T.eq(refreshes(), 1, "so it does not refresh again")
+end)
+
+T.it("a pending rebuild is applied on the heartbeat, not on every stray timer", function()
+  local app, _ = timerRig()
+  local syncs = 0
+  app.syncPanels = function() syncs = syncs + 1 end
+  app.rebuildPending = true
+  app:onTimer(app.staleTimer + 77)
+  T.eq(syncs, 0, "a foreign timer does not trigger a rebuild")
+  app:onTimer(app.staleTimer)
+  T.eq(syncs, 1, "ours does")
+end)
 
 T.suite("telemetry link")
 

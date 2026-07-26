@@ -305,9 +305,9 @@
         },
         {
           ["dst"] = "ui_main/app.lua",
-          ["size"] = 7750,
+          ["size"] = 8821,
           ["src"] = "ui_main/app.lua",
-          ["sum"] = "57d165b7",
+          ["sum"] = "3415fddf",
         },
         {
           ["dst"] = "ui_main/lib/config.lua",
@@ -341,15 +341,15 @@
         },
         {
           ["dst"] = "ui_main/ui/hardware.lua",
-          ["size"] = 10494,
+          ["size"] = 11461,
           ["src"] = "ui_main/ui/hardware.lua",
-          ["sum"] = "61fb1ad9",
+          ["sum"] = "9fd6d507",
         },
         {
           ["dst"] = "ui_main/ui/overhead.lua",
-          ["size"] = 11056,
+          ["size"] = 11532,
           ["src"] = "ui_main/ui/overhead.lua",
-          ["sum"] = "e5be0870",
+          ["sum"] = "5653a8c2",
         },
         {
           ["dst"] = "ui_main/ui/theme.lua",
@@ -396,5 +396,5 @@
     ["size"] = 32380,
     ["sum"] = "2bc204de",
   },
-  ["version"] = "f8d18181",
+  ["version"] = "b7c83cab",
 }

@@ -112,8 +112,8 @@ function Overhead.build(frame, opts)
       local next = Util.clamp(row.value + delta, minimum, maximum)
       if next ~= row.value then actions.configSet(path, next) end
     end
-    Theme.button(settings, math.max(1, width - 6), sy, 3, "-", function() nudge(-step) end)
-    Theme.button(settings, math.max(1, width - 2), sy, 3, "+", function() nudge(step) end)
+    row.minus = Theme.button(settings, math.max(1, width - 6), sy, 3, "-", function() nudge(-step) end)
+    row.plus = Theme.button(settings, math.max(1, width - 2), sy, 3, "+", function() nudge(step) end)
     sy = sy + 1
     row.set = function(value)
       row.value = value
@@ -238,11 +238,19 @@ function Overhead.build(frame, opts)
     local liveCfg = t.config or {}
     pulseRow.set(liveCfg.enginePulseMs)
     intervalRow.set(liveCfg.engineIntervalMs)
-    if liveCfg.tankCapacityMb == 0 then
+    if liveCfg.tankCapacityMb == nil then
+      -- There is no tank assigned, so there is no capacity to edit and -/+ cannot do anything.
+      -- Say which, rather than showing "--" over two buttons that silently refuse.
+      capacityRow.value = nil
+      capacityRow.display:setText("set tank")
+      capacityRow.display:setForeground(Theme.dim)
+    elseif liveCfg.tankCapacityMb == 0 then
       capacityRow.value = 0
       capacityRow.display:setText("auto")
+      capacityRow.display:setForeground(Theme.fg)
     else
       capacityRow.set(liveCfg.tankCapacityMb)
+      capacityRow.display:setForeground(Theme.fg)
     end
     if hardware then hardware.update(model) end
     if liveCfg.engineInvert ~= nil then

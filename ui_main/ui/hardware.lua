@@ -41,24 +41,25 @@ function Hardware.build(parent, x, y, width, height, opts)
       key = "relay", tag = "RLY", title = "ENGINE RELAY", command = "setEngineRelay",
       list = function() return live.candidates.relays end,
       current = function() return live.relay end,
-      set = function(name) live.relay = name; actions.setEngineRelay(name, live.side) end,
+      set = function(name) actions.setEngineRelay(name, live.side) end,
     },
     {
       key = "tank", tag = "TNK", title = "FUEL TANK", command = "setTank",
       list = function() return live.candidates.tanks end,
       current = function() return live.tank end,
-      set = function(name) live.tank = name; actions.setTank(name) end,
+      set = function(name) actions.setTank(name) end,
     },
     {
       key = "vault", tag = "VLT", title = "ENGINE VAULT", command = "setVault",
       list = function() return live.candidates.vaults end,
       current = function() return live.vault end,
-      set = function(name) live.vault = name; actions.setVault(name) end,
+      set = function(name) actions.setVault(name) end,
     },
   }
 
   local selected, page = 1, 1
   local refused = nil          -- item key the craft most recently rejected, or nil
+  local pending = nil          -- { key, name } we have ASKED for but not seen confirmed
   local refresh                -- forward declaration: the buttons below call it
 
   local function nextSide()
@@ -66,9 +67,16 @@ function Hardware.build(parent, x, y, width, height, opts)
     for i, side in ipairs(SIDES) do
       if side == live.side then index = i end
     end
-    live.side = SIDES[index % #SIDES + 1]
-    -- Only meaningful for the relay, and only sent when one is assigned.
-    if live.relay ~= "" then actions.setEngineRelay(live.relay, live.side) end
+    local wanted = SIDES[index % #SIDES + 1]
+    if live.relay ~= "" then
+      -- A relay is assigned, so the side is CRAFT state. Ask for it and let telemetry report
+      -- what actually took effect -- do not draw the new side on our own authority.
+      actions.setEngineRelay(live.relay, wanted)
+    else
+      -- Nothing assigned yet, so the side is only a local choice staged for the eventual
+      -- assignment. This computer genuinely IS the authority on it, so showing it is honest.
+      live.side = wanted
+    end
     refresh()
   end
 
@@ -121,8 +129,10 @@ function Hardware.build(parent, x, y, width, height, opts)
       if entry.name == nil then return end
       items[selected].set(entry.name)   -- "" unassigns
       refused = nil
-      -- `set` already wrote the optimistic value into `live`, so the row highlights under the
-      -- pilot's finger. Telemetry corrects it within a frame if the craft refused.
+      -- NOTHING HERE PRETENDS THE ASSIGNMENT HAPPENED. The value line and the row highlight
+      -- stay driven by what the craft reports; all this records is that we ASKED, which is a
+      -- fact about this computer and safe to show. It clears when telemetry confirms.
+      pending = { key = items[selected].key, name = entry.name }
       refresh()
     end)
     listRows[i] = entry
@@ -199,6 +209,8 @@ function Hardware.build(parent, x, y, width, height, opts)
       local text, colour
       if refused == item.key then
         text, colour = "CRAFT REFUSED", Theme.warning
+      elseif pending and pending.key == item.key then
+        text, colour = "sent, waiting", Theme.caution
       elseif #candidates == 0 then
         text, colour = "none on network", Theme.warning
       elseif pages > 1 then
@@ -236,7 +248,18 @@ function Hardware.build(parent, x, y, width, height, opts)
     refused = nil
     if ack and ack.ack == false then
       for _, item in ipairs(items) do
-        if ack.cmd == item.command then refused = item.key end
+        if ack.cmd == item.command then refused = item.key; pending = nil end
+      end
+    end
+
+    -- "waiting" clears when the CRAFT says so, not on a timer and not on our own say-so.
+    local want = pending
+    if want then
+      for _, item in ipairs(items) do
+        if item.key == want.key and (item.current() or "") == want.name then
+          pending = nil
+          break
+        end
       end
     end
 

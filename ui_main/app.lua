@@ -26,6 +26,9 @@ App.__index = App
 
 local CONFIG_PATH = "/eh_ui_main_config.tbl"
 
+--- How often to re-evaluate staleness when the craft has gone quiet.
+local STALE_POLL_SECONDS = 0.5
+
 function App.new(opts)
   opts = opts or {}
   local self = setmetatable({}, App)
@@ -146,6 +149,25 @@ function App:buildPanels()
   return self:syncPanels()
 end
 
+--- The stale-check heartbeat.
+---
+--- THE TIMER ID MUST BE CHECKED. Basalt runs timers of its own -- a lazy-element pass every
+--- 0.2 s, and a `sleep(0.1)` after every single monitor_touch -- and `basalt.onEvent("timer")`
+--- fires for all of them. An unguarded handler that re-arms its own timer therefore spawns a
+--- NEW self-sustaining 0.5 s refresh chain out of every stray timer event, several times a
+--- second, none of which ever stop. Within a minute hundreds of chains are each doing a full
+--- model refresh across every monitor, CC's 256-event queue overflows, and it starts DROPPING
+--- monitor_touch and rednet_message events: the cockpit goes sluggish and buttons stop working.
+---
+--- Returns true when this was our heartbeat, so the behaviour is testable without basalt.run().
+function App:onTimer(id)
+  if id ~= self.staleTimer then return false end
+  if self.rebuildPending then self:syncPanels() end
+  self:refresh()
+  self.staleTimer = os.startTimer(STALE_POLL_SECONDS)
+  return true
+end
+
 --- Push the latest model into every panel, including the terminal fallback.
 function App:refresh()
   local model = self.link:model()
@@ -185,18 +207,14 @@ function App:run()
   end)
 
   -- A heartbeat, so "NO DATA" appears when the flight computer goes quiet rather than the
-  -- panels freezing on their last good frame.
-  basalt.onEvent("timer", function()
-    if self.rebuildPending then self:syncPanels() end
-    self:refresh()
-    self.staleTimer = os.startTimer(0.5)
-  end)
+  -- panels freezing on their last good frame. Guarded on the id -- see App:onTimer.
+  basalt.onEvent("timer", function(id) self:onTimer(id) end)
 
   -- Rebuilding on a peripheral change means plugging a monitor in just works.
   basalt.onEvent("peripheral", function() self.rebuildPending = true end)
   basalt.onEvent("peripheral_detach", function() self.rebuildPending = true end)
 
-  self.staleTimer = os.startTimer(0.5)
+  self.staleTimer = os.startTimer(STALE_POLL_SECONDS)
   basalt.run()
 end
 
