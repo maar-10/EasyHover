@@ -27,6 +27,7 @@ local Assist = require("lib.control.assist")
 local Brake = require("lib.control.brake")
 local Modes = require("lib.modes")
 local Pilot = require("lib.input.pilot")
+local Telemetry = require("lib.telemetry")
 
 local App = {}
 App.__index = App
@@ -70,6 +71,7 @@ function App.new(opts)
   self.brake = Brake.new(cfg, self.envelope, self.log)
   self.modes = Modes.new(cfg, self.log)
   self.pilot = Pilot.new(cfg, self.log)
+  self.telemetry = Telemetry.new(cfg, self.log, self.state)
 
   self.altitudeAccumulator = 0
   self.lastCycleAt = nil
@@ -132,6 +134,8 @@ function App:boot()
   if #problems > 0 then
     self.state:raise("keybinds", "caution", ("%d keybind problem(s)"):format(#problems))
   end
+
+  self.telemetry:open()
 
   local diskStatus = self.disk:status()
   self.log:info("disk: %d drive(s), %s, %d config(s) here",
@@ -389,6 +393,10 @@ function App:publish(measured, capability, dt, overrun)
 
   if self.cycles % 100 == 0 then self.disk:status() end
 
+  -- Publish last, so a UI always sees the state the loop just acted on rather than a
+  -- half-updated one. Rate-limited internally to telemetryHz.
+  self.telemetry:publish(os.epoch("utc"))
+
   -- Persist the learned hover trim occasionally, so the next boot starts near equilibrium
   -- instead of hunting for it.
   if self.cycles % 600 == 0 then
@@ -403,6 +411,108 @@ function App:publish(measured, capability, dt, overrun)
       end
     end
   end
+end
+
+-- ---------------------------------------------------------------- commands
+
+--- Apply a validated command from a UI computer.
+---
+--- Telemetry has already whitelisted the name and type-checked the fields, so this is about
+--- what the vehicle does, not about whether the message is well formed. Returns ok, detail.
+function App:handleCommand(cmd)
+  local now = os.epoch("utc")
+
+  if cmd.cmd == "ping" then
+    return true, { pong = true, role = "flight", cycles = self.cycles }
+
+  elseif cmd.cmd == "engineMaster" then
+    self.engine:setMaster(cmd.value, now)
+    return true, { master = self.engine.master }
+
+  elseif cmd.cmd == "engineFeed" then
+    local ok, err = self.engine:feedNow(now)
+    return ok, { error = err }
+
+  elseif cmd.cmd == "setAux" then
+    local ok, err = self.relays:setAux(cmd.label, cmd.value)
+    return ok, { error = err }
+
+  elseif cmd.cmd == "setFeel" then
+    return self.modes:setFeel(cmd.value), { feel = self.modes.feel }
+
+  elseif cmd.cmd == "setLateral" then
+    return self.modes:setLateral(cmd.value), { lateral = self.modes.lateral }
+
+  elseif cmd.cmd == "setAssist" then
+    self.modes:setAssist(cmd.value)
+    return true, { assist = self.modes.assistEnabled }
+
+  elseif cmd.cmd == "setAltitude" then
+    -- through the envelope, like every other demand: a UI cannot command an altitude the
+    -- envelope forbids
+    local limited = self.envelope:apply({ altitudeTarget = cmd.value })
+    self.modes.altitudeTarget = limited.altitudeTarget
+    return true, { altitudeTarget = self.modes.altitudeTarget }
+
+  elseif cmd.cmd == "identify" then
+    -- Gated on actually being on the ground, not on the sender's say-so.
+    local allowed = (self.state.mode == "GROUND")
+    local ok, err = self.thrusters:startIdentify(cmd.id, { allowed = allowed })
+    return ok, { error = err }
+
+  elseif cmd.cmd == "configSet" then
+    local ok, errors, previous = Config.set(self.cfg, cmd.path, cmd.value)
+    if not ok then
+      self.log:warn("configSet %s rejected: %s", tostring(cmd.path),
+        table.concat(errors or {}, "; "))
+      return false, { errors = errors }
+    end
+    self:applyConfig()
+    self.log:info("configSet %s: %s -> %s", cmd.path, tostring(previous), tostring(cmd.value))
+    return true, { path = cmd.path, value = cmd.value, previous = previous }
+
+  elseif cmd.cmd == "configSave" then
+    local ok, err = Config.save(self.configPath, self.cfg)
+    return ok, { error = err }
+
+  elseif cmd.cmd == "diskSave" then
+    local ok, report = self:saveConfigsToDisk()
+    return ok, report
+
+  elseif cmd.cmd == "diskLoad" then
+    local ok, report = self:loadConfigsFromDisk()
+    return ok, report
+  end
+
+  return false, { error = "unhandled command: " .. tostring(cmd.cmd) }
+end
+
+--- Push a changed config into the live modules. Most of them hold `cfg` by reference and so
+--- see edits immediately; the PIDs and rate limiters need telling.
+function App:applyConfig()
+  self.attitude:applyGains(self.cfg)
+  self.altitude:applyGains(self.cfg)
+  self.brake:applyGains(self.cfg)
+  self.assist:applyGains(self.cfg)
+  self.modes:applyConfig(self.cfg)
+  self.pilot:applyConfig(self.cfg)
+  self.engine:applyConfig(self.cfg)
+  self.mixer.cfg = self.cfg
+  self.mixer:build()
+  self.state:set("config.appliedAt", os.epoch("utc"))
+end
+
+--- Handle one rednet message. Returns true when it was ours.
+function App:onMessage(sender, message, protocol)
+  if protocol ~= self.cfg.comms.commandProtocol then return false end
+  local cmd, err = self.telemetry:parseCommand(message, sender, os.epoch("utc"))
+  if not cmd then
+    self.telemetry:reply(sender, { ack = false, error = err })
+    return true
+  end
+  local ok, detail = self:handleCommand(cmd)
+  self.telemetry:reply(sender, { ack = ok, cmd = cmd.cmd, detail = detail })
+  return true
 end
 
 -- ---------------------------------------------------------------- disk
@@ -449,7 +559,7 @@ function App:run()
   self.lastCycleAt = os.epoch("utc")
 
   while self.running do
-    local event, p1 = os.pullEvent()
+    local event, p1, p2, p3 = os.pullEvent()
     if event == "timer" and p1 == timer then
       local now = os.epoch("utc")
       local dt = (now - (self.lastCycleAt or now)) / 1000
@@ -464,6 +574,10 @@ function App:run()
       timer = os.startTimer(period)
     elseif event == "peripheral" or event == "peripheral_detach" then
       self:onPeripheralChange(event, p1)
+    elseif event == "rednet_message" then
+      -- p1 is the sender; pullEvent gave us only two values above, so re-read them
+      local sender, message, protocol = p1, p2, p3
+      pcall(function() self:onMessage(sender, message, protocol) end)
     elseif event == "disk" or event == "disk_eject" then
       self.per:scan()
       self.disk:status()

@@ -364,6 +364,9 @@ function Config.defaults()
     },
 
     comms = {
+      -- Blank = auto-pick the first WIRED modem. Never a wireless one: the control surface
+      -- must not be on the air (docs/WIRING.md).
+      modem = "",
       telemetryProtocol = "eh_telemetry",
       commandProtocol = "eh_command",
       configProtocol = "eh_config",
@@ -709,6 +712,68 @@ end
 --- The largest residual the quantiser can leave behind, as a fraction of thrust.
 function Config.residualBound(cfg)
   return math.max(cfg.tuning.thrustHysteresisSteps or 0.5, 0.5) / 15
+end
+
+
+-- ---------------------------------------------------------------- paths
+
+--- Split a dotted config path. Numeric segments become array indices, so
+--- "hardware.thrusters.1.maxVector" addresses the first thruster's authority limit.
+local function splitPath(path)
+  local parts = {}
+  for segment in tostring(path):gmatch("[^.]+") do
+    parts[#parts + 1] = tonumber(segment) or segment
+  end
+  return parts
+end
+
+--- Read a value by dotted path. Returns nil (and no error) for a path that does not exist.
+function Config.get(cfg, path)
+  local node = cfg
+  for _, key in ipairs(splitPath(path)) do
+    if type(node) ~= "table" then return nil end
+    node = node[key]
+  end
+  return node
+end
+
+--- Write a value by dotted path, then re-validate.
+---
+--- If the result would not validate, the old value is PUT BACK and the errors are returned. A
+--- UI that can talk the flight computer into an invalid config is a UI that can ground the
+--- craft, so the config is never left in a state validate() rejects.
+---
+--- Refuses to create new keys, and refuses to change a value's type: a typo'd path is a
+--- mistake, not a new setting.
+function Config.set(cfg, path, value)
+  local parts = splitPath(path)
+  if #parts == 0 then return false, { "empty path" } end
+
+  local node = cfg
+  for i = 1, #parts - 1 do
+    local key = parts[i]
+    if type(node[key]) ~= "table" then
+      return false, { ("no such config path: %s"):format(tostring(path)) }
+    end
+    node = node[key]
+  end
+
+  local last = parts[#parts]
+  local previous = node[last]
+  if previous == nil then
+    return false, { ("no such config key: %s"):format(tostring(path)) }
+  end
+  if type(previous) ~= type(value) then
+    return false, { ("%s expects a %s, got %s"):format(tostring(path), type(previous), type(value)) }
+  end
+
+  node[last] = value
+  local ok, errors = Config.validate(cfg)
+  if not ok then
+    node[last] = previous
+    return false, errors
+  end
+  return true, nil, previous
 end
 
 return Config

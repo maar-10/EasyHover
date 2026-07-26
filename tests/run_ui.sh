@@ -1,38 +1,39 @@
 #!/usr/bin/env bash
-# EasyHover headless unit suite (CraftOS-PC console build).
-#   bash tests/run_headless.sh
+# ui_main suite, in its OWN CraftOS instance.
+#
+#   bash tests/run_ui.sh
+#
+# Separate from run_headless.sh on purpose: both roles have a lib/config.lua, so a shared Lua
+# state would make require("lib.config") ambiguous -- and it would resolve to the flight one.
+# Different computers in game, different interpreters here.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 CRAFTOS="/c/Program Files/CraftOS-PC/CraftOS-PC_console.exe"
-DATA="$HERE/.craftos/unit"
+DATA="$HERE/.craftos/ui"
 C0="$DATA/computer/0"
 
 rm -rf "$DATA"
-mkdir -p "$C0"
-cp -r "$ROOT/flight" "$C0/flight"
 mkdir -p "$C0/tests/mocks"
+cp -r "$ROOT/ui_main" "$C0/ui_main"
+cp -r "$ROOT/shared" "$C0/shared"
+# Basalt installs at /basalt.lua on a real ui_main computer, so require("basalt") resolves.
+cp "$ROOT/vendor/basalt-full.lua" "$C0/basalt.lua"
 cp "$ROOT/tests/util.lua" "$C0/tests/util.lua"
-cp "$ROOT/tests/sim.lua" "$C0/tests/sim.lua"
-cp "$ROOT/easyhover_suite.lua" "$C0/easyhover_suite.lua"
-cp "$ROOT/manifest.lua" "$C0/manifest.lua"
 cp "$ROOT/tests/mocks/peripherals.lua" "$C0/tests/mocks/peripherals.lua"
-for f in "$ROOT"/tests/test_*.lua; do cp "$f" "$C0/tests/"; done
+cp "$ROOT/tests/test_ui.lua" "$C0/tests/test_ui.lua"
 
 cat > "$C0/startup.lua" <<'LUA'
-package.path = "/flight/?.lua;/flight/?/init.lua;/?.lua;/?/init.lua;" .. package.path
+package.path = "/ui_main/?.lua;/ui_main/?/init.lua;/?.lua;/?/init.lua;" .. package.path
 
-local SUITES = { "/tests/test_core.lua", "/tests/test_io.lua", "/tests/test_control.lua", "/tests/test_loops.lua", "/tests/test_modes.lua", "/tests/test_input.lua", "/tests/test_suite.lua", "/tests/test_vehicle.lua", "/tests/test_telemetry.lua" }
+local SUITES = { "/tests/test_ui.lua" }
 
 local out = {}
 local function w(line) out[#out + 1] = line end
 
 local T = require("tests.util")
 
--- CC only injects require/package into SHELL-RUN programs, so dofile() would run each
--- suite in a bare env with require == nil. shell.run would work but swallows the error.
--- So: load the source with an env that inherits _G and carries require/package through.
 local function runSuite(path)
   local handle = fs.open(path, "r")
   if not handle then return false, "cannot open " .. path end
@@ -62,7 +63,7 @@ f.close()
 os.shutdown()
 LUA
 
-timeout 120 "$CRAFTOS" --headless -d "$DATA" >/dev/null 2>&1
+timeout 180 "$CRAFTOS" --headless -d "$DATA" >/dev/null 2>&1
 
 RESULTS="$C0/results.txt"
 if [[ ! -f "$RESULTS" ]]; then
@@ -71,10 +72,7 @@ if [[ ! -f "$RESULTS" ]]; then
 fi
 
 cat "$RESULTS"
-
-if grep -q "SUITE_PASS" "$RESULTS"; then
-  exit 0
-fi
+grep -q "SUITE_PASS" "$RESULTS" && exit 0
 echo
 echo "FAILED -- see the FAIL / LOAD_ERROR lines above"
 exit 1

@@ -159,6 +159,15 @@ function M.relay(opts)
   }
 end
 
+--- A fake monitor. Built on CC's own `window`, so it implements the entire term API for real
+--- rather than approximating it -- Basalt renders into this exactly as it would a monitor.
+function M.monitor(width, height)
+  local win = window.create(term.current(), 1, 1, width or 15, height or 20, false)
+  win.setTextScale = function(_) end
+  win.getTextScale = function() return 0.5 end
+  return win
+end
+
 function M.altitudeSensor()
   return {
     getHeight = function() return vehicle.altitude end,
@@ -208,6 +217,12 @@ local function defaultDevices()
   } }
 
   d["redstone_relay_0"] = { type = "redstone_relay", dev = M.relay() }
+
+  -- Monitors: two identical 1x2 portrait screens (the mirrored overhead pair) and one wider
+  -- upward-facing screen for the config panel.
+  d["monitor_0"] = { type = "monitor", dev = M.monitor(15, 20) }
+  d["monitor_1"] = { type = "monitor", dev = M.monitor(15, 20) }
+  d["monitor_2"] = { type = "monitor", dev = M.monitor(29, 12) }
 
   -- vehicle systems: the fuel tank, the engine-fuel vault, and a disk drive
   d["fluid_tank_0"] = { type = "fluid_storage", dev = {
@@ -331,6 +346,15 @@ function M.install(opts)
     end
     table.sort(out)
     return out
+  end
+
+  --- Reverse lookup. Basalt's BaseFrame calls peripheral.getName(term) to work out which
+  --- monitor a frame belongs to, which is how touch events get routed per screen.
+  function api.getName(dev)
+    for name, entry in pairs(devices) do
+      if entry.dev == dev then return name end
+    end
+    return nil
   end
 
   function api.wrap(name)

@@ -30,8 +30,8 @@ easyhover_suite.lua <role>       install or switch to a role
 | Role | Status | What it is |
 |---|---|---|
 | **flight** | **released** | Thrusters, sensors, pilot inputs, PID loops. One per craft, no UI. |
+| **ui_main** | **released** | Cockpit screens: the overhead engine + fuel panel and the configuration screens. Drives every assigned monitor. |
 | nav | reserved | Waypoints, routes, map UI, position fixing. Feeds the flight computer. |
-| ui_main | reserved | Primary gauges and every configuration screen. |
 | ui_pfd | reserved | Attitude / flight-path indicator. |
 | ui_prox | reserved | Laser proximity warnings. |
 | ui_aux | reserved | Lights, doors, landing gear. |
@@ -103,10 +103,10 @@ Put a base URL in `/easyhover_suite_src.txt` (one line, no trailing slash) and t
 fetches from there: a fork, a LAN mirror, or a floppy-fed copy. This is also how
 `tests/run_suite_e2e.sh` serves the repo from localhost.
 
-**While the repository is private**, `raw.githubusercontent.com` returns 404 without
-credentials. Either make the repo public (what EasyKey does) or put a GitHub token in
-`/easyhover_suite_token.txt`. A token in plain text on a Minecraft computer is a poor secret —
-public is the better answer for Minecraft Lua.
+The repository is **public**, so `wget run` works with no credentials on any computer — the same
+choice EasyKey made. If it is ever made private again, `raw.githubusercontent.com` returns 404
+without credentials; put a GitHub token in `/easyhover_suite_token.txt` for that case, bearing in
+mind that a token in plain text on a Minecraft computer is a poor secret.
 
 ## Releasing a change
 
@@ -121,7 +121,8 @@ Forget it and the Suite will keep telling computers they are current when they a
 ## Testing it
 
 ```bash
-bash tests/run_headless.sh      # includes the Suite's pure logic
+bash tests/run_headless.sh      # flight side, includes the Suite's pure logic
+bash tests/run_ui.sh            # ui_main, in its own interpreter
 bash tests/run_suite_e2e.sh     # real install/update/repair against a localhost mirror
 ```
 

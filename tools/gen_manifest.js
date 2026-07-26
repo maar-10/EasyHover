@@ -43,6 +43,19 @@ const ROLES = {
     luaPath: "/flight",
     configs: ["/eh_flight_config.tbl"],
   },
+  ui_main: {
+    title: "Main display",
+    blurb: "Overhead engine + fuel panel and the configuration screens. Drives every assigned monitor.",
+    status: "released",
+    dirs: ["ui_main", "shared"],
+    // The vendored Basalt full build installs at /basalt.lua so `require("basalt")` resolves.
+    // Pinned commit f6cde73 -- the same build EasyKey and DriveByWire use.
+    extraFiles: [{ src: "vendor/basalt-full.lua", dst: "basalt.lua" }],
+    launcher: { src: "launchers/ui_main.lua", dst: "startup.lua" },
+    entry: "ui_main/startup.lua",
+    luaPath: "/ui_main",
+    configs: ["/eh_ui_main_config.tbl"],
+  },
   nav: {
     title: "Navigation computer",
     blurb: "Waypoints, routes, map UI, position fixing (GPS / radar). Feeds the flight computer.",
@@ -50,14 +63,6 @@ const ROLES = {
     dirs: ["nav"],
     configs: ["/eh_nav_config.tbl", "/eh_waypoints.tbl", "/eh_routes.tbl"],
     luaPath: "/nav",
-  },
-  ui_main: {
-    title: "Main display",
-    blurb: "Primary gauges and every configuration screen.",
-    status: "prepared",
-    dirs: ["ui_main"],
-    configs: ["/eh_ui_main_config.tbl"],
-    luaPath: "/ui_main",
   },
   ui_pfd: {
     title: "Primary flight display",
@@ -181,6 +186,7 @@ for (const roleName of Object.keys(ROLES).sort()) {
     const sources = [];
     for (const dir of spec.dirs) walk(dir, sources);
     if (spec.launcher) sources.push(spec.launcher.src);
+    for (const extra of spec.extraFiles || []) sources.push(extra.src);
 
     for (const src of sources) {
       const absolute = path.join(ROOT, src);
@@ -190,7 +196,14 @@ for (const roleName of Object.keys(ROLES).sort()) {
         continue;
       }
       const body = readNormalised(absolute);
-      const dst = (spec.launcher && src === spec.launcher.src) ? spec.launcher.dst : src;
+      let dst = src;
+      if (spec.launcher && src === spec.launcher.src) {
+        dst = spec.launcher.dst;
+      } else {
+        for (const extra of spec.extraFiles || []) {
+          if (extra.src === src) dst = extra.dst;
+        }
+      }
       const entry = { src, dst, size: Buffer.byteLength(body, "utf8"), sum: fnv1a(body) };
       files.push(entry);
       digestParts.push(`${roleName}:${dst}:${entry.sum}:${entry.size}`);

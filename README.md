@@ -9,7 +9,8 @@ and aux vehicle controls.
 
 ## Status
 
-**The flight control system is complete and testable — `bash tests/run_headless.sh` (243/243).**
+**Flight control and the cockpit UI are both in.**
+`bash tests/run_headless.sh` (261) + `bash tests/run_ui.sh` (38) = **299 tests green.**
 
 Everything needed to hover, climb and descend, set an altitude, translate in both lateral
 modes, steer, accelerate forward on the main thrusters, brake, and reverse by pitching up.
@@ -29,10 +30,23 @@ One file installs any role, updates it, repairs a corrupt install, and extends y
 config with newly added defaults without ever replacing it. Full behaviour in
 [docs/INSTALL.md](docs/INSTALL.md).
 
+### Cockpit UI
+
+A second computer (`ui_main` role) drives every screen — the flight computer stays math-only, and
+since a monitor is a network peripheral the screens still sit wherever you mount them.
+
+- **overhead panel** (mirrored to a pair of 1×2 screens): engine start/stop with a feed
+  countdown, liquid + solid fuel gauges, and their config in a submenu
+- **config panel**: live flight values, plus MONITORS / DISK / FLIGHT submenus
+- monitor assignment is done by tapping, and works from the terminal too, so an unassigned
+  cockpit is never a dead end
+
+See [docs/UI.md](docs/UI.md).
+
 ### Still to come
 
-Nav + autopilot (phases 11–15), the UIs and annunciator (6–10), music (16). Their roles are
-already reserved in the Suite, with directories and config paths ready.
+PFD (7), proximity (8), annunciator (9), aux panel (10), nav + autopilot (11–15), music (16).
+Their roles are already reserved in the Suite with directories and config paths ready.
 
 ### Vehicle systems
 
@@ -63,7 +77,8 @@ bandwidth, whether the gimbal reports yaw, and whether `getVelocity()` is signed
 that turn sim-tuned gains into flight-tuned ones.
 
 ```bash
-bash tests/run_headless.sh      # 243 logic + control + suite tests
+bash tests/run_headless.sh      # 261 flight-side tests
+bash tests/run_ui.sh            # 38 ui_main tests (own interpreter)
 bash tests/run_suite.sh         # Suite static checks
 bash tests/run_suite_e2e.sh     # real install/update/repair against a localhost mirror
 bash tests/run_probe_headless.sh
@@ -79,6 +94,7 @@ bash tests/run_probe_headless.sh
 | [docs/WIRING.md](docs/WIRING.md) | Topology, computer roles, the engine master, gauges, and the scrapped failsafe. |
 | [docs/NAVIGATION.md](docs/NAVIGATION.md) | Position sources, waypoints, routes, autopilot modes, autoland, interlocks. |
 | [docs/MUSIC.md](docs/MUSIC.md) | Exactly what the music module requires, and why. |
+| [docs/UI.md](docs/UI.md) | The UI computer: panels, mirroring, monitor assignment, telemetry, commands. |
 | [docs/INSTALL.md](docs/INSTALL.md) | The EasyHover Suite: roles, updating, repair, and how configs are handled. |
 | [docs/MOD_API_RESEARCH.md](docs/MOD_API_RESEARCH.md) | What every mod actually exposes to Lua, read from source/bytecode. |
 

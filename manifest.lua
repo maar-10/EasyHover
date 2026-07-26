@@ -27,9 +27,9 @@
       ["files"] = {
         {
           ["dst"] = "flight/app.lua",
-          ["size"] = 17890,
+          ["size"] = 22254,
           ["src"] = "flight/app.lua",
-          ["sum"] = "2e8e8051",
+          ["sum"] = "adbda2e1",
         },
         {
           ["dst"] = "flight/diskmenu.lua",
@@ -39,9 +39,9 @@
         },
         {
           ["dst"] = "flight/lib/config.lua",
-          ["size"] = 32793,
+          ["size"] = 34918,
           ["src"] = "flight/lib/config.lua",
-          ["sum"] = "1429c003",
+          ["sum"] = "233bf50d",
         },
         {
           ["dst"] = "flight/lib/control/altitude.lua",
@@ -182,6 +182,12 @@
           ["sum"] = "5d5eda8b",
         },
         {
+          ["dst"] = "flight/lib/telemetry.lua",
+          ["size"] = 11241,
+          ["src"] = "flight/lib/telemetry.lua",
+          ["sum"] = "b034f619",
+        },
+        {
           ["dst"] = "flight/lib/util.lua",
           ["size"] = 2087,
           ["src"] = "flight/lib/util.lua",
@@ -263,17 +269,91 @@
       ["title"] = "Aux control",
     },
     ["ui_main"] = {
-      ["blurb"] = "Primary gauges and every configuration screen.",
+      ["blurb"] = "Overhead engine + fuel panel and the configuration screens. Drives every assigned monitor.",
       ["configs"] = {
         "/eh_ui_main_config.tbl",
       },
       ["dirs"] = {
         "ui_main",
+        "shared",
       },
-      ["entry"] = "",
-      ["files"] = {},
+      ["entry"] = "ui_main/startup.lua",
+      ["files"] = {
+        {
+          ["dst"] = "basalt.lua",
+          ["size"] = 305968,
+          ["src"] = "vendor/basalt-full.lua",
+          ["sum"] = "96ae5255",
+        },
+        {
+          ["dst"] = "shared/log.lua",
+          ["size"] = 2735,
+          ["src"] = "shared/log.lua",
+          ["sum"] = "d5d9781f",
+        },
+        {
+          ["dst"] = "shared/util.lua",
+          ["size"] = 2152,
+          ["src"] = "shared/util.lua",
+          ["sum"] = "29c90f91",
+        },
+        {
+          ["dst"] = "startup.lua",
+          ["size"] = 296,
+          ["src"] = "launchers/ui_main.lua",
+          ["sum"] = "862bb917",
+        },
+        {
+          ["dst"] = "ui_main/app.lua",
+          ["size"] = 6235,
+          ["src"] = "ui_main/app.lua",
+          ["sum"] = "2a20c3ee",
+        },
+        {
+          ["dst"] = "ui_main/lib/config.lua",
+          ["size"] = 6736,
+          ["src"] = "ui_main/lib/config.lua",
+          ["sum"] = "06c2fe16",
+        },
+        {
+          ["dst"] = "ui_main/lib/link.lua",
+          ["size"] = 4091,
+          ["src"] = "ui_main/lib/link.lua",
+          ["sum"] = "4079c728",
+        },
+        {
+          ["dst"] = "ui_main/lib/monitors.lua",
+          ["size"] = 5311,
+          ["src"] = "ui_main/lib/monitors.lua",
+          ["sum"] = "9386b7fd",
+        },
+        {
+          ["dst"] = "ui_main/startup.lua",
+          ["size"] = 634,
+          ["src"] = "ui_main/startup.lua",
+          ["sum"] = "47bf3c83",
+        },
+        {
+          ["dst"] = "ui_main/ui/config_panel.lua",
+          ["size"] = 12444,
+          ["src"] = "ui_main/ui/config_panel.lua",
+          ["sum"] = "d72f1783",
+        },
+        {
+          ["dst"] = "ui_main/ui/overhead.lua",
+          ["size"] = 9335,
+          ["src"] = "ui_main/ui/overhead.lua",
+          ["sum"] = "cccd67e4",
+        },
+        {
+          ["dst"] = "ui_main/ui/theme.lua",
+          ["size"] = 4120,
+          ["src"] = "ui_main/ui/theme.lua",
+          ["sum"] = "2c8a768f",
+        },
+      },
       ["luaPath"] = "/ui_main",
-      ["status"] = "prepared",
+      ["status"] = "released",
       ["title"] = "Main display",
     },
     ["ui_pfd"] = {
@@ -310,5 +390,5 @@
     ["size"] = 29343,
     ["sum"] = "393f2bf2",
   },
-  ["version"] = "462d5e7b",
+  ["version"] = "ad3f68f0",
 }
