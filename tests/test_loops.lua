@@ -157,8 +157,17 @@ T.it("precisionOnly thrusters stay idle unless precision is allowed", function()
   local m = build(simConfig())
   local off = m.mixer:mix({ collective = 0.5, translateX = 1.0, allowPrecision = false })
   T.near(off.rear_l.thrust, 0, 1e-9, "rear pair idle in normal flight")
+  T.near(off.rear_r.thrust, 0, 1e-9, "both of them")
+
+  -- Only the member that can PUSH THAT WAY fires. rear_l faces right, so it pushes left and
+  -- has nothing to contribute to a rightward demand -- its opposed partner serves it.
   local on = m.mixer:mix({ collective = 0.5, translateX = 1.0, allowPrecision = true })
-  T.isTrue(on.rear_l.thrust > 0, "rear pair engaged in precision mode")
+  T.isTrue(on.rear_r.thrust > 0, "the rear thruster that pushes RIGHT engages")
+  T.near(on.rear_l.thrust, 0, 1e-9, "the one that pushes left stays out of it")
+
+  local left = m.mixer:mix({ collective = 0.5, translateX = -1.0, allowPrecision = true })
+  T.isTrue(left.rear_l.thrust > 0, "and they swap for the other direction")
+  T.near(left.rear_r.thrust, 0, 1e-9)
 end)
 
 T.it("yaw uses the opposed pair, one side at a time", function()
@@ -477,6 +486,172 @@ T.it("gain cutting degrades authority rather than removing it", function()
   m.attitude.pid.pitch:setGainScale(m.osc:gainScale("pitch"))
   local out = m.attitude:update({ pitch = 10, roll = 0 }, { pitch = 0, roll = 0 }, 0.05)
   T.isTrue(math.abs(out.pitchTorque) > 0, "still commanding something")
+end)
+
+
+-- ------------------------------------------------------------ sign sanity
+
+T.suite("sign conventions -- the physics, pinned")
+
+--- These exist because two errors cancelled. The mixer treated a nozzle AIM as a force, and
+--- the simulator did too, so every translation and drift-damping test passed while the real
+--- craft would have been pushed the wrong way. Each test below asserts ONE direction against
+--- physics rather than against the other half of the code.
+
+T.it("EXHAUST DOWN PUSHES THE CRAFT UP -- the only reason a lift thruster lifts", function()
+  local plant = Sim.newPlant({})
+  local commands = {}
+  for _, spec in ipairs(Sim.defaultLayout()) do
+    commands[spec.id] = { thrust = spec.group == "lift" and 1.0 or 0, defX = 0, defZ = 0 }
+  end
+  plant:step(commands, 0.05)
+  T.isTrue(plant.netUp > 0, "four down-facing thrusters produce UP force: " .. plant.netUp)
+end)
+
+T.it("AN ACCELERATOR FACES BACKWARD AND PUSHES FORWARD", function()
+  local plant = Sim.newPlant({})
+  local commands = {}
+  for _, spec in ipairs(Sim.defaultLayout()) do
+    commands[spec.id] = { thrust = spec.group == "main" and 1.0 or 0, defX = 0, defZ = 0 }
+  end
+  plant:step(commands, 0.05)
+  T.isTrue(plant.netZ > 0, "net force is FORWARD (+z): " .. plant.netZ)
+end)
+
+T.it("A THRUSTER FACING RIGHT PUSHES THE CRAFT LEFT", function()
+  local plant = Sim.newPlant({})
+  local commands = {}
+  for _, spec in ipairs(Sim.defaultLayout()) do
+    -- yaw_l faces "right"
+    commands[spec.id] = { thrust = (spec.id == "yaw_l") and 1.0 or 0, defX = 0, defZ = 0 }
+  end
+  plant:step(commands, 0.05)
+  T.isTrue(plant.netX < 0, "facing right, pushing left (-x): " .. plant.netX)
+end)
+
+T.it("AIMING A LIFT NOZZLE RIGHT PUSHES THE CRAFT LEFT", function()
+  -- The one that was backwards. defX is an AIM; the force is opposite it.
+  local plant = Sim.newPlant({})
+  local commands = {}
+  for _, spec in ipairs(Sim.defaultLayout()) do
+    commands[spec.id] = { thrust = spec.group == "lift" and 1.0 or 0,
+                          defX = spec.group == "lift" and 0.8 or 0, defZ = 0 }
+  end
+  plant:step(commands, 0.05)
+  T.isTrue(plant.netX < 0, "aim +x gives force -x: " .. plant.netX)
+  T.isTrue(plant.netUp > 0, "and it is still lifting")
+end)
+
+--- Force contributed by the LIFT group alone.
+---
+--- Isolated deliberately: the lateral thrusters serve the same translation demand and are
+--- strong enough to mask a sign error in the lift vectoring entirely. A whole-craft assertion
+--- passed with the lift sign inverted, which is worth remembering before trusting a net figure.
+local function liftForce(plant)
+  local x, z = 0, 0
+  for id, f in pairs(plant.lastForces) do
+    if id:find("^lift") then x = x + f.x; z = z + f.z end
+  end
+  return x, z
+end
+
+T.it("THE MIXER TURNS 'push right' INTO A RIGHTWARD FORCE, from the lift nozzles alone",
+  function()
+    local m = build(simConfig())
+    local commands = m.mixer:mix({ collective = 0.6, translateX = 1.0 })
+    local plant = Sim.newPlant({})
+    plant:step(commands, 0.05)
+    local x = liftForce(plant)
+    T.isTrue(x > 0, "the lift group pushes RIGHT for a rightward demand: " .. x)
+  end)
+
+T.it("...and 'push forward' into a forward force, likewise", function()
+  local m = build(simConfig())
+  local commands = m.mixer:mix({ collective = 0.6, translateZ = 1.0 })
+  local plant = Sim.newPlant({})
+  plant:step(commands, 0.05)
+  local _, z = liftForce(plant)
+  T.isTrue(z > 0, "the lift group pushes FORWARD: " .. z)
+end)
+
+T.it("the whole craft agrees, laterals included", function()
+  local m = build(simConfig())
+  local commands = m.mixer:mix({ collective = 0.6, translateX = 1.0, allowPrecision = true })
+  local plant = Sim.newPlant({})
+  plant:step(commands, 0.05)
+  T.isTrue(plant.netX > 0, "net +x: " .. plant.netX)
+end)
+
+T.it("THE ASSISTANT OPPOSES DRIFT RATHER THAN FEEDING IT", function()
+  -- The consequence that made this worth hunting. A sign error here is positive feedback: the
+  -- assistant pushes WITH the drift, the drift grows, it pushes harder. Runaway.
+  local Assist = require("lib.control.assist")
+  local Log = require("lib.log")
+  local cfg = simConfig()
+  local assist = Assist.new(cfg, Log.new({ level = "error", capacity = 20 }))
+  local m = build(cfg)
+
+  local out = assist:demand({
+    velocity = { x = 2.0, z = 0 },     -- drifting to the RIGHT at 2 m/s
+    capability = "vector", enabled = true, feel = "cruise",
+    now = 1000, dt = 0.05,
+  })
+  T.isTrue(out.translateX < 0, "the demand is to push LEFT: " .. tostring(out.translateX))
+
+  local commands = m.mixer:mix({ collective = 0.6, translateX = out.translateX })
+  local plant = Sim.newPlant({})
+  plant:step(commands, 0.05)
+  local x = liftForce(plant)
+  T.isTrue(x < 0, "and the lift nozzles push LEFT, against the drift: " .. x)
+end)
+
+T.it("drifting left is opposed too, symmetrically", function()
+  local Assist = require("lib.control.assist")
+  local Log = require("lib.log")
+  local cfg = simConfig()
+  local assist = Assist.new(cfg, Log.new({ level = "error", capacity = 20 }))
+  local m = build(cfg)
+  local out = assist:demand({
+    velocity = { x = -2.0, z = 0 },
+    capability = "vector", enabled = true, feel = "cruise",
+    now = 1000, dt = 0.05,
+  })
+  T.isTrue(out.translateX > 0, "push right")
+  local commands = m.mixer:mix({ collective = 0.6, translateX = out.translateX })
+  local plant = Sim.newPlant({})
+  plant:step(commands, 0.05)
+  local x = liftForce(plant)
+  T.isTrue(x > 0, "lift nozzles push right: " .. x)
+end)
+
+T.it("A YAW DEMAND YAWS THE COMMANDED WAY", function()
+  -- +yaw is nose right. The moment about +y is r_z*F_x - r_x*F_z, using the FORCE.
+  local m = build(simConfig())
+  local right = m.mixer:mix({ collective = 0.5, yawTorque = 1.0 })
+  local layout = m.mixer:ensureLayout()
+  local moment = 0
+  for _, item in ipairs(layout.lateral) do
+    local thrust = right[item.id].thrust
+    moment = moment + thrust * (item.pos.z * item.force.x - item.pos.x * item.force.z)
+  end
+  T.isTrue(moment > 0, "nose-right demand gives a positive yaw moment: " .. moment)
+
+  local left = m.mixer:mix({ collective = 0.5, yawTorque = -1.0 })
+  local leftMoment = 0
+  for _, item in ipairs(layout.lateral) do
+    leftMoment = leftMoment + left[item.id].thrust
+      * (item.pos.z * item.force.x - item.pos.x * item.force.z)
+  end
+  T.isTrue(leftMoment < 0, "and the other way for nose-left: " .. leftMoment)
+end)
+
+T.it("the mixer's force vector is the NEGATION of the configured facing", function()
+  local m = build(simConfig())
+  local layout = m.mixer:ensureLayout()
+  for _, item in ipairs(layout.lateral) do
+    T.eq(item.force.x, -item.facing.x, item.id .. " x")
+    T.eq(item.force.z, -item.facing.z, item.id .. " z")
+  end
 end)
 
 return true

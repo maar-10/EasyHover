@@ -52,7 +52,11 @@ local function thrusterTemplate()
     -- Geometry in the CRAFT frame, blocks from the centre of mass.
     -- x = right, y = up, z = forward. Used for moment arms -- signs matter.
     pos = { x = 0, y = 0, z = 0 },
-    thrustAxis = "down",  -- where zero-deflection thrust points
+    -- WHERE THE THRUSTER FACES -- the direction its exhaust goes, which is how you describe
+    -- the craft when you look at it: lift faces "down", accelerators "back", laterals "left"
+    -- or "right". THE FORCE IS THE OPPOSITE (exhaust down pushes the craft up); the mixer
+    -- negates it once, in build(). See docs/CONTROL_LAWS.md.
+    thrustAxis = "down",
     -- How the nozzle's own X/Y map onto craft axes for this mounting.
     vectorMap = { x = "x", y = "z" },
     invertVectorX = false,

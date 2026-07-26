@@ -16,10 +16,25 @@
      Frame: x = right, y = up, z = forward. Positive pitch = nose up, positive roll = right
      wing down, positive yaw = nose right.
 
-     Sign conventions here are derived from config geometry, but which way a real nozzle
-     deflects for a positive setVector is NOT documented by the mod. The per-thruster
-     invertVectorX/Y flags exist to fix that after the first hover test, without touching
-     this file.
+     TWO SIGN CONVENTIONS, AND THEY ARE OPPOSITE. Getting these confused is the single most
+     dangerous mistake available in this file, so they are stated once, here:
+
+       * `thrustAxis` is WHERE A THRUSTER FACES -- where its exhaust goes. A lift thruster
+         faces "down", an accelerator faces "back", a lateral faces "left" or "right". That is
+         how a pilot describes their craft, and it is what the config records.
+       * THE FORCE IS THE OPPOSITE. Exhaust down pushes the craft up; that is the only reason
+         a lift thruster lifts. So force = -AXIS_VECTORS[thrustAxis], computed once in build().
+       * `defX` / `defY` / `defZ` in a command are likewise AIM directions -- where the nozzle
+         is pointed, in the craft frame -- because that is what setVector() takes and what the
+         pilot names in AXIS MAP. A positive defX therefore produces force in -x.
+
+     Consequence: any demand expressed as a FORCE ("push right") must be NEGATED on its way
+     into a deflection. `translateX`/`translateZ` are forces. The toe terms are not -- they are
+     deflections already, and their sign is arbitrary anyway because a pair cancels either way.
+
+     Which way a real nozzle deflects for a positive setVector is still not documented by the
+     mod; the per-thruster invertVectorX/Y flags fix that per craft, and AXIS MAP sets them by
+     observation. That is a HARDWARE correction and is separate from the convention above.
 ]]
 
 local Util = require("lib.util")
@@ -27,8 +42,8 @@ local Util = require("lib.util")
 local Mixer = {}
 Mixer.__index = Mixer
 
---- Unit force direction for a lateral/main thruster's zero-deflection axis.
--- thrustAxis is the direction the FORCE pushes the craft.
+--- Unit vector for a named direction. `thrustAxis` names where a thruster FACES, so the force
+--- it produces is the NEGATION of its entry here -- see the header.
 local AXIS_VECTORS = {
   right   = { x = 1, y = 0, z = 0 },
   left    = { x = -1, y = 0, z = 0 },
@@ -70,10 +85,15 @@ function Mixer:build()
     elseif spec.group == "main" then
       main[#main + 1] = item
     else
-      local axis = AXIS_VECTORS[spec.thrustAxis] or AXIS_VECTORS.right
-      item.axis = axis
+      -- FACING -> FORCE. A thruster facing right pushes the craft LEFT. Using the facing
+      -- vector directly here would translate and yaw the craft backwards, and with the flight
+      -- assistant on that is positive feedback: it would push WITH the drift, not against it.
+      local facing = AXIS_VECTORS[spec.thrustAxis] or AXIS_VECTORS.right
+      local force = { x = -facing.x, y = -facing.y, z = -facing.z }
+      item.facing = facing
+      item.force = force
       -- Yaw moment coefficient about +y: M = r_z * F_x - r_x * F_z, per unit thrust.
-      item.yawCoeff = pos.z * axis.x - pos.x * axis.z
+      item.yawCoeff = pos.z * force.x - pos.x * force.z
       item.yawAuthority = spec.yawAuthority and true or false
       item.precisionOnly = spec.precisionOnly and true or false
       lateral[#lateral + 1] = item
@@ -165,8 +185,13 @@ function Mixer:mix(demand)
     local toeZ = -item.sz * (baseToe + rollExtra)
 
     -- Translation is deliberately uniform: every nozzle the same way, so it adds up.
-    local defX = toeX + translateX * m.translateAuthority
-    local defZ = toeZ + translateZ * m.translateAuthority
+    --
+    -- NEGATED, because translateX/Z are FORCES and defX/defZ are AIM directions. Aiming the
+    -- exhaust right pushes the craft left. Without this the flight assistant damps drift by
+    -- pushing WITH it -- positive feedback, and exactly the runaway this design exists to
+    -- prevent. Tested in tests/test_loops.lua ("damping opposes the drift").
+    local defX = toeX - translateX * m.translateAuthority
+    local defZ = toeZ - translateZ * m.translateAuthority
 
     -- Differential thrust only for the excess attitude demand beyond toe authority.
     local diff = 0
@@ -189,9 +214,9 @@ function Mixer:mix(demand)
     if item.precisionOnly and not demand.allowPrecision then
       commands[item.id] = { thrust = 0, defX = 0, defZ = 0 }
     else
-      -- How much of the translation demand this thruster's axis can serve. A thruster
-      -- can only push along its axis, so the opposed unit handles the other sign.
-      local translate = translateX * item.axis.x + translateZ * item.axis.z
+      -- How much of the translation demand this thruster can serve. A thruster can only push
+      -- along its own force axis, so the opposed unit of the pair handles the other sign.
+      local translate = translateX * item.force.x + translateZ * item.force.z
       local yaw = yawTorque * item.yawUnit * self.cfg.mixer.yawAuthority
       commands[item.id] = {
         thrust = Util.clamp(translate + yaw, 0, 1),

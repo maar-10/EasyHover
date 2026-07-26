@@ -480,14 +480,15 @@ local SLOT_GEOMETRY = {
     rr = { pos = { x =  1, y = 0, z = -1 }, thrustAxis = "down" },
   },
   main = {
-    -- Main thrust points BACKWARD so the craft accelerates forward. Mounted in a block, so
-    -- they carry no roll authority and their lateral offset is deliberately zero.
+    -- FACES backward, so the force is forward -- which is what accelerates the craft. Mounted
+    -- in a block, so they carry no roll authority and their lateral offset is deliberately zero.
     ["1"] = { pos = { x = 0, y = 0, z = -1 }, thrustAxis = "back" },
     ["2"] = { pos = { x = 0, y = 0, z = -1 }, thrustAxis = "back" },
     ["3"] = { pos = { x = 0, y = 0, z = -1 }, thrustAxis = "back" },
     ["4"] = { pos = { x = 0, y = 0, z = -1 }, thrustAxis = "back" },
   },
   lateral = {
+    -- FACING, not force: a left-side thruster faces right and therefore pushes the craft LEFT.
     -- Front pair steers (yaw); the rear pair idles in normal flight and is used only by
     -- Precision mode and the Flight Assistant -- see docs/MODES.md.
     fl = { pos = { x = -1, y = 0, z =  1 }, thrustAxis = "right", yawAuthority = true },

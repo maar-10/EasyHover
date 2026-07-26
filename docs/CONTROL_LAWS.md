@@ -218,3 +218,46 @@ that change lands, which is what AXIS MAP is for.
 
 > Until then the lateral nozzles are held at centre, so none of this coupling occurs — and the
 > attitude loop is not silently fighting an unmodelled moment.
+
+## The two sign conventions, and the bug that lived between them
+
+**Frame:** x = right, y = up, z = forward. Positive pitch = nose up, positive roll = right wing
+down, positive yaw = nose right.
+
+Two conventions in this codebase point **opposite ways**, and confusing them is the most
+dangerous mistake available:
+
+| Quantity | Means | Example |
+|---|---|---|
+| `thrustAxis` | **where the thruster FACES** — where its exhaust goes | lift = `down`, accelerator = `back`, lateral = `left`/`right` |
+| `defX`/`defY`/`defZ` | **where the nozzle is AIMED**, in the craft frame | positive `defX` aims the exhaust right |
+| `translateX`/`translateZ` | a wanted **FORCE** | `+1` = push the craft right |
+
+**The force is opposite the exhaust.** Exhaust down pushes the craft up — that is the only reason
+a down-facing lift thruster lifts. So:
+
+- `Mixer:build()` computes `force = −AXIS_VECTORS[thrustAxis]` once, and yaw and lateral
+  translation use that force, never the facing.
+- Translation into lift-nozzle deflection is **negated**: `defX = toeX − translateX × authority`.
+- Toe terms need no negation: they are deflections already, and a pair's horizontal forces
+  cancel whichever way it toes.
+
+### Why this was worth hunting
+
+The mixer treated a nozzle aim as a force, **and `tests/sim.lua` made the same mistake** — its
+`up` term was negated (a down-facing thruster lifted, correctly) while its `fx`/`fz` followed the
+aim. The two errors cancelled, so every translation and drift-damping test passed.
+
+On a real craft they do not cancel: only the software is wrong. **Translation and the flight
+assistant would have run backwards** — and an assistant that damps drift by pushing *with* it is
+positive feedback: the drift grows, it pushes harder. That is exactly the runaway this whole
+design exists to prevent, and it would have appeared on the first hover.
+
+The simulator now models real physics, so it can no longer agree with the same mistake. Ten
+tests in `tests/test_loops.lua` pin one direction each **against physics rather than against the
+other half of the code**, and each was verified to fail when its fix is reverted.
+
+> One of those tests initially passed *with* the bug reintroduced: the lateral thrusters serve
+> the same translation demand and are strong enough to mask a lift-vectoring sign error in a
+> whole-craft figure. The assertions now isolate the lift group. A net number is not evidence
+> about a part.

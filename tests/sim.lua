@@ -33,6 +33,16 @@ function Sim.fakePeripherals(specs)
 end
 
 --- The default four-corner lift layout plus a main and two yaw thrusters.
+--- Unit vector for the direction a thruster FACES. The force it makes is the negation.
+Sim.FACING = {
+  right   = { x = 1, y = 0, z = 0 },
+  left    = { x = -1, y = 0, z = 0 },
+  up      = { x = 0, y = 1, z = 0 },
+  down    = { x = 0, y = -1, z = 0 },
+  forward = { x = 0, y = 0, z = 1 },
+  back    = { x = 0, y = 0, z = -1 },
+}
+
 function Sim.defaultLayout()
   return {
     { id = "lift_fl", group = "lift", pos = { x = -1.5, y = 0, z = 2.0 }, thrustAxis = "down",
@@ -43,7 +53,9 @@ function Sim.defaultLayout()
       vectorMap = { x = "x", y = "z" }, maxVector = 0.8, enabled = true },
     { id = "lift_rr", group = "lift", pos = { x = 1.5, y = 0, z = -2.0 }, thrustAxis = "down",
       vectorMap = { x = "x", y = "z" }, maxVector = 0.8, enabled = true },
-    { id = "main", group = "main", pos = { x = 0, y = 0, z = -2.5 }, thrustAxis = "forward",
+    -- FACES BACKWARD, so the force is forward. It said "forward" while the model hardcoded a
+    -- forward force, which is the same confusion in two places agreeing with itself.
+    { id = "main", group = "main", pos = { x = 0, y = 0, z = -2.5 }, thrustAxis = "back",
       vectorMap = { x = "x", y = "z" }, maxVector = 0.2, enabled = true },
     { id = "yaw_l", group = "lateral", pos = { x = -1.2, y = 0, z = 2.0 }, thrustAxis = "right",
       yawAuthority = true, vectorMap = { x = "x", y = "z" }, maxVector = 0.2, enabled = true },
@@ -129,21 +141,24 @@ function Plant:step(commands, dt)
     local ax = math.rad(nozzle.x * self.maxNozzleDeg)
     local az = math.rad(nozzle.z * self.maxNozzleDeg)
 
+    -- THE FORCE IS OPPOSITE THE EXHAUST. This model had it both ways at once: `up` was
+    -- negated (a down-facing thruster lifted, correctly) while `fx`/`fz` followed the aim.
+    -- Because the mixer had the same inversion, the two cancelled and every test passed --
+    -- on a craft where they would NOT cancel, translation and drift damping ran backwards.
+    -- Both are fixed; this is now real physics, so it can no longer hide the same mistake.
     local up, fx, fz = 0, 0, 0
     if spec.group == "lift" then
       up = T * math.cos(ax) * math.cos(az)
-      fx = T * math.sin(ax)
-      fz = T * math.sin(az)
+      fx = -T * math.sin(ax)
+      fz = -T * math.sin(az)
       pitchMoment = pitchMoment + spec.pos.z * up
       rollMoment = rollMoment - spec.pos.x * up
-    elseif spec.group == "main" then
-      fz = T
     else
-      -- lateral thrusters push along their axis
-      local axisX = (spec.thrustAxis == "right") and 1 or ((spec.thrustAxis == "left") and -1 or 0)
-      local axisZ = (spec.thrustAxis == "forward") and 1 or ((spec.thrustAxis == "back") and -1 or 0)
-      fx = T * axisX
-      fz = T * axisZ
+      -- Every non-lift thruster pushes OPPOSITE where it faces, derived rather than assumed.
+      local facing = Sim.FACING[spec.thrustAxis] or Sim.FACING.back
+      fx = -T * facing.x
+      fz = -T * facing.z
+      up = -T * facing.y
     end
 
     totalUp = totalUp + up

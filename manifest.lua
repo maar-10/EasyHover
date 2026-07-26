@@ -27,9 +27,9 @@
       ["files"] = {
         {
           ["dst"] = "flight/app.lua",
-          ["size"] = 38160,
+          ["size"] = 38274,
           ["src"] = "flight/app.lua",
-          ["sum"] = "05aeccea",
+          ["sum"] = "7cdf55a5",
         },
         {
           ["dst"] = "flight/diskmenu.lua",
@@ -39,9 +39,9 @@
         },
         {
           ["dst"] = "flight/lib/config.lua",
-          ["size"] = 40271,
+          ["size"] = 40571,
           ["src"] = "flight/lib/config.lua",
-          ["sum"] = "f5fbd477",
+          ["sum"] = "5495c9f8",
         },
         {
           ["dst"] = "flight/lib/control/altitude.lua",
@@ -87,9 +87,9 @@
         },
         {
           ["dst"] = "flight/lib/control/mixer.lua",
-          ["size"] = 9239,
+          ["size"] = 11210,
           ["src"] = "flight/lib/control/mixer.lua",
-          ["sum"] = "7b0598c0",
+          ["sum"] = "eb4f3906",
         },
         {
           ["dst"] = "flight/lib/control/oscillation.lua",
@@ -420,5 +420,5 @@
     ["size"] = 36872,
     ["sum"] = "305c58ce",
   },
-  ["version"] = "8bb4aa5f",
+  ["version"] = "213c011c",
 }
