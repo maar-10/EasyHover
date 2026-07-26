@@ -22,7 +22,9 @@ Read first: [MOD_API_RESEARCH.md](MOD_API_RESEARCH.md) (what the mods actually e
   mainThread mod call costs ~50 ms. Abstraction everywhere *except* the actuation path.
   (Same resolution as FireControl.)
 - **Config is backward-additive.** `Config.withDefaults` deep-merges over fresh defaults, so an
-  old config file loads and gains new fields. (DriveByWire v5 lesson.)
+  old config file loads and gains new fields. (DriveByWire v5 lesson.) The Suite additionally
+  re-saves each config through that same merge on update, so the file on disk *grows* new
+  fields rather than only gaining them in memory — see [INSTALL.md](INSTALL.md).
 - **ASCII only in anything rendered** (32–126, plus `\7`). CraftOS-PC's font is not the in-game
   font, so headless render tests lie about extended glyphs.
 - **Everything self-tested headless before it is handed over.**
@@ -125,7 +127,7 @@ control bug when both are new. Phases 13–15 do not start until phase 3's gains
 | 14 | Autopilot: ROUTE + RTB | 13 | multi-leg, turn anticipation. |
 | 15 | AUTOLAND | 13 | laser-referenced descent, flare, abort gates. |
 | 16 | Music | 5 | [MUSIC.md](MUSIC.md) — needs the external service decided first. |
-| 17 | Installer + repo | all | role-prompt installer (DriveByWire pattern), then the `new-project-repo` skill. |
+| **✔** | **EasyHover Suite + repo** | 1–4 | **DONE 2026-07-26.** `easyhover_suite.lua` + generated `manifest.lua`: install, role selection, update, corrupt-install repair, config extension. All 8 roles declared (1 released, 7 reserved). See [INSTALL.md](INSTALL.md). Repo: `maar-10/EasyHover`. |
 
 ## 5. Risks and flags
 

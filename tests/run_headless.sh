@@ -15,13 +15,15 @@ cp -r "$ROOT/flight" "$C0/flight"
 mkdir -p "$C0/tests/mocks"
 cp "$ROOT/tests/util.lua" "$C0/tests/util.lua"
 cp "$ROOT/tests/sim.lua" "$C0/tests/sim.lua"
+cp "$ROOT/easyhover_suite.lua" "$C0/easyhover_suite.lua"
+cp "$ROOT/manifest.lua" "$C0/manifest.lua"
 cp "$ROOT/tests/mocks/peripherals.lua" "$C0/tests/mocks/peripherals.lua"
 for f in "$ROOT"/tests/test_*.lua; do cp "$f" "$C0/tests/"; done
 
 cat > "$C0/startup.lua" <<'LUA'
 package.path = "/flight/?.lua;/flight/?/init.lua;/?.lua;/?/init.lua;" .. package.path
 
-local SUITES = { "/tests/test_core.lua", "/tests/test_io.lua", "/tests/test_control.lua", "/tests/test_loops.lua", "/tests/test_modes.lua", "/tests/test_input.lua" }
+local SUITES = { "/tests/test_core.lua", "/tests/test_io.lua", "/tests/test_control.lua", "/tests/test_loops.lua", "/tests/test_modes.lua", "/tests/test_input.lua", "/tests/test_suite.lua" }
 
 local out = {}
 local function w(line) out[#out + 1] = line end

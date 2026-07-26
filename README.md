@@ -19,11 +19,20 @@ The plant simulator holds altitude to **~0.1 blocks** with no limit cycle, and i
 keep: it caught rate gains a full decade too hot, a free-fall hole at zero commanded thrust,
 and a wrong toe-authority formula. See [docs/CONTROL_LAWS.md](docs/CONTROL_LAWS.md) §4a.
 
+## Installing
+
+```
+wget run https://raw.githubusercontent.com/maar-10/EasyHover/main/easyhover_suite.lua
+```
+
+One file installs any role, updates it, repairs a corrupt install, and extends your saved
+config with newly added defaults without ever replacing it. Full behaviour in
+[docs/INSTALL.md](docs/INSTALL.md).
+
 ### Still to come
 
-Nav + autopilot (phases 11–15), the UIs and annunciator (6–10), music (16), and the
-role-prompt installer (17). Until the installer exists, deploy by copying `flight/` to the
-flight computer and running `flight/startup.lua`.
+Nav + autopilot (phases 11–15), the UIs and annunciator (6–10), music (16). Their roles are
+already reserved in the Suite, with directories and config paths ready.
 
 ### Known gap before flight
 
@@ -56,6 +65,7 @@ bash tests/run_headless.sh
 | [docs/WIRING.md](docs/WIRING.md) | Topology, computer roles, failsafe wiring, and why. |
 | [docs/NAVIGATION.md](docs/NAVIGATION.md) | Position sources, waypoints, routes, autopilot modes, autoland, interlocks. |
 | [docs/MUSIC.md](docs/MUSIC.md) | Exactly what the music module requires, and why. |
+| [docs/INSTALL.md](docs/INSTALL.md) | The EasyHover Suite: roles, updating, repair, and how configs are handled. |
 | [docs/MOD_API_RESEARCH.md](docs/MOD_API_RESEARCH.md) | What every mod actually exposes to Lua, read from source/bytecode. |
 
 ## Layout
@@ -68,6 +78,7 @@ ui_prox/    proximity warning display
 ui_aux/     lights, doors, landing gear
 nav/        waypoints, routes, map UI, position fixing
 music/      entertainment computer
+launchers/  per-role /startup.lua launchers (shipped by the Suite)
 ground/     optional ender-modem ground station
 tools/      probe + installer generator
 tests/      headless logic suite, UI render suite, plant simulator
