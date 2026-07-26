@@ -40,19 +40,28 @@ echo "mirror: $MIRROR"
 echo ""
 
 # ---------- lay out a bare computer ----------
-rm -rf "$WORK"
-mkdir -p "$C0" "$DATA/config"
-# CraftOS-PC blocks private ranges by default; allow localhost.
-printf '{ "http_enable": true, "http_whitelist": ["*"], "http_blacklist": [] }' \
-  > "$DATA/config/global.json"
-cp "$ROOT/easyhover_suite.lua" "$C0/easyhover_suite.lua"
-printf '%s' "$MIRROR" > "$C0/easyhover_suite_src.txt"
-# the probe compares the install record against the release it was served
-cp "$ROOT/manifest.lua" "$C0/mirror_manifest.lua"
+lay_out_computer() {
+  rm -rf "$WORK"
+  mkdir -p "$C0" "$DATA/config"
+  # CraftOS-PC blocks private ranges by default; allow localhost.
+  printf '{ "http_enable": true, "http_whitelist": ["*"], "http_blacklist": [] }' \
+    > "$DATA/config/global.json"
+  cp "$ROOT/easyhover_suite.lua" "$C0/easyhover_suite.lua"
+  printf '%s' "$MIRROR" > "$C0/easyhover_suite_src.txt"
+  # the probe compares the install record against the release it was served
+  cp "$ROOT/manifest.lua" "$C0/mirror_manifest.lua"
+}
+lay_out_computer
+
+# Phases that need a BARE computer rather than the aged one the chain has been building. A
+# second role cannot be tested on top of the first: installing ui_main over flight is a role
+# CHANGE, which is a different operation from the fresh install a pilot actually performs.
+FRESH_PHASES=" uimain "
 
 FAILED=0
 run_phase() {
   local phase="$1"
+  [[ "$FRESH_PHASES" == *" $phase "* ]] && lay_out_computer
   printf '%s' "$phase" > "$C0/pc_phase.txt"
   cp "$ROOT/tests/suite_probe.lua" "$C0/e2e_probe.lua"
   rm -f "$C0/pc_result.txt"
@@ -74,7 +83,9 @@ run_phase() {
 # exactly how a real install ages. Iterating on one phase is much faster than the whole chain:
 #   EASYHOVER_E2E_PHASES="install badconfig" bash tests/run_suite_e2e.sh
 # `install` is a prerequisite for every later phase, so keep it first in any subset.
-ALL_PHASES="install current configkeep repair badconfig detect protect check prepared"
+# `uimain` is last because it wipes the computer: it is a fresh install of the OTHER released
+# role, which nothing else here covers.
+ALL_PHASES="install current configkeep repair badconfig detect protect check prepared uimain"
 PHASES="${EASYHOVER_E2E_PHASES:-$ALL_PHASES}"
 [[ "$PHASES" != "$ALL_PHASES" ]] && echo "(limited to: $PHASES)" && echo ""
 

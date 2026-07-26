@@ -127,5 +127,28 @@ bash tests/run_suite_e2e.sh     # real install/update/repair against a localhost
 ```
 
 The e2e test really fetches, stages, commits, repairs and extends configs — it just serves the
-repo from python instead of GitHub, which keeps it fast, offline, and independent of the
-repository's visibility.
+repo from a local mirror instead of GitHub, which keeps it fast, offline, and independent of the
+repository's visibility. Ten phases, in order:
+
+| Phase | What it proves |
+|---|---|
+| `install` | a bare computer ends up with the launcher, the role files and an install record |
+| `current` | an up-to-date run backs nothing up and changes nothing |
+| `configkeep` | a hand-written config keeps **my** values and gains the fields it never had |
+| `repair` | corrupt and stale files are replaced — and **the config survives** |
+| `badconfig` | an unparseable config is replaced, and the broken one is backed up, not discarded |
+| `detect` | the role is re-derived from the files on disk when the record is gone |
+| `protect` | `--repair` leaves configs, waypoints, probe output and hand-made backups alone |
+| `check` | `--check` is a true dry run: it writes nothing, even over a corrupt file |
+| `prepared` | an unreleased role installs nothing and does not clobber the current record |
+| `uimain` | a fresh install of the **other** released role, on a wiped computer |
+
+Each phase inherits the computer the last one left behind — that is how a real install ages.
+`uimain` is the exception and starts from bare, because installing a second role over the first
+is a role *change*, not the fresh install a pilot performs. Iterate on one phase with
+`EASYHOVER_E2E_PHASES="install badconfig" bash tests/run_suite_e2e.sh` (keep `install` first).
+
+> **The probe must call `os.shutdown()`.** Without it CraftOS-PC finishes the script, drops to
+> its shell and idles until the runner's `timeout 180` kills it — and because the results file
+> was already written, the phase still reports PASS. That cost 27 minutes a run, invisibly,
+> until someone timed it.

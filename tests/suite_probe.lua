@@ -237,6 +237,41 @@ elseif phase == "prepared" then
   check(stateField("role") == "flight", "and does not overwrite the current role record",
     tostring(stateField("role")))
 
+elseif phase == "uimain" then
+  -- A FRESH install of the other released role, on a bare computer. Nothing else here covers
+  -- ui_main, and it is structurally unlike flight: two source trees (ui_main and shared) land
+  -- on the computer, plus a 300 KB vendored Basalt that gets RENAMED on the way in.
+  runSuite("ui_main")
+  check(stateField("role") == "ui_main", "install record names the role",
+    tostring(stateField("role")))
+  check(fs.exists("/startup.lua"), "launcher installed as /startup.lua")
+  check(fs.exists("/ui_main/app.lua"), "role files installed")
+  check(fs.exists("/ui_main/ui/hardware.lua"), "nested ui files installed")
+  check(fs.exists("/ui_main/lib/monitors.lua"), "nested lib files installed")
+  check(fs.exists("/shared/util.lua"), "the SECOND source tree landed too")
+
+  -- vendor/basalt-full.lua is installed as /basalt.lua, because that is where require("basalt")
+  -- looks. A rename in the manifest is the kind of thing that silently stops working.
+  check(fs.exists("/basalt.lua"), "Basalt installed under the name require() expects")
+  local basalt = read("/basalt.lua") or ""
+  check(#basalt > 200000, "and it is the FULL build, not a truncated download",
+    ("%d bytes"):format(#basalt))
+  check(basalt:find("createFrame"), "and it is really Basalt")
+
+  -- The launcher must start the UI role, not the flight role.
+  local launcher = read("/startup.lua") or ""
+  check(launcher:find("ui_main"), "the launcher starts the UI role", launcher)
+  check(#noStagingLeftBehind() == 0, "no .ehnew staging files left behind")
+
+  -- No flight files on a UI computer: this is a cockpit screen, not a spare flight computer.
+  check(not fs.exists("/flight/app.lua"), "no flight files on a UI computer")
+
+  -- And re-running is a no-op, the same as it is for flight.
+  local versionBefore = stateField("version")
+  runSuite()
+  check(stateField("version") == versionBefore, "an up-to-date re-run changes nothing",
+    tostring(stateField("version")))
+
 else
   fail("unknown phase: " .. tostring(phase))
 end
