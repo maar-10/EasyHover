@@ -1,0 +1,676 @@
+--[[ Configuration: defaults, backward-additive merge, validation, persistence.
+
+     Backward-additive is the rule (DriveByWire v5 lesson): an old config file must load
+     and silently gain any new fields. So nothing reads the file directly -- everything
+     goes through withDefaults(), which merges the file over a FRESH default tree.
+
+     Lists are replaced wholesale rather than merged (see Util.deepMerge), so each entry
+     of hardware.thrusters / hardware.relays is then merged over its own template. That
+     is how a thruster entry written months ago picks up a field added today.
+]]
+
+local Util = require("lib.util")
+
+local Config = {}
+
+local THRUST_AXES = { down = true, up = true, forward = true, back = true, left = true, right = true }
+local GROUPS = { lift = true, main = true, lateral = true }
+local FEEL_MODES = { cruise = true, rate = true, stutter = true }
+local AXES = { x = true, y = true, z = true }
+
+--- A single thruster's defaults. Every configured thruster is merged over this.
+local function thrusterTemplate()
+  return {
+    id = "",              -- stable logical id; the mixer and UI address this, never the peripheral name
+    peripheral = "",      -- wired-modem peripheral name; changes when the network is rebuilt
+    -- "lift"    = down-facing, vectored: lift/hover/pitch/roll AND braking
+    -- "main"    = main forward thrust for high speed
+    -- "lateral" = yaw and translation (see the two flags below)
+    group = "lift",
+    -- lateral only: does this thruster contribute to yaw?
+    yawAuthority = false,
+    -- lateral only: idle in normal flight, used ONLY in Precision mode or by the
+    -- Flight Assistant. This is the rear pair.
+    precisionOnly = false,
+    -- Geometry in the CRAFT frame, blocks from the centre of mass.
+    -- x = right, y = up, z = forward. Used for moment arms -- signs matter.
+    pos = { x = 0, y = 0, z = 0 },
+    thrustAxis = "down",  -- where zero-deflection thrust points
+    -- How the nozzle's own X/Y map onto craft axes for this mounting.
+    vectorMap = { x = "x", y = "z" },
+    invertVectorX = false,
+    invertVectorY = false,
+    maxVector = 0.6,      -- deflection authority limit, 0..1
+    enabled = true,
+  }
+end
+
+local function relayTemplate()
+  return {
+    peripheral = "",
+    side = "top",         -- NB: a redstone relay's "face" is its BACK (DriveByWire v6)
+    level = 0,            -- analog 0..15 written at boot as the hardware failsafe
+    purpose = "failsafe", -- "failsafe" | "aux"
+    label = "",
+  }
+end
+
+function Config.defaults()
+  return {
+    version = 1,
+
+    hardware = {
+      thrusterTemplate = thrusterTemplate(),
+      relayTemplate = relayTemplate(),
+      -- Empty by default: the layout is the pilot's, and a guessed layout is worse
+      -- than none. Populated by the config UI or the identify flow.
+      thrusters = {},
+      relays = {},
+      sensors = {
+        -- peripheral names; "" means "auto-pick the first of that type"
+        altitude = "",
+        gimbal = "",
+        velocity = "",          -- scalar speed (legacy / single-sensor installs)
+        -- A velocity VECTOR assembled from several sensors, each mapped to a craft axis.
+        -- Required for drift damping and for the brake law -- see docs/MODES.md section 6.
+        -- e.g. { { peripheral = "velocity_sensor_0", axis = "z" },
+        --        { peripheral = "velocity_sensor_1", axis = "x", invert = true } }
+        velocityVector = {},
+        navTable = "",
+        -- down-facing first; extras are proximity rays (phase 8)
+        optical = {},
+      },
+      inputs = {
+        controller = "",
+        typewriter = "",
+      },
+    },
+
+    -- Sensor normalisation. Every raw read passes through here, so a probe surprise
+    -- is a config change rather than a code change.
+    sensors = {
+      gimbal = {
+        pitchIndex = 1, rollIndex = 2, yawIndex = 0, -- 0 = not provided by this sensor
+        pitchInvert = false, rollInvert = false, yawInvert = false,
+        scale = 1.0,        -- multiply raw -> degrees
+        filterAlpha = 0.35, -- first-order LPF on attitude
+      },
+      altitude = {
+        offset = 0.0,       -- added to getHeight() to reach world Y, if needed
+        filterAlpha = 0.30,
+        -- vertical speed is DIFFERENTIATED from altitude (velocity_sensor is scalar
+        -- and gives no sign), so it needs its own, heavier filter
+        vsFilterAlpha = 0.20,
+      },
+      velocity = {
+        scale = 1.0,
+        filterAlpha = 0.30,
+        -- Is getVelocity() SIGNED along the sensor's axis, or just a magnitude? Unknown
+        -- until the probe checks it by reversing. If it turns out to be unsigned, drift
+        -- damping cannot know which way to push -- set this false and the assistant
+        -- degrades instead of guessing. See docs/MODES.md section 6.
+        signed = true,
+      },
+      optical = {
+        maxRange = 32.0,
+        filterAlpha = 0.50,
+        -- blocks a pad may be made of; autoland refuses anything else
+        padWhitelist = { "minecraft:stone", "minecraft:smooth_stone", "minecraft:iron_block" },
+      },
+      staleMs = 500,        -- a channel older than this is not trusted
+      -- ground contact needs BOTH conditions: a low fast pass is not a landing,
+      -- and a stuck laser is not a runway
+      groundContactDist = 1.2,
+      groundVsEpsilon = 0.15,
+    },
+
+    tuning = {
+      attitudeHz = 20,     -- inner loop
+      altitudeHz = 5,      -- outer loop: must stay <= attitudeHz/3
+      inputHz = 20,
+      telemetryHz = 10,
+      dtMinMs = 20,
+      dtMaxMs = 250,       -- beyond this the cycle is treated as a stall
+      -- write-on-change thresholds: what the thruster module considers "moved"
+      vectorDeadband = 0.01,
+      -- Thrust steps are 1/15 apart. This threshold trades step dithering against how much
+      -- residual the continuous toe trim has to absorb: the residual can reach
+      -- max(threshold, 0.5) steps, and toe must be able to cover that or altitude gains a
+      -- small steady-state ripple. Config validation checks the relationship.
+      thrustHysteresisSteps = 0.5,
+      thrustHoldSamples = 2,
+    },
+
+    control = {
+      -- ANGLE mode (Cruise / Stutter): error is degrees. The small integral is what removes
+      -- the couple of degrees of residual bank that a pure PD leaves behind -- noticeable
+      -- as a slow drift in a vehicle meant to feel composed.
+      attitude = {
+        pitch = { p = 0.020, i = 0.004, d = 0.006, iClamp = 0.10, dAlpha = 0.30 },
+        roll  = { p = 0.020, i = 0.004, d = 0.006, iClamp = 0.10, dAlpha = 0.30 },
+        yaw   = { p = 0.015, i = 0.003, d = 0.004, iClamp = 0.10, dAlpha = 0.30 },
+      },
+      -- RATE mode: error is degrees/second, a different plant inversion entirely, so it
+      -- gets its own gains. Holding a constant rate against airframe damping needs steady
+      -- torque, which is why the integral matters more here than in angle mode.
+      attitudeRate = {
+        pitch = { p = 0.030, i = 0.030, d = 0.002, iClamp = 0.30, dAlpha = 0.40 },
+        roll  = { p = 0.030, i = 0.030, d = 0.002, iClamp = 0.30, dAlpha = 0.40 },
+        yaw   = { p = 0.020, i = 0.020, d = 0.002, iClamp = 0.30, dAlpha = 0.40 },
+      },
+      altitude = {
+        -- outer loop produces a vertical-speed demand...
+        pos = { p = 0.40, i = 0.0, d = 0.0, iClamp = 0.5, dAlpha = 0.30 },
+        -- ...which this turns into a thrust/vector-trim demand.
+        --
+        -- NOTE THE SCALE. These gains are in THRUST FRACTION per (block/second), and the
+        -- usable band around hover is only a few percent wide -- with a thrust-to-weight
+        -- ratio R, hover sits near collective 1/R. Gains an order of magnitude larger slam
+        -- the demand to the rails, and at demand 0 the craft is in FREE FALL. Verified in
+        -- tests/sim.lua: p = 0.05 holds altitude to ~0.1 blocks; p = 0.24 diverges.
+        rate = { p = 0.050, i = 0.008, d = 0.004, iClamp = 0.20, dAlpha = 0.25 },
+        -- Floor on commanded collective while airborne. The sim found that a saturating
+        -- rate loop can command zero thrust, which is not "descend" -- it is free fall.
+        -- Descent authority is plenty below this; the envelope limits sink rate anyway.
+        minAirborneCollective = 0.20,
+        hoverTrim = 0.0,   -- LEARNED and persisted; 0 = never learned yet
+        trimLearnRate = 0.002,
+        -- share of vertical authority given to symmetric nozzle trim (the continuous
+        -- axis) rather than the 16-step thrust axis
+        vectorTrimAuthority = 0.15,
+      },
+      translation = { p = 0.30, i = 0.0, d = 0.05, iClamp = 0.3, dAlpha = 0.30 },
+      oscillation = {
+        windowMs = 2000,
+        signFlipsToTrip = 8,   -- flips per window that count as oscillation
+        gainCutFactor = 0.5,
+        minGainScale = 0.25,   -- never cut below this; below it, damp instead
+        tripsToDamped = 3,     -- consecutive trips before dropping to DAMPED HOVER
+        recoverMs = 5000,      -- quiet time before gains are restored a step
+        errorEpsilon = 0.25,   -- errors smaller than this do not count as sign flips
+      },
+    },
+
+    -- How demands become per-thruster commands. See docs/CONTROL_LAWS.md section 1a --
+    -- "toe" is opposed deflection within a pair: continuous lift trim with no net
+    -- horizontal force, which is what makes continuous attitude control possible at all.
+    mixer = {
+      -- Nozzle angle at vector = 1.0. ASSUMED until the probe measures it, and it sets how
+      -- much lift toe can actually trim: a toe of `v` costs 1 - cos(v * maxNozzleDeg).
+      maxNozzleDeg = 30.0,
+      toeBase = 0.30,               -- baseline toe, so vertical trim can go BOTH ways
+      toeAuthority = 0.20,          -- extra toe available for attitude trim
+      toeShare = 0.6,               -- fraction of attitude demand served continuously by toe;
+                                    -- only the excess spills into quantised thrust steps
+      differentialAuthority = 0.25, -- ceiling on collective spent as differential thrust
+      translateAuthority = 0.6,     -- ceiling on lift-thruster deflection used to translate
+      yawAuthority = 0.6,           -- ceiling on lateral thrust spent on yaw
+    },
+
+    -- Control feel. See docs/MODES.md -- the asymmetry is deliberate: releasing the
+    -- stick levels the craft, it does not stop it.
+    modes = {
+      default = "cruise",           -- cruise | rate | stutter
+      lateralDefault = "flight",    -- flight | precision
+      climbRate = 4.0,              -- blocks/s commanded at full climb deflection
+      -- Throttle is a SIGNED axis: + = main thrusters forward, 0 = brake, - = reverse.
+      -- Decelerating to zero pauses here for this long before reverse engages, so passing
+      -- through brake mode is deliberate rather than something you blow past.
+      zeroDwellMs = 500,
+      brakeTapMs = 250,             -- a brake press shorter than this is a TAP
+      reverse = {
+        -- Reverse pitches the nose UP so the lift thrusters push the craft backwards.
+        -- The angle -- and so the acceleration -- scales with how far past zero you are.
+        maxPitchDeg = 12.0,
+      },
+      flight = {
+        -- Bank-to-turn coordination: a fraction of the bank demand is fed to yaw so the
+        -- craft turns into the roll like an aircraft rather than sliding sideways.
+        turnCoordination = 0.5,
+      },
+      cruise = {
+        angleReturnRate = 60.0,     -- deg/s back to neutral when the stick is released
+        thrustHold = true,          -- throttle keeps its level
+        thrustAccelRate = 0.25,     -- per second while accelerating
+        thrustDecelRate = 0.35,
+      },
+      rate = {
+        maxRateDps = 60.0,          -- full stick deflection = this rotation rate
+        thrustHold = true,
+        thrustAccelRate = 0.25,
+        thrustDecelRate = 0.35,
+        forceAssistOff = true,      -- holding an attitude is the point of this mode
+      },
+      stutter = {
+        angleReturnRate = 90.0,
+        thrustHold = false,         -- decays to zero on release
+        thrustAccelRate = 0.60,     -- deliberately faster than the other modes
+        thrustDecayRate = 1.20,
+      },
+      precision = {
+        maxTranslate = 0.8,         -- fraction of lateral authority available directly
+        autoOnLanding = true,       -- landing and autoland always use precision
+      },
+    },
+
+    -- Flight Assistant: drift damping using ALL directional thrusters, including the
+    -- rear pair normal flight leaves idle. Needs a velocity VECTOR (docs/MODES.md s6).
+    assist = {
+      enabled = true,
+      driftDeadband = 0.25,     -- blocks/s of lateral drift left alone
+      gain = 0.35,
+      maxAuthority = 0.6,       -- ceiling on lateral thrust spent damping
+      inputSuppressMs = 400,    -- hold-off after any deliberate input
+      requireVelocityVector = true, -- degrade + annunciate rather than guess a direction
+    },
+
+    -- Braking by tilting the lift thrusters into the direction of motion.
+    brake = {
+      maxTiltDeg = 12.0,        -- hard cap: never command an attitude the loop can't hold calmly
+      speedForFullTilt = 8.0,   -- blocks/s at which maxTilt is reached
+      minSpeed = 0.4,           -- below this, no braking at all -- no twitching
+      tiltRateDps = 25.0,       -- rate limit on tilting in
+      holdPosition = true,      -- brake mode also holds position once stopped
+    },
+
+    envelope = {
+      maxBankDeg = 20.0,
+      maxPitchDeg = 20.0,
+      maxYawRateDps = 45.0,
+      maxClimbRate = 6.0,      -- blocks/s
+      maxSinkRate = 4.0,
+      altFloor = 0.0,          -- world Y; hard floor regardless of route
+      altCeil = 300.0,
+      maxGroundSpeed = 12.0,
+    },
+
+    failsafe = {
+      -- HARDWARE failsafe: an open-loop THRUST level (0..15) written to the relays at
+      -- boot. It cannot hold an altitude -- it only makes the craft settle instead of
+      -- fall. Default is derived from the learned hover trim.
+      redstoneLevel = 8,
+      biasSteps = 1,           -- err upward by this many steps when deriving from trim
+      deriveFromTrim = true,
+      -- SOFTWARE degraded-hold reference. nil = adopt the first altitude read at boot.
+      holdAltitude = nil,
+      verifyRelays = true,
+    },
+
+    input = {
+      source = "auto",         -- "auto" | "controller" | "typewriter" | "both"
+      controller = {
+        deadzone = 0.08,
+        expo = 0.25,           -- 0 = linear; keeps fine authority near centre
+        fullPrecision = true,  -- MUST be set: the default sends coarse values
+        -- action = axis index 1..6. A NEGATIVE index means the axis is inverted.
+        axes = { roll = 1, pitch = 2, climb = 3, yaw = 4, accel = 5 },
+        -- action = button index 1..15
+        buttons = {
+          brake = 1, cycleFeel = 2, toggleLateral = 3, toggleAssist = 4,
+          gear = 5, lights = 6,
+        },
+      },
+      typewriter = {
+        -- Every action is remappable. Values are `keys.*` names, resolved at load.
+        -- REMINDER: a key must be bound to a frequency ON THE TYPEWRITER, or it reports
+        -- nothing at all -- and the peripheral only offers polling, no events.
+        bindings = {
+          pitchUp = "s", pitchDown = "w",
+          rollLeft = "a", rollRight = "d",
+          yawLeft = "q", yawRight = "e",
+          climb = "space", descend = "leftShift",
+          accelerate = "r", decelerate = "f",
+          brake = "b",
+          cycleFeel = "m", toggleLateral = "n", toggleAssist = "h",
+          gear = "g", lights = "l",
+        },
+        rate = 2.0,            -- how fast a held key ramps its axis, per second
+        centreRate = 3.0,      -- how fast an axis returns to centre when released
+      },
+    },
+
+    comms = {
+      telemetryProtocol = "eh_telemetry",
+      commandProtocol = "eh_command",
+      configProtocol = "eh_config",
+      navFixProtocol = "eh_navfix",
+      commandRateLimit = 20,   -- messages/second accepted before dropping
+      ender = {
+        enabled = false,
+        modem = "",
+        key = "",              -- pre-shared; telemetry OUT only, never commands
+        maxSkew = 5000,
+      },
+    },
+
+    nav = {
+      -- phase 11+. Listed now so the schema is stable.
+      positionSources = { "gps", "radar" },
+      fixStaleMs = 1500,
+      gpsTimeout = 1.0,
+    },
+
+    log = { level = "info", capacity = 200, path = nil },
+  }
+end
+
+--- Merge a loaded table over fresh defaults, then normalise list entries.
+function Config.withDefaults(loaded)
+  local cfg = Util.deepMerge(Config.defaults(), loaded or {})
+
+  local tTemplate = cfg.hardware.thrusterTemplate or thrusterTemplate()
+  for i, entry in ipairs(cfg.hardware.thrusters or {}) do
+    cfg.hardware.thrusters[i] = Util.deepMerge(tTemplate, entry)
+  end
+
+  local rTemplate = cfg.hardware.relayTemplate or relayTemplate()
+  for i, entry in ipairs(cfg.hardware.relays or {}) do
+    cfg.hardware.relays[i] = Util.deepMerge(rTemplate, entry)
+  end
+
+  return cfg
+end
+
+--- Structural validation. Returns ok, errors, warnings.
+-- Errors block startup. Warnings are things that are legal but probably not intended.
+function Config.validate(cfg)
+  local errors, warnings = {}, {}
+  local function err(fmt, ...) errors[#errors + 1] = string.format(fmt, ...) end
+  local function warn(fmt, ...) warnings[#warnings + 1] = string.format(fmt, ...) end
+
+  local function num(v, path, lo, hi)
+    if type(v) ~= "number" then
+      err("%s must be a number (got %s)", path, type(v))
+      return false
+    end
+    if lo and v < lo then err("%s must be >= %s (got %s)", path, lo, v) return false end
+    if hi and v > hi then err("%s must be <= %s (got %s)", path, hi, v) return false end
+    return true
+  end
+
+  -- tuning
+  num(cfg.tuning.attitudeHz, "tuning.attitudeHz", 1, 40)
+  num(cfg.tuning.altitudeHz, "tuning.altitudeHz", 1, 40)
+  num(cfg.tuning.inputHz, "tuning.inputHz", 1, 40)
+  if type(cfg.tuning.attitudeHz) == "number" and type(cfg.tuning.altitudeHz) == "number" then
+    if cfg.tuning.altitudeHz * 3 > cfg.tuning.attitudeHz then
+      err("tuning.altitudeHz (%s) must be <= attitudeHz/3 (%s) -- cascade loops need rate separation",
+        cfg.tuning.altitudeHz, cfg.tuning.attitudeHz / 3)
+    end
+  end
+  num(cfg.tuning.dtMinMs, "tuning.dtMinMs", 1)
+  num(cfg.tuning.dtMaxMs, "tuning.dtMaxMs", 1)
+  if type(cfg.tuning.dtMaxMs) == "number" and type(cfg.tuning.dtMinMs) == "number"
+    and cfg.tuning.dtMaxMs <= cfg.tuning.dtMinMs then
+    err("tuning.dtMaxMs must exceed dtMinMs")
+  end
+  num(cfg.tuning.vectorDeadband, "tuning.vectorDeadband", 0, 0.5)
+
+  -- envelope
+  num(cfg.envelope.maxBankDeg, "envelope.maxBankDeg", 0, 89)
+  num(cfg.envelope.maxPitchDeg, "envelope.maxPitchDeg", 0, 89)
+  num(cfg.envelope.maxClimbRate, "envelope.maxClimbRate", 0)
+  num(cfg.envelope.maxSinkRate, "envelope.maxSinkRate", 0)
+  if type(cfg.envelope.altCeil) == "number" and type(cfg.envelope.altFloor) == "number"
+    and cfg.envelope.altCeil <= cfg.envelope.altFloor then
+    err("envelope.altCeil must be above altFloor")
+  end
+
+  -- failsafe
+  local lvl = cfg.failsafe.redstoneLevel
+  if type(lvl) ~= "number" or lvl < 0 or lvl > 15 or lvl ~= math.floor(lvl) then
+    err("failsafe.redstoneLevel must be an integer 0..15 (got %s)", tostring(lvl))
+  end
+  if cfg.failsafe.holdAltitude ~= nil then
+    num(cfg.failsafe.holdAltitude, "failsafe.holdAltitude")
+  end
+
+  -- sensors
+  local g = cfg.sensors.gimbal
+  for _, key in ipairs({ "pitchIndex", "rollIndex", "yawIndex" }) do
+    local v = g[key]
+    if type(v) ~= "number" or v < 0 or v ~= math.floor(v) then
+      err("sensors.gimbal.%s must be a non-negative integer (0 = absent)", key)
+    end
+  end
+  if g.pitchIndex == 0 or g.rollIndex == 0 then
+    err("sensors.gimbal needs pitchIndex and rollIndex -- attitude control cannot run without them")
+  end
+  if g.yawIndex == 0 then
+    warn("sensors.gimbal.yawIndex is 0: no yaw from the gimbal, so nav needs a heading fallback")
+  end
+  num(g.filterAlpha, "sensors.gimbal.filterAlpha", 0.01, 1.0)
+  num(cfg.sensors.altitude.filterAlpha, "sensors.altitude.filterAlpha", 0.01, 1.0)
+  num(cfg.sensors.altitude.vsFilterAlpha, "sensors.altitude.vsFilterAlpha", 0.01, 1.0)
+
+  -- modes
+  if not FEEL_MODES[cfg.modes.default] then
+    err("modes.default must be cruise|rate|stutter (got %s)", tostring(cfg.modes.default))
+  end
+  if cfg.modes.lateralDefault ~= "flight" and cfg.modes.lateralDefault ~= "precision" then
+    err("modes.lateralDefault must be flight|precision (got %s)", tostring(cfg.modes.lateralDefault))
+  end
+  num(cfg.modes.cruise.angleReturnRate, "modes.cruise.angleReturnRate", 0)
+  num(cfg.modes.rate.maxRateDps, "modes.rate.maxRateDps", 0)
+  num(cfg.modes.stutter.thrustAccelRate, "modes.stutter.thrustAccelRate", 0)
+  if type(cfg.modes.stutter.thrustAccelRate) == "number"
+    and type(cfg.modes.cruise.thrustAccelRate) == "number"
+    and cfg.modes.stutter.thrustAccelRate <= cfg.modes.cruise.thrustAccelRate then
+    warn("modes.stutter.thrustAccelRate should exceed cruise's -- stutter is meant to ramp faster")
+  end
+  num(cfg.modes.precision.maxTranslate, "modes.precision.maxTranslate", 0, 1)
+
+  -- mixer
+  num(cfg.mixer.toeBase, "mixer.toeBase", 0, 0.5)
+  num(cfg.mixer.toeAuthority, "mixer.toeAuthority", 0, 1)
+  num(cfg.mixer.toeShare, "mixer.toeShare", 0.05, 1.0)
+  num(cfg.mixer.differentialAuthority, "mixer.differentialAuthority", 0, 1)
+  num(cfg.mixer.translateAuthority, "mixer.translateAuthority", 0, 1)
+  num(cfg.mixer.yawAuthority, "mixer.yawAuthority", 0, 1)
+  num(cfg.mixer.maxNozzleDeg, "mixer.maxNozzleDeg", 1, 90)
+
+  -- The load-bearing relationship: can the continuous toe trim absorb what the 16-step
+  -- quantiser leaves behind? If not, altitude gains a small steady-state ripple. This is
+  -- physics, not a bug, and it depends on mixer.maxNozzleDeg -- which is a GUESS until the
+  -- probe measures it, so this is a warning rather than an error.
+  if type(cfg.mixer.maxNozzleDeg) == "number" and type(cfg.mixer.toeBase) == "number" then
+    local authority = Config.derivedTrimAuthority(cfg)
+    local residual = Config.residualBound(cfg)
+    if authority < residual then
+      warn(("toe trim can move %.1f%% of thrust but the quantiser can leave %.1f%% behind: "
+        .. "expect a small altitude ripple. Raise mixer.toeBase, lower "
+        .. "tuning.thrustHysteresisSteps, or correct mixer.maxNozzleDeg after the probe.")
+        :format(authority * 100, residual * 100))
+    end
+  end
+
+  if type(cfg.mixer.toeBase) == "number" and type(cfg.mixer.toeAuthority) == "number" then
+    local peak = cfg.mixer.toeBase * 2 + cfg.mixer.toeAuthority
+    for _, t in ipairs(cfg.hardware.thrusters or {}) do
+      if t.group == "lift" and type(t.maxVector) == "number" and peak > t.maxVector then
+        warn("thruster %s: maxVector %.2f is below the peak toe demand %.2f -- toe will clip "
+          .. "and attitude trim will lose authority", tostring(t.id), t.maxVector, peak)
+        break
+      end
+    end
+  end
+
+  -- assist + brake
+  num(cfg.assist.driftDeadband, "assist.driftDeadband", 0)
+  num(cfg.assist.gain, "assist.gain", 0)
+  num(cfg.assist.maxAuthority, "assist.maxAuthority", 0, 1)
+  num(cfg.brake.maxTiltDeg, "brake.maxTiltDeg", 0, 45)
+  num(cfg.brake.speedForFullTilt, "brake.speedForFullTilt", 0.1)
+  num(cfg.brake.minSpeed, "brake.minSpeed", 0)
+  num(cfg.brake.tiltRateDps, "brake.tiltRateDps", 0.1)
+  if type(cfg.brake.maxTiltDeg) == "number" and type(cfg.envelope.maxPitchDeg) == "number"
+    and cfg.brake.maxTiltDeg > cfg.envelope.maxPitchDeg then
+    err("brake.maxTiltDeg (%s) exceeds envelope.maxPitchDeg (%s) -- the envelope must always win",
+      cfg.brake.maxTiltDeg, cfg.envelope.maxPitchDeg)
+  end
+
+  -- velocity vector: needed by drift damping and the brake law
+  local axesSeen = {}
+  for i, entry in ipairs(cfg.hardware.sensors.velocityVector or {}) do
+    local where = ("hardware.sensors.velocityVector[%d]"):format(i)
+    if type(entry.peripheral) ~= "string" or entry.peripheral == "" then
+      err("%s.peripheral is required", where)
+    end
+    if not AXES[entry.axis] then
+      err("%s.axis must be x|y|z (got %s)", where, tostring(entry.axis))
+    elseif axesSeen[entry.axis] then
+      err("%s: axis %s is already mapped", where, entry.axis)
+    else
+      axesSeen[entry.axis] = true
+    end
+  end
+  if not (axesSeen.x and axesSeen.z) then
+    warn("no horizontal velocity vector configured (need axes x and z): "
+      .. "the flight assistant and the brake law will degrade -- see docs/MODES.md section 6")
+  end
+
+  -- thrusters
+  local seenId, lift, lateral = {}, 0, 0
+  local main, yawCapable, precisionOnly = 0, 0, 0
+  for i, t in ipairs(cfg.hardware.thrusters or {}) do
+    local where = ("hardware.thrusters[%d]"):format(i)
+    if type(t.id) ~= "string" or t.id == "" then
+      err("%s.id is required", where)
+    elseif seenId[t.id] then
+      err("%s.id '%s' is duplicated", where, t.id)
+    else
+      seenId[t.id] = true
+    end
+    if type(t.peripheral) ~= "string" or t.peripheral == "" then
+      err("%s.peripheral is required (id '%s')", where, tostring(t.id))
+    end
+    if not GROUPS[t.group] then
+      err("%s.group must be lift|main|lateral (got %s)", where, tostring(t.group))
+    elseif t.group == "lift" then
+      lift = lift + 1
+    elseif t.group == "main" then
+      main = main + 1
+    else
+      lateral = lateral + 1
+      if t.yawAuthority then yawCapable = yawCapable + 1 end
+      if t.precisionOnly then precisionOnly = precisionOnly + 1 end
+    end
+    if t.group ~= "lateral" and (t.yawAuthority or t.precisionOnly) then
+      warn("%s: yawAuthority/precisionOnly only apply to lateral thrusters", where)
+    end
+    if not THRUST_AXES[t.thrustAxis] then
+      err("%s.thrustAxis is invalid: %s", where, tostring(t.thrustAxis))
+    end
+    for _, ax in ipairs({ "x", "y", "z" }) do
+      if type(t.pos[ax]) ~= "number" then err("%s.pos.%s must be a number", where, ax) end
+    end
+    num(t.maxVector, where .. ".maxVector", 0, 1)
+  end
+  if #(cfg.hardware.thrusters or {}) == 0 then
+    warn("no thrusters configured -- run the identify flow before flight")
+  elseif lift == 0 then
+    err("at least one lift thruster is required")
+  elseif lift < 3 then
+    warn("only %d lift thruster(s): pitch, roll and braking authority will be limited", lift)
+  end
+  if #(cfg.hardware.thrusters or {}) > 0 then
+    if main == 0 then
+      warn("no main thruster: high-speed forward flight is unavailable")
+    end
+    if lateral > 0 and yawCapable == 0 then
+      warn("no lateral thruster has yawAuthority: yaw control will be unavailable")
+    end
+    if precisionOnly > 0 and lateral == precisionOnly then
+      warn("every lateral thruster is precisionOnly: normal flight has no lateral authority at all")
+    end
+  end
+
+  -- relays
+  for i, r in ipairs(cfg.hardware.relays or {}) do
+    local where = ("hardware.relays[%d]"):format(i)
+    if type(r.peripheral) ~= "string" or r.peripheral == "" then
+      err("%s.peripheral is required", where)
+    end
+    if type(r.side) ~= "string" or r.side == "" then err("%s.side is required", where) end
+    if type(r.level) ~= "number" or r.level < 0 or r.level > 15 then
+      err("%s.level must be 0..15", where)
+    end
+  end
+  local hasFailsafeRelay = false
+  for _, r in ipairs(cfg.hardware.relays or {}) do
+    if r.purpose == "failsafe" then hasFailsafeRelay = true end
+  end
+  if not hasFailsafeRelay then
+    warn("no failsafe relay configured -- a computer failure will drop the craft")
+  end
+
+  return #errors == 0, errors, warnings
+end
+
+function Config.load(path)
+  if not fs.exists(path) then
+    return Config.withDefaults({}), false
+  end
+  local f = fs.open(path, "r")
+  if not f then return Config.withDefaults({}), false end
+  local text = f.readAll()
+  f.close()
+  local ok, parsed = pcall(textutils.unserialise, text)
+  if not ok or type(parsed) ~= "table" then
+    return Config.withDefaults({}), false, "config file is not a valid table"
+  end
+  return Config.withDefaults(parsed), true
+end
+
+function Config.save(path, cfg)
+  local ok, text = pcall(textutils.serialise, cfg)
+  if not ok then return false, "could not serialise config" end
+  local f = fs.open(path, "w")
+  if not f then return false, "could not open " .. tostring(path) end
+  f.write(text)
+  f.close()
+  -- verify readback: a half-written config is worse than none
+  local reread = fs.open(path, "r")
+  if not reread then return false, "could not reopen for verify" end
+  local back = reread.readAll()
+  reread.close()
+  if back ~= text then return false, "verify readback mismatch" end
+  return true
+end
+
+--- How much lift the toe trim can ACTUALLY move, as a fraction of thrust.
+--
+-- A corner thruster toes on BOTH axes at once (x for pitch pairs, z for roll pairs), and
+-- the vertical component is cos(ax) * cos(az). So the lift lost at full toe is 1 - cos^2,
+-- not 1 - cos. Getting this wrong is not harmless: the altitude loop divides the
+-- quantisation residual by this number, so UNDER-estimating it makes the trim
+-- over-correct and ring. We therefore use the two-axis (larger) figure, which biases the
+-- estimate in the safe direction -- over-estimating merely makes trim sluggish.
+--
+-- The true value depends on mixer.maxNozzleDeg, which is a guess until the probe measures
+-- it, and on the layout. Treat this as a starting point to calibrate, not as truth.
+function Config.derivedTrimAuthority(cfg)
+  local m = cfg.mixer
+  local peakToe = math.min(2 * (m.toeBase or 0), 1.0)
+  local rad = math.rad(peakToe * (m.maxNozzleDeg or 30))
+  local cos = math.cos(rad)
+  return 1 - cos * cos
+end
+
+--- The largest residual the quantiser can leave behind, as a fraction of thrust.
+function Config.residualBound(cfg)
+  return math.max(cfg.tuning.thrustHysteresisSteps or 0.5, 0.5) / 15
+end
+
+--- Derive the hardware failsafe level from the learned hover trim.
+-- Returns the level and whether it was actually derived.
+function Config.deriveFailsafeLevel(cfg)
+  local trim = cfg.control.altitude.hoverTrim or 0
+  if not cfg.failsafe.deriveFromTrim or trim <= 0 then
+    return cfg.failsafe.redstoneLevel, false
+  end
+  local step = Util.round(trim * 15) + (cfg.failsafe.biasSteps or 0)
+  return Util.clamp(step, 0, 15), true
+end
+
+return Config

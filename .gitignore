@@ -1,0 +1,6 @@
+backup/
+*.log
+results.txt
+probe_report.txt
+.craftos/
+node_modules/
