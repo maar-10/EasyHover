@@ -60,23 +60,95 @@ function Monitors:available()
   return out
 end
 
---- Tear down every frame. Called before a rebuild so a reassignment cannot leave a stale frame
---- rendering to a monitor it no longer owns.
+--- Unregister one frame and blank its monitor, so nothing is left frozen on screen.
+function Monitors:_teardown(item)
+  if not item or not item.frame then return end
+  pcall(function() self.basalt.setActiveFrame(item.frame, false) end)
+  pcall(function()
+    item.monitor.setBackgroundColour(colours.black)
+    item.monitor.clear()
+  end)
+end
+
+--- Tear down every frame.
 function Monitors:clear()
   for _, instances in pairs(self.frames) do
-    for _, item in ipairs(instances) do
-      if item.frame then
-        -- Unregister from Basalt, then blank the monitor so nothing is left frozen on screen.
-        pcall(function() self.basalt.setActiveFrame(item.frame, false) end)
-        pcall(function()
-          item.monitor.setBackgroundColour(colours.black)
-          item.monitor.clear()
-        end)
-      end
-    end
+    for _, item in ipairs(instances) do self:_teardown(item) end
   end
   self.frames = {}
   self.missing = {}
+end
+
+--- Build one frame on one monitor. Returns the instance, or nil with a reason.
+function Monitors:_build(panelName, name, index, builder)
+  local panel = self.cfg.panels[panelName]
+  local monitor = nil
+  local ok = pcall(function() monitor = peripheral.wrap(name) end)
+  if not ok or monitor == nil or monitor.setCursorPos == nil then
+    self.missing[#self.missing + 1] = ("%s -> %s"):format(panelName, name)
+    self.log:warn("panel %s: monitor '%s' is not present", panelName, name)
+    return nil
+  end
+  pcall(function() monitor.setTextScale(panel.textScale or 0.5) end)
+  local frame = self.basalt.createFrame()
+  frame:setTerm(monitor)
+  local okBuild, instance = pcall(builder, frame, panelName, index)
+  if not okBuild then
+    self.log:error("panel %s on %s failed to build: %s", panelName, name, tostring(instance))
+    return nil
+  end
+  return { name = name, monitor = monitor, frame = frame, instance = instance }
+end
+
+--- Reconcile the live frames against the configured assignment, touching only what changed.
+---
+--- This is why reassigning a monitor no longer rebuilds the whole cockpit: the panel you are
+--- configuring FROM survives, unless you reassigned its own monitor -- in which case it should
+--- change. `builders` maps panel name -> builder function.
+--- Returns the number of frames added or removed.
+function Monitors:sync(builders)
+  local changed = 0
+
+  -- Detach anything that is no longer assigned where it is built.
+  for panelName, instances in pairs(self.frames) do
+    local panel = self.cfg.panels[panelName]
+    local wanted = {}
+    if panel and panel.enabled ~= false then
+      for _, name in ipairs(panel.monitors or {}) do wanted[name] = true end
+    end
+    for i = #instances, 1, -1 do
+      if not wanted[instances[i].name] then
+        self:_teardown(instances[i])
+        table.remove(instances, i)
+        changed = changed + 1
+      end
+    end
+  end
+
+  -- Attach anything assigned but not yet built.
+  self.missing = {}
+  for panelName, builder in pairs(builders) do
+    local panel = self.cfg.panels[panelName]
+    if panel and panel.enabled ~= false then
+      self.frames[panelName] = self.frames[panelName] or {}
+      local live = self.frames[panelName]
+      for index, name in ipairs(panel.monitors or {}) do
+        local exists = false
+        for _, item in ipairs(live) do
+          if item.name == name then exists = true end
+        end
+        if not exists then
+          local instance = self:_build(panelName, name, index, builder)
+          if instance then
+            live[#live + 1] = instance
+            changed = changed + 1
+          end
+        end
+      end
+    end
+  end
+
+  return changed
 end
 
 --- Build frames for one panel. `builder(frame, panelName, index)` returns the panel instance,
@@ -87,24 +159,8 @@ function Monitors:buildPanel(panelName, builder)
 
   local instances = {}
   for index, name in ipairs(panel.monitors or {}) do
-    local monitor = nil
-    local ok = pcall(function() monitor = peripheral.wrap(name) end)
-    if not ok or monitor == nil or monitor.setCursorPos == nil then
-      self.missing[#self.missing + 1] = ("%s -> %s"):format(panelName, name)
-      self.log:warn("panel %s: monitor '%s' is not present", panelName, name)
-    else
-      pcall(function() monitor.setTextScale(panel.textScale or 0.5) end)
-      local frame = self.basalt.createFrame()
-      frame:setTerm(monitor)
-      local okBuild, instance = pcall(builder, frame, panelName, index)
-      if not okBuild then
-        self.log:error("panel %s on %s failed to build: %s", panelName, name, tostring(instance))
-      else
-        instances[#instances + 1] = {
-          name = name, monitor = monitor, frame = frame, instance = instance,
-        }
-      end
-    end
+    local instance = self:_build(panelName, name, index, builder)
+    if instance then instances[#instances + 1] = instance end
   end
   self.frames[panelName] = instances
   if #instances > 1 then

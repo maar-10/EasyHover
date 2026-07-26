@@ -270,6 +270,31 @@ function Peripherals:onEvent(event, name)
   return true
 end
 
+--- Everything on the network the pilot could plausibly assign, by category.
+---
+--- Reported in telemetry so the UI offers a list to pick from rather than asking anyone to
+--- type a peripheral name. It comes from the FLIGHT computer on purpose: these are the names
+--- that computer will actually use, so nothing depends on names matching across the network.
+---
+--- `fluid_storage` and `inventory` are generic capabilities, so hasType() finds a Create tank
+--- or vault whose getType() is its block id.
+function Peripherals:candidates()
+  local thrusters = {}
+  for _, ptype in ipairs({ "vector_thruster", "liquid_vector_thruster", "creative_vector_thruster",
+    "thruster", "solid_fuel_thruster", "ion_thruster", "creative_thruster" }) do
+    for _, name in ipairs(Peripherals.findByType(ptype)) do thrusters[#thrusters + 1] = name end
+  end
+  table.sort(thrusters)
+  return {
+    relays = Peripherals.findByType("redstone_relay"),
+    tanks = Peripherals.findByType("fluid_storage"),
+    vaults = Peripherals.findByType("inventory"),
+    monitors = Peripherals.findByType("monitor"),
+    drives = Peripherals.findByType("drive"),
+    thrusters = thrusters,
+  }
+end
+
 --- Grouped counts for telemetry/UI.
 function Peripherals:summary()
   local lift, lateral = 0, 0

@@ -143,6 +143,7 @@ function App:boot()
     diskStatus.localConfigs)
 
   self.fuel:readAll()
+  self.state:set("candidates", self.per:candidates())
 
   return self.configValid
 end
@@ -391,7 +392,11 @@ function App:publish(measured, capability, dt, overrun)
     end
   end
 
-  if self.cycles % 100 == 0 then self.disk:status() end
+  if self.cycles % 100 == 0 then
+    self.disk:status()
+    -- What the pilot could assign. Cheap, but not free, so not every cycle.
+    self.state:set("candidates", self.per:candidates())
+  end
 
   -- Publish last, so a UI always sees the state the loop just acted on rather than a
   -- half-updated one. Rate-limited internally to telemetryHz.
@@ -428,6 +433,65 @@ function App:handleCommand(cmd)
   elseif cmd.cmd == "engineMaster" then
     self.engine:setMaster(cmd.value, now)
     return true, { master = self.engine.master }
+
+  elseif cmd.cmd == "setEngineRelay" then
+    -- Assign the funnel relay and turn the engine subsystem on in one step: a relay with
+    -- engine.enabled still false would look configured and do nothing.
+    local previousRelay = self.cfg.hardware.engine.relay
+    local previousSide = self.cfg.hardware.engine.side
+    local previousEnabled = self.cfg.engine.enabled
+    self.cfg.hardware.engine.relay = cmd.peripheral
+    self.cfg.hardware.engine.side = cmd.side
+    self.cfg.engine.enabled = (cmd.peripheral ~= "")
+    local ok, errors = Config.validate(self.cfg)
+    if not ok then
+      self.cfg.hardware.engine.relay = previousRelay
+      self.cfg.hardware.engine.side = previousSide
+      self.cfg.engine.enabled = previousEnabled
+      return false, { errors = errors }
+    end
+    self.per:scan()
+    self.engine:applyConfig(self.cfg)
+    self.engine:blockNow()          -- assert the funnel blocked on the newly assigned relay
+    self.engine:publish()
+    Config.save(self.configPath, self.cfg)
+    self.log:info("engine relay -> %s side %s", cmd.peripheral, cmd.side)
+    return true, { relay = cmd.peripheral, side = cmd.side, enabled = self.cfg.engine.enabled }
+
+  elseif cmd.cmd == "setTank" or cmd.cmd == "setVault" then
+    local isTank = (cmd.cmd == "setTank")
+    local list = isTank and self.cfg.hardware.tanks or self.cfg.hardware.vaults
+    local previous = list[1] and {
+      peripheral = list[1].peripheral, label = list[1].label,
+      capacityMb = list[1].capacityMb, item = list[1].item,
+    } or nil
+
+    if cmd.peripheral == "" then
+      list[1] = nil
+    else
+      -- Create the entry if there is not one yet: hardware.tanks starts empty, which is why
+      -- these get their own command instead of going through configSet.
+      list[1] = list[1] or {}
+      list[1].peripheral = cmd.peripheral
+      list[1].label = list[1].label or (isTank and "Main fuel" or "Engine fuel")
+      if isTank then
+        list[1].capacityMb = list[1].capacityMb or 0
+      else
+        list[1].item = list[1].item or ""
+      end
+    end
+
+    local ok, errors = Config.validate(self.cfg)
+    if not ok then
+      list[1] = previous
+      return false, { errors = errors }
+    end
+    self.per:scan()
+    self.fuel.kinds = {}            -- the fuel kind is cached per thruster/gauge; re-detect
+    self.fuel:readAll()
+    Config.save(self.configPath, self.cfg)
+    self.log:info("%s -> %s", cmd.cmd, cmd.peripheral == "" and "(none)" or cmd.peripheral)
+    return true, { peripheral = cmd.peripheral }
 
   elseif cmd.cmd == "engineFeed" then
     local ok, err = self.engine:feedNow(now)
@@ -547,6 +611,7 @@ function App:onPeripheralChange(event, name)
   self.engine:invalidate()
   self.engine:tick(os.epoch("utc"))
   self.disk:status()
+  self.state:set("candidates", self.per:candidates())
   self.log:warn("hardware changed: loops reset, engine output re-asserted")
   return true
 end

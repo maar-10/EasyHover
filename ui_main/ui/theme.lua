@@ -105,6 +105,15 @@ function Theme.fit(text, width)
   return text:sub(1, width)
 end
 
+--- Fit text by keeping its END rather than its start. For a peripheral name the tail is the
+--- part that distinguishes it, so truncating "redstone_relay_1" to "redstone_relay_" loses
+--- exactly the character that mattered.
+function Theme.fitEnd(text, width)
+  text = tostring(text or "")
+  if #text <= width then return text end
+  return text:sub(#text - width + 1)
+end
+
 --- The stale banner every panel shows when telemetry has stopped. Returning it lets the panel
 --- update the text with the age.
 function Theme.staleBanner(frame, y, width)

@@ -142,6 +142,42 @@ T.it("counts what it dropped, for the diagnostics page", function()
   T.eq(stats.dropped, 1, "dropped")
 end)
 
+-- ------------------------------------------------- hardware assignment
+
+T.suite("hardware assignment commands")
+
+T.it("the hardware commands are on the whitelist and type-checked", function()
+  local _, _, tel = rig()
+  T.notNil(tel:parseCommand({ cmd = "setEngineRelay", peripheral = "r0", side = "top" }, 1, 1000),
+    "relay accepted")
+  T.notNil(tel:parseCommand({ cmd = "setTank", peripheral = "t0" }, 1, 1001), "tank accepted")
+  T.notNil(tel:parseCommand({ cmd = "setVault", peripheral = "v0" }, 1, 1002), "vault accepted")
+  T.isNil(tel:parseCommand({ cmd = "setEngineRelay", peripheral = "r0" }, 1, 1003),
+    "a relay without a side is refused")
+  T.isNil(tel:parseCommand({ cmd = "setTank", peripheral = 7 }, 1, 1004),
+    "a non-string peripheral is refused")
+end)
+
+T.it("an empty peripheral is allowed -- that is how you UNASSIGN", function()
+  local _, _, tel = rig()
+  T.notNil(tel:parseCommand({ cmd = "setTank", peripheral = "" }, 1, 1000), "accepted")
+end)
+
+T.it("the payload reports what is assigned and what could be", function()
+  local cfg, state, tel = rig()
+  cfg.hardware.engine.relay = "redstone_relay_0"
+  cfg.hardware.engine.side = "back"
+  cfg.hardware.tanks[1] = { peripheral = "tank_0", label = "Main fuel", capacityMb = 0 }
+  state:set("candidates", { relays = { "redstone_relay_0" }, tanks = { "tank_0" }, vaults = {} })
+
+  local payload = tel:build()
+  T.eq(payload.config.engineRelay, "redstone_relay_0", "assigned relay")
+  T.eq(payload.config.engineSide, "back", "and its side")
+  T.eq(payload.config.tankPeripheral, "tank_0", "assigned tank")
+  T.eq(payload.candidates.relays[1], "redstone_relay_0", "candidate relays offered")
+  T.eq(#payload.candidates.vaults, 0, "and an empty category is still reported")
+end)
+
 -- ------------------------------------------------------------------ config paths
 
 T.suite("config paths")

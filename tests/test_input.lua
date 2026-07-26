@@ -354,4 +354,73 @@ T.it("DAMPED hover neutralises the nozzles and holds thrust", function()
   fs.delete(path)
 end)
 
+T.it("assigning hardware from a command creates the entry and enables the engine", function()
+  mock.reset()
+  _G.peripheral = mock.install()
+  local App = require("app")
+  local path = "/test_app_hw.tbl"
+  Config.save(path, baseCfg())
+  local app = App.new({ configPath = path })
+  app:boot()
+
+  -- nothing configured yet: hardware.tanks starts EMPTY, which is why these get their own
+  -- commands instead of going through configSet
+  T.eq(#app.cfg.hardware.tanks, 0, "no tank configured")
+  T.isFalse(app.engine:available(), "and no engine relay")
+
+  local ok = app:handleCommand({ cmd = "setEngineRelay", peripheral = "redstone_relay_0",
+    side = "top" })
+  T.isTrue(ok, "relay assigned")
+  T.eq(app.cfg.hardware.engine.relay, "redstone_relay_0", "recorded")
+  T.isTrue(app.cfg.engine.enabled, "and the engine subsystem was switched on with it")
+  T.isTrue(app.engine:available(), "the engine can now act")
+
+  local okTank = app:handleCommand({ cmd = "setTank", peripheral = "fluid_tank_0" })
+  T.isTrue(okTank, "tank assigned")
+  T.eq(app.cfg.hardware.tanks[1].peripheral, "fluid_tank_0", "entry created")
+  T.notNil(app.cfg.hardware.tanks[1].label, "with a default label")
+
+  local okVault = app:handleCommand({ cmd = "setVault", peripheral = "item_vault_0" })
+  T.isTrue(okVault, "vault assigned")
+  T.eq(app.cfg.hardware.vaults[1].peripheral, "item_vault_0", "entry created")
+
+  -- and the gauges start reading it
+  local _, aggregate = app.fuel:readAll()
+  T.notNil(aggregate.worstTank, "the tank gauge now has a reading")
+
+  fs.delete(path)
+end)
+
+T.it("unassigning hardware removes the entry again", function()
+  mock.reset()
+  _G.peripheral = mock.install()
+  local App = require("app")
+  local path = "/test_app_hw2.tbl"
+  Config.save(path, baseCfg())
+  local app = App.new({ configPath = path })
+  app:boot()
+  app:handleCommand({ cmd = "setTank", peripheral = "fluid_tank_0" })
+  T.eq(#app.cfg.hardware.tanks, 1, "assigned")
+  app:handleCommand({ cmd = "setTank", peripheral = "" })
+  T.eq(#app.cfg.hardware.tanks, 0, "removed, so a wrong pick is undoable")
+  fs.delete(path)
+end)
+
+T.it("the candidate list is published for the UI to choose from", function()
+  mock.reset()
+  _G.peripheral = mock.install()
+  local App = require("app")
+  local path = "/test_app_hw3.tbl"
+  Config.save(path, baseCfg())
+  local app = App.new({ configPath = path })
+  app:boot()
+  local candidates = app.state:get("candidates")
+  T.notNil(candidates, "published at boot")
+  T.containsMatch(candidates.relays, "redstone_relay_0", "the relay is offered")
+  T.containsMatch(candidates.tanks, "fluid_tank_0", "the tank is offered")
+  T.containsMatch(candidates.vaults, "item_vault_0", "the vault is offered")
+  T.isTrue(#candidates.monitors >= 3, "and the monitors")
+  fs.delete(path)
+end)
+
 return true

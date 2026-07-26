@@ -63,6 +63,11 @@ function App:buildActions()
     setAssist = function(value) link:send({ cmd = "setAssist", value = value }) end,
     setAltitude = function(value) link:send({ cmd = "setAltitude", value = value }) end,
     configSet = function(path, value) link:send({ cmd = "configSet", path = path, value = value }) end,
+    setEngineRelay = function(peripheral, side)
+      link:send({ cmd = "setEngineRelay", peripheral = peripheral or "", side = side or "top" })
+    end,
+    setTank = function(peripheral) link:send({ cmd = "setTank", peripheral = peripheral or "" }) end,
+    setVault = function(peripheral) link:send({ cmd = "setVault", peripheral = peripheral or "" }) end,
     configSave = function() link:send({ cmd = "configSave" }) end,
     diskSave = function() link:send({ cmd = "diskSave" }) end,
     diskLoad = function() link:send({ cmd = "diskLoad" }) end,
@@ -86,35 +91,59 @@ function App:panelOptions()
   }
 end
 
---- (Re)build every frame from the current assignment.
-function App:buildPanels()
-  self.monitors:clear()
+--- The builder for each live panel.
+function App:builders()
   local options = self:panelOptions()
+  return {
+    overhead = function(frame) return Overhead.build(frame, options) end,
+    config = function(frame) return ConfigPanel.build(frame, options) end,
+  }
+end
 
-  self.monitors:buildPanel("overhead", function(frame)
-    return Overhead.build(frame, options)
-  end)
-  self.monitors:buildPanel("config", function(frame)
-    return ConfigPanel.build(frame, options)
-  end)
+--- Reconcile the frames against the configured assignment, touching only what changed.
+---
+--- Incremental on purpose: a full teardown meant reassigning one monitor rebuilt every panel
+--- and threw you back to the home page of the very screen you were configuring from.
+function App:syncPanels()
+  local changed = self.monitors:sync(self:builders())
 
   -- The bootstrap case: with no monitor assigned to the config panel there would be no way to
   -- assign one. So the config panel is also built on this computer's own terminal, which is
-  -- always available.
-  self.terminalPanel = nil
-  if self.monitors:count("config") == 0 then
+  -- always available. Re-evaluated on every sync, because assigning (or unassigning) the config
+  -- panel is exactly when this changes.
+  local wantTerminal = (self.monitors:count("config") == 0)
+  if wantTerminal and not self.terminalPanel then
     local frame = basalt.createFrame()
     frame:setTerm(term.current())
-    local ok, instance = pcall(ConfigPanel.build, frame, options)
+    local ok, instance = pcall(ConfigPanel.build, frame, self:panelOptions())
     if ok then
+      self.terminalFrame = frame
       self.terminalPanel = instance
       self.log:warn("no monitor assigned to the config panel: showing it on the terminal")
     else
       self.log:error("terminal config panel failed to build: %s", tostring(instance))
     end
+  elseif not wantTerminal and self.terminalPanel then
+    -- A monitor now owns the config panel, so give the terminal back.
+    pcall(function() basalt.setActiveFrame(self.terminalFrame, false) end)
+    self.terminalFrame, self.terminalPanel = nil, nil
+    pcall(function()
+      term.setBackgroundColour(colours.black)
+      term.clear()
+      term.setCursorPos(1, 1)
+      print("EasyHover ui_main -- config panel is on a monitor")
+    end)
   end
 
   self.rebuildPending = false
+  return changed
+end
+
+--- Full rebuild, for boot and for a hardware change that may have replaced monitors wholesale.
+function App:buildPanels()
+  self.monitors:clear()
+  self.terminalFrame, self.terminalPanel = nil, nil
+  return self:syncPanels()
 end
 
 --- Push the latest model into every panel, including the terminal fallback.
@@ -158,7 +187,7 @@ function App:run()
   -- A heartbeat, so "NO DATA" appears when the flight computer goes quiet rather than the
   -- panels freezing on their last good frame.
   basalt.onEvent("timer", function()
-    if self.rebuildPending then self:buildPanels() end
+    if self.rebuildPending then self:syncPanels() end
     self:refresh()
     self.staleTimer = os.startTimer(0.5)
   end)

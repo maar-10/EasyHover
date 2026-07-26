@@ -12,6 +12,7 @@
 
 local Theme = require("ui.theme")
 local Util = require("shared.util")
+local Hardware = require("ui.hardware")
 
 local Overhead = {}
 
@@ -55,8 +56,15 @@ function Overhead.build(frame, opts)
   local engineFeedLine = Theme.line(main, y, width, "", Theme.dim); y = y + 1
   -- Last reported state, kept in this closure. NOT on the element: Basalt's property system
   -- owns field access on an element, so an arbitrary key there is not a safe place for state.
-  local reported = { master = false, invert = false }
+  local reported = { master = false, invert = false, available = false }
   local engineButton = Theme.button(main, 1, y, math.min(width, 9), "START", function()
+    -- With no relay assigned there is nothing to switch, so the button becomes the way IN to
+    -- assigning one instead of a dead "--".
+    if not reported.available then
+      main:setVisible(false)
+      settings:setVisible(true)
+      return
+    end
     -- Act on what the craft last told us, not on a local guess about what we asked for.
     actions.engineMaster(not reported.master)
   end)
@@ -77,7 +85,9 @@ function Overhead.build(frame, opts)
     altLine = Theme.line(main, y, width, "", Theme.dim); y = y + 1
   end
   if y <= height - 1 then
-    primeButton = Theme.button(main, 1, y, math.min(width, 7), "PRIME", function()
+    -- "PRIME" meant nothing to anyone. This drops the funnel signal once, by hand, so exactly
+    -- one item falls into the engine -- the same thing the keep-alive does on its timer.
+    primeButton = Theme.button(main, 1, y, math.min(width, 7), "FEED 1", function()
       actions.engineFeed()
     end)
   end
@@ -122,9 +132,23 @@ function Overhead.build(frame, opts)
   end)
   sy = sy + 1
 
-  local capacityRow = tunable("tank mB", "hardware.tanks.1.capacityMb", 1000, 0, 1000000, "")
+  -- The gauge needs a maximum to draw a bar against. Create usually reports one; when it does
+  -- not, this is the fallback, and 0 means "trust whatever the tank reports".
+  local capacityRow = tunable("tank max", "hardware.tanks.1.capacityMb", 1000, 0, 1000000, "")
+  Theme.line(settings, sy, width, "0 = auto", Theme.dim); sy = sy + 1
 
-  Theme.rule(settings, math.min(sy, height - 1), width)
+  Theme.rule(settings, sy, width); sy = sy + 1
+
+  -- The same hardware picker the config panel uses, so the overhead monitor can assign the
+  -- relay, tank and vault without walking to another screen.
+  local hardware = nil
+  if sy + Hardware.rows() <= height then
+    hardware = Hardware.build(settings, 1, sy, width, height - sy, opts)
+  else
+    Theme.line(settings, sy, width, "hardware: use", Theme.dim)
+    Theme.line(settings, sy + 1, width, "CONFIG > HW", Theme.dim)
+  end
+
   Theme.button(settings, 1, height, math.min(width, 6), "BACK", function()
     settings:setVisible(false)
     main:setVisible(true)
@@ -154,10 +178,13 @@ function Overhead.build(frame, opts)
     -- engine
     local engine = t.engine or {}
     reported.master = engine.master and true or false
+    reported.available = engine.available and true or false
     if not engine.available then
       engineState:setText("NO RELAY")
       engineState:setForeground(Theme.warning)
-      engineButton:setText("--")
+      engineButton:setText("SET UP")
+      engineButton:setBackground(Theme.caution)
+      engineButton:setForeground(colours.black)
     else
       engineState:setText(engine.master and "RUNNING" or "OFF")
       engineState:setForeground(engine.master and Theme.ok or Theme.dim)
@@ -170,7 +197,7 @@ function Overhead.build(frame, opts)
     elseif engine.feeding then
       engineFeedLine:setText("feeding")
     else
-      engineFeedLine:setText(engine.pulses and ("fed " .. tostring(engine.pulses)) or "")
+      engineFeedLine:setText(engine.pulses and ("fed " .. tostring(engine.pulses) .. " items") or "")
     end
 
     -- liquid fuel
@@ -186,7 +213,7 @@ function Overhead.build(frame, opts)
       end
       tankGauge.set(tank.fraction, Theme.fit(text, width))
     else
-      tankGauge.set(nil, "no tank")
+      tankGauge.set(nil, "not set: CFG")
     end
 
     -- solid fuel
@@ -195,7 +222,7 @@ function Overhead.build(frame, opts)
       vaultLine:setText(Theme.fit(("%d items"):format(vault.count or 0), width))
       vaultLine:setForeground(vault.empty and Theme.warning or Theme.fg)
     else
-      vaultLine:setText("no vault")
+      vaultLine:setText("not set: CFG")
       vaultLine:setForeground(Theme.dim)
     end
 
@@ -210,7 +237,13 @@ function Overhead.build(frame, opts)
     local liveCfg = t.config or {}
     pulseRow.set(liveCfg.enginePulseMs)
     intervalRow.set(liveCfg.engineIntervalMs)
-    capacityRow.set(liveCfg.tankCapacityMb)
+    if liveCfg.tankCapacityMb == 0 then
+      capacityRow.value = 0
+      capacityRow.display:setText("auto")
+    else
+      capacityRow.set(liveCfg.tankCapacityMb)
+    end
+    if hardware then hardware.update(model) end
     if liveCfg.engineInvert ~= nil then
       reported.invert = liveCfg.engineInvert and true or false
       invertButton:setText(reported.invert and "ON" or "OFF")
@@ -228,7 +261,9 @@ function Overhead.build(frame, opts)
       engineButton = engineButton, engineFeed = engineFeedLine,
       tankValue = tankGauge.value, tankBar = tankGauge.bar, vault = vaultLine,
       pulse = pulseRow, interval = intervalRow, invert = invertButton,
+      capacity = capacityRow, feed = primeButton,
     },
+    hardware = hardware,
   }
 end
 

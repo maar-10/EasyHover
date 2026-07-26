@@ -26,6 +26,12 @@ Telemetry.__index = Telemetry
 local COMMANDS = {
   ping          = {},
   engineMaster  = { value = "boolean" },
+  -- Hardware assignment. Dedicated commands rather than configSet, because these have to
+  -- CREATE a list entry (hardware.tanks starts empty) and configSet deliberately refuses to
+  -- invent keys.
+  setEngineRelay = { peripheral = "string", side = "string" },
+  setTank        = { peripheral = "string" },
+  setVault       = { peripheral = "string" },
   engineFeed    = {},
   setAux        = { label = "string", value = "boolean" },
   setFeel       = { value = "enum:cruise,rate,stutter" },
@@ -53,6 +59,13 @@ local function configView(cfg)
     engineInvert = cfg.engine.invert,
     engineEnabled = cfg.engine.enabled,
     tankCapacityMb = (cfg.hardware.tanks[1] or {}).capacityMb,
+    -- what is assigned right now, so the UI can show it next to the choices
+    engineRelay = cfg.hardware.engine.relay,
+    engineSide = cfg.hardware.engine.side,
+    tankPeripheral = (cfg.hardware.tanks[1] or {}).peripheral,
+    tankLabel = (cfg.hardware.tanks[1] or {}).label,
+    vaultPeripheral = (cfg.hardware.vaults[1] or {}).peripheral,
+    vaultLabel = (cfg.hardware.vaults[1] or {}).label,
 
     attitudeHz = cfg.tuning.attitudeHz,
     altitudeHz = cfg.tuning.altitudeHz,
@@ -216,6 +229,7 @@ function Telemetry:build(extra)
     },
 
     layout = s:get("layout"),
+    candidates = s:get("candidates"),
     disk = {
       driveCount = s:get("disk.driveCount"),
       diskPresent = s:get("disk.diskPresent"),

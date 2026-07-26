@@ -15,6 +15,7 @@ local Link = require("lib.link")
 local Monitors = require("lib.monitors")
 local Overhead = require("ui.overhead")
 local ConfigPanel = require("ui.config_panel")
+local Hardware = require("ui.hardware")
 local Log = require("shared.log")
 local basalt = require("basalt")
 
@@ -43,6 +44,12 @@ local function telemetry(overrides)
       maxClimbRate = 6, maxSinkRate = 4, maxYawRateDps = 45, brakeMaxTiltDeg = 12,
     },
     disk = { diskPresent = true, label = "EH configs", onDisk = 2, localConfigs = 1 },
+    candidates = {
+      relays = { "redstone_relay_0", "redstone_relay_1" },
+      tanks = { "create:fluid_tank_0" },
+      vaults = { "create:item_vault_0" },
+      monitors = { "monitor_0", "monitor_1", "monitor_2" },
+    },
     alarms = {},
   }
   if overrides then
@@ -87,6 +94,11 @@ local function sent()
     setAssist = function(v) out[#out + 1] = { cmd = "setAssist", value = v } end,
     setAltitude = function(v) out[#out + 1] = { cmd = "setAltitude", value = v } end,
     setAux = function(l, v) out[#out + 1] = { cmd = "setAux", label = l, value = v } end,
+    setEngineRelay = function(pe, side)
+      out[#out + 1] = { cmd = "setEngineRelay", peripheral = pe, side = side }
+    end,
+    setTank = function(pe) out[#out + 1] = { cmd = "setTank", peripheral = pe } end,
+    setVault = function(pe) out[#out + 1] = { cmd = "setVault", peripheral = pe } end,
   }
 end
 
@@ -398,8 +410,10 @@ T.it("the home page shows live flight values", function()
     "mode: " .. panel.elements.status:getText())
   T.isTrue(panel.elements.live[1]:getText():find("82.5") ~= nil,
     "altitude on the first line: " .. panel.elements.live[1]:getText())
-  T.isTrue(panel.elements.live[2]:getText():find("2.5") ~= nil,
-    "attitude on the second: " .. panel.elements.live[2]:getText())
+  T.isTrue(panel.elements.live[2]:getText():find("VS") ~= nil,
+    "vertical speed on the second: " .. panel.elements.live[2]:getText())
+  T.isTrue(panel.elements.live[3]:getText():find("2.5") ~= nil,
+    "attitude on the third: " .. panel.elements.live[3]:getText())
 end)
 
 T.it("an alarm is surfaced on the home page", function()
@@ -469,6 +483,275 @@ T.it("shows NO DATA when the link drops", function()
   panel.update({ stale = true, ageMs = math.huge, telemetry = nil })
   T.isTrue(panel.elements.stale:getVisible(), "banner up")
   T.eq(panel.elements.live[1]:getText(), "", "stale values cleared, not left frozen")
+end)
+
+-- ------------------------------------------------------- the dry-run bugs
+
+T.suite("dry-run fixes")
+
+T.it("BUG 1: tapping a monitor row updates its label immediately", function()
+  local panel, _, cfg = configRig()
+  panel.refreshMonitors()
+  local row = panel.elements.monitorRows[1]
+  T.eq(row.button:getText(), "none", "starts unassigned")
+  click(row.button)
+  -- The old code only redrew on RESCAN, so the label under your finger stayed stale.
+  T.eq(row.button:getText(), "overhead", "label changed on the tap, with no rescan")
+end)
+
+T.it("BUG 2: the config panel fits a 1x1 monitor (15x10)", function()
+  local panel = configRig(15, 10)
+  T.notNil(panel.elements.status, "it built a real panel, not the TOO SMALL notice")
+  T.isTrue(panel.narrow, "and took its narrow layout")
+  panel.update(model())
+  T.isTrue(panel.elements.live[1]:getText():find("ALT") ~= nil,
+    "showing live values: " .. panel.elements.live[1]:getText())
+end)
+
+T.it("a genuinely unusable screen still says so", function()
+  local panel = configRig(8, 5)
+  T.isNil(panel.elements.status, "no panel built")
+  panel.update(model())
+end)
+
+T.it("BUG 3: with no relay the engine button offers SET UP, not a bare dash", function()
+  local panel, commands = overheadRig()
+  local m = model()
+  m.telemetry.engine = { available = false, master = false }
+  panel.update(m)
+  T.eq(panel.elements.engineState:getText(), "NO RELAY", "state")
+  T.eq(panel.elements.engineButton:getText(), "SET UP", "the button says what to do")
+  click(panel.elements.engineButton)
+  T.eq(#commands, 0, "no pointless command sent")
+  T.isTrue(panel.settings:getVisible(), "it opened the config page instead")
+end)
+
+T.it("the manual feed button is labelled for what it does", function()
+  local panel, commands = overheadRig()
+  T.eq(panel.elements.feed:getText(), "FEED 1", "not PRIME")
+  panel.update(model())
+  click(panel.elements.feed)
+  T.eq(commands[1].cmd, "engineFeed", "and it feeds one item")
+end)
+
+T.it("an unconfigured tank and vault point at the fix", function()
+  local panel = overheadRig()
+  local m = model()
+  m.telemetry.fuel.tanks = {}
+  m.telemetry.fuel.vaults = {}
+  panel.update(m)
+  T.isTrue(panel.elements.tankValue:getText():find("CFG") ~= nil,
+    "tank: " .. panel.elements.tankValue:getText())
+  T.isTrue(panel.elements.vault:getText():find("CFG") ~= nil,
+    "vault: " .. panel.elements.vault:getText())
+end)
+
+T.it("tank max shows auto when there is no configured capacity", function()
+  local panel = overheadRig()
+  panel.update(model())
+  T.eq(panel.elements.capacity.display:getText(), "auto",
+    "0 means trust the tank own reading")
+end)
+
+-- ------------------------------------------------------------------ hardware
+
+T.suite("hardware assignment")
+
+local function hardwareRig(width, height)
+  mock.reset()
+  _G.peripheral = mock.install()
+  local monitor = mock.monitor(width or 15, height or 12)
+  local frame = basalt.createFrame()
+  frame:setTerm(monitor)
+  local commands, actions = sent()
+  local widget = Hardware.build(frame, 1, 1, frame:getWidth(), frame:getHeight(),
+    { actions = actions, log = quietLog() })
+  return widget, commands
+end
+
+T.it("shows the engine relay first, and that nothing is set yet", function()
+  local widget = hardwareRig()
+  widget.update(model())
+  T.eq(widget.elements.title:getText(), "ENGINE RELAY", "first item")
+  T.isTrue(widget.elements.value:getText():find("not set") ~= nil,
+    "value: " .. widget.elements.value:getText())
+  T.isTrue(widget.elements.count:getText():find("2 found") ~= nil,
+    "offers the relays the craft reported: " .. widget.elements.count:getText())
+end)
+
+T.it("PICK assigns the first candidate", function()
+  local widget, commands = hardwareRig()
+  widget.update(model())
+  click(widget.elements.pick)
+  T.eq(commands[1].cmd, "setEngineRelay", "the right command")
+  T.eq(commands[1].peripheral, "redstone_relay_0", "the first candidate")
+  T.eq(commands[1].side, "top", "with a side")
+end)
+
+T.it("PICK cycles on, and past the end unassigns", function()
+  local widget, commands = hardwareRig()
+  local m = model()
+  m.telemetry.config.engineRelay = "redstone_relay_0"
+  widget.update(m)
+  click(widget.elements.pick)
+  T.eq(commands[1].peripheral, "redstone_relay_1", "moves to the second")
+
+  m.telemetry.config.engineRelay = "redstone_relay_1"
+  widget.update(m)
+  click(widget.elements.pick)
+  T.eq(commands[2].peripheral, "", "past the end clears it, so a wrong pick is undoable")
+end)
+
+T.it("SIDE cycles the relay side", function()
+  local widget, commands = hardwareRig()
+  local m = model()
+  m.telemetry.config.engineRelay = "redstone_relay_0"
+  m.telemetry.config.engineSide = "top"
+  widget.update(m)
+  click(widget.elements.side)
+  T.eq(commands[1].cmd, "setEngineRelay", "re-sends with the new side")
+  T.isFalse(commands[1].side == "top", "side changed to " .. tostring(commands[1].side))
+end)
+
+T.it("the next button moves to the tank, then the vault", function()
+  local widget, commands = hardwareRig()
+  widget.update(model())
+  click(widget.elements.next)
+  T.eq(widget.elements.title:getText(), "FUEL TANK", "second item")
+  click(widget.elements.pick)
+  T.eq(commands[1].cmd, "setTank", "assigns a tank")
+  T.eq(commands[1].peripheral, "create:fluid_tank_0", "the candidate the craft reported")
+
+  click(widget.elements.next)
+  T.eq(widget.elements.title:getText(), "ENGINE VAULT", "third item")
+  click(widget.elements.pick)
+  T.eq(commands[2].cmd, "setVault", "assigns a vault")
+end)
+
+T.it("the SIDE button only appears for the relay", function()
+  local widget = hardwareRig()
+  widget.update(model())
+  T.isTrue(widget.elements.side:getVisible(), "shown for the relay")
+  widget.select(2)
+  T.isFalse(widget.elements.side:getVisible(), "hidden for the tank")
+end)
+
+T.it("says so when the craft reports no candidates", function()
+  local widget = hardwareRig()
+  local m = model()
+  m.telemetry.candidates = { relays = {}, tanks = {}, vaults = {} }
+  widget.update(m)
+  T.isTrue(widget.elements.count:getText():find("none on network") ~= nil,
+    "count line: " .. widget.elements.count:getText())
+  T.eq(widget.elements.pick:getText(), "--", "and PICK is inert")
+end)
+
+T.it("shows what is already assigned", function()
+  local widget = hardwareRig(30, 12)
+  local m = model()
+  m.telemetry.config.engineRelay = "redstone_relay_1"
+  m.telemetry.config.engineSide = "back"
+  widget.update(m)
+  T.eq(widget.elements.value:getText(), "redstone_relay_1", "current assignment in full")
+  T.isTrue(widget.elements.extra:getText():find("back") ~= nil,
+    "and its side: " .. widget.elements.extra:getText())
+end)
+
+T.it("a name too long for the screen keeps its TAIL, not its head", function()
+  -- 15 columns cannot hold "redstone_relay_1". Chopping the end would render relay_0 and
+  -- relay_1 identically, which is the one thing the display must not do.
+  local widget = hardwareRig(15, 12)
+  local m = model()
+  m.telemetry.config.engineRelay = "redstone_relay_1"
+  widget.update(m)
+  local shown = widget.elements.value:getText()
+  T.isTrue(shown:sub(-1) == "1", "the disambiguating character survived: " .. shown)
+  T.isTrue(#shown <= 15, "and it fits")
+end)
+
+T.it("the config panel hosts the same widget", function()
+  local panel = configRig()
+  T.notNil(panel.hardware, "hardware page present")
+  panel.update(model())
+  T.eq(panel.hardware.elements.title:getText(), "ENGINE RELAY", "and it is live")
+end)
+
+-- ------------------------------------------------------- incremental sync
+
+T.suite("monitor sync")
+
+T.it("reassigning one monitor leaves the other frames alone", function()
+  mock.reset()
+  _G.peripheral = mock.install()
+  local cfg = UiConfig.withDefaults({})
+  UiConfig.assign(cfg, "overhead", "monitor_0")
+  UiConfig.assign(cfg, "config", "monitor_2")
+  local monitors = Monitors.new(cfg, quietLog(), basalt)
+  local builds = 0
+  local builders = {
+    overhead = function() builds = builds + 1; return { update = function() end } end,
+    config = function() builds = builds + 1; return { update = function() end } end,
+  }
+  monitors:sync(builders)
+  T.eq(builds, 2, "two frames built")
+
+  UiConfig.assign(cfg, "overhead", "monitor_1")
+  local changed = monitors:sync(builders)
+  T.eq(changed, 1, "only the new monitor was touched")
+  T.eq(builds, 3, "and only one new frame was built")
+  T.eq(monitors:count("overhead"), 2, "overhead now mirrored")
+  T.eq(monitors:count("config"), 1, "config untouched")
+  monitors:clear()
+end)
+
+T.it("unassigning tears down just that frame", function()
+  mock.reset()
+  _G.peripheral = mock.install()
+  local cfg = UiConfig.withDefaults({})
+  UiConfig.assign(cfg, "overhead", "monitor_0")
+  UiConfig.assign(cfg, "overhead", "monitor_1")
+  local monitors = Monitors.new(cfg, quietLog(), basalt)
+  local builders = { overhead = function() return { update = function() end } end }
+  monitors:sync(builders)
+  T.eq(monitors:count("overhead"), 2, "both built")
+
+  UiConfig.unassign(cfg, "monitor_1")
+  local changed = monitors:sync(builders)
+  T.eq(changed, 1, "one frame removed")
+  T.eq(monitors:count("overhead"), 1, "one left")
+  monitors:clear()
+end)
+
+T.it("moving a monitor between panels rebuilds only it", function()
+  mock.reset()
+  _G.peripheral = mock.install()
+  local cfg = UiConfig.withDefaults({})
+  UiConfig.assign(cfg, "overhead", "monitor_0")
+  local monitors = Monitors.new(cfg, quietLog(), basalt)
+  local built = {}
+  local builders = {
+    overhead = function() built[#built + 1] = "overhead"; return { update = function() end } end,
+    config = function() built[#built + 1] = "config"; return { update = function() end } end,
+  }
+  monitors:sync(builders)
+  UiConfig.assign(cfg, "config", "monitor_0")
+  monitors:sync(builders)
+  T.eq(monitors:count("overhead"), 0, "left the overhead panel")
+  T.eq(monitors:count("config"), 1, "and joined the config panel")
+  T.eq(built[#built], "config", "rebuilt as the config panel")
+  monitors:clear()
+end)
+
+T.it("sync is a no-op when nothing changed", function()
+  mock.reset()
+  _G.peripheral = mock.install()
+  local cfg = UiConfig.withDefaults({})
+  UiConfig.assign(cfg, "overhead", "monitor_0")
+  local monitors = Monitors.new(cfg, quietLog(), basalt)
+  local builders = { overhead = function() return { update = function() end } end }
+  monitors:sync(builders)
+  T.eq(monitors:sync(builders), 0, "second sync changes nothing")
+  monitors:clear()
 end)
 
 -- ------------------------------------------------------------------ link
