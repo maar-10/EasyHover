@@ -10,6 +10,10 @@
      We detect by METHOD PRESENCE rather than by type string, because a type we have not
      seen yet should still work if it exposes a known fuel API.
 
+     A thruster may expose NONE of these, and that is not a fault: Propulsion's vector
+     thrusters are fed from a tank through pipes, so the tank gauge (readTanks) is the fuel
+     reading and the thruster has nothing of its own to report.
+
      What we report is a fraction and a worst-case, never an endurance estimate: burn rate
      depends on throttle history we do not have, and a wrong endurance number is worse than
      no endurance number.
@@ -27,6 +31,7 @@ function Fuel.new(peripherals, cfg, log, state)
   self.log = log
   self.state = state
   self.kinds = {}   -- id -> "fluid" | "solid" | "energy" | "unknown"
+  self.reportedNoApi = nil   -- what we last said about thrusters with no fuel API
   return self
 end
 
@@ -55,10 +60,34 @@ function Fuel:kindOf(id, dev)
     kind = "energy"
   end
   self.kinds[id] = kind
-  if kind == "unknown" then
-    self.log:warn("thruster %s exposes no known fuel API -- fuel display will be blank", id)
-  end
   return kind
+end
+
+--- Say something about thrusters that report no fuel of their own -- ONCE, and only if it
+--- actually matters.
+---
+--- A PIPED INSTALL IS NORMAL. Create Propulsion's vector thrusters are fed from a tank through
+--- pipes, and such a thruster exposes no fuel API at all; the tank gauge is the fuel reading,
+--- and it is read separately by readTanks(). The old message claimed "fuel display will be
+--- blank", which was simply false whenever a tank was configured -- and it said so once PER
+--- THRUSTER, re-firing every time the kind cache was cleared, which happens on every tank or
+--- vault assignment. Four lines of wrong information, several times over, while configuring.
+---
+--- It is only worth a warning when there is no tank either, because then there really is no
+--- fuel reading anywhere.
+function Fuel:reportNoApi(unknowns, total)
+  local haveTank = #(self.per.tanks or {}) > 0
+  local signature = ("%d/%d/%s"):format(unknowns, total, tostring(haveTank))
+  if unknowns == 0 or self.reportedNoApi == signature then return end
+  self.reportedNoApi = signature
+
+  if haveTank then
+    self.log:info("%d of %d thruster(s) report no fuel of their own -- normal for a piped "
+      .. "install; the tank gauge is the fuel reading", unknowns, total)
+  else
+    self.log:warn("%d of %d thruster(s) expose no fuel API and NO TANK is configured -- there "
+      .. "is no fuel reading at all. Assign the tank in Config > FUEL TANK.", unknowns, total)
+  end
 end
 
 --- Per-thruster fuel rows plus an aggregate. Getters are not mainThread, so cheap.
@@ -100,6 +129,8 @@ function Fuel:read()
     end
     rows[id] = row
   end
+
+  self:reportNoApi(unknowns, self.per:count() or 0)
 
   local aggregate = {
     worstFraction = worst,

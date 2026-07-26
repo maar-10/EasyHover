@@ -45,6 +45,8 @@ function Peripherals.new(cfg, log)
   local self = setmetatable({}, Peripherals)
   self.cfg = cfg
   self.log = log
+  -- What we have already said about a guessed peripheral, so a rescan does not repeat it.
+  self.reportedGuess = {}
   self.thrusters = {}   -- id -> { id, name, dev, spec }
   self.order = {}       -- stable, sorted thruster ids
   self.sensors = {}     -- role -> dev  (optical is a list)
@@ -100,8 +102,15 @@ function Peripherals:resolve(name, ptype, label)
     return nil, nil
   end
   if #candidates > 1 then
-    self.log:warn("%s: %d peripherals of type %s; auto-picked '%s'. Name it in config.",
-      label, #candidates, ptype, candidates[1])
+    -- ONCE PER CHANGED SITUATION, not once per scan. scan() runs on every hardware assignment
+    -- (App:rebuildHardware), so re-warning here turned configuring a craft from the UI into a
+    -- wall of identical lines on the flight console -- the same complaint as the fuel message.
+    local signature = ("%s|%d|%s"):format(label, #candidates, candidates[1])
+    if self.reportedGuess[label] ~= signature then
+      self.reportedGuess[label] = signature
+      self.log:warn("%s: %d peripherals of type %s; auto-picked '%s'. Name it in config.",
+        label, #candidates, ptype, candidates[1])
+    end
   end
   return safeWrap(candidates[1]), candidates[1]
 end

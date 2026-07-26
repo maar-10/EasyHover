@@ -177,3 +177,24 @@ Because peripheral names are attach-ordered, the config UI gets an **Identify** 
 thruster slot: it sweeps that thruster's *nozzle only* (`setVector`) at **zero thrust** so you
 can see which physical unit is which. Nozzle-only, zero-thrust, and hard-gated to the `GROUND`
 flight state — an identify sweep must never be possible in the air.
+
+## Where the fuel reading comes from
+
+**A piped thruster has no fuel of its own to report, and that is normal.** Create Propulsion's
+vector thrusters are fed from a tank through pipes, so they expose no fuel API at all — the
+**tank gauge** is the fuel reading, read separately from the configured tank and driving its own
+low-fuel alarm.
+
+The flight computer used to warn, *per thruster*, that "fuel display will be blank". It was
+false whenever a tank was configured — which is the normal case — and it re-fired every time the
+kind cache was cleared, i.e. on every tank or vault assignment. It now says the situation once,
+as information, and only warns when there is **no tank either**, because then there genuinely is
+no fuel reading anywhere.
+
+The same rule now applies to the "auto-picked one of N peripherals" warning: `scan()` runs on
+every hardware assignment, so it reports once per changed situation rather than once per scan.
+
+> The general principle, learned twice: **a message that repeats on every scan is a message
+> that will be emitted hundreds of times while someone configures a craft.** Report on change,
+> not on pass.
+

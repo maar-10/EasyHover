@@ -383,6 +383,133 @@ end)
 
 T.suite("fuel")
 
+--- A thruster with no fuel API at all: a piped Propulsion vector thruster.
+local function stripFuelApi(per)
+  for _, entry in ipairs(per:thrusterList()) do
+    entry.dev.getFuelAmountMb = nil
+    entry.dev.getFuelCapacityMb = nil
+    entry.dev.getFuelAmount = nil
+    entry.dev.getBurnTimeRemaining = nil
+    entry.dev.getEnergyAmountFe = nil
+  end
+end
+
+--- A log that counts what it was told, per level.
+local function countingLog()
+  local log = Log.new({ level = "info", capacity = 200 })
+  local seen = { warn = {}, info = {} }
+  for _, level in ipairs({ "warn", "info" }) do
+    local real = log[level]
+    log[level] = function(self, fmt, ...)
+      seen[level][#seen[level] + 1] = string.format(fmt, ...)
+      return real(self, fmt, ...)
+    end
+  end
+  return log, seen
+end
+
+T.it("a guessed peripheral is announced ONCE, not on every rescan", function()
+  -- scan() runs on every hardware assignment now (App:rebuildHardware), so a warning emitted
+  -- per scan turns configuring a craft into a wall of identical lines.
+  mock.reset()
+  _G.peripheral = mock.install()
+  local log, seen = countingLog()
+  local cfg = Config.withDefaults({
+    hardware = { thrusters = { { id = "lift_fl", peripheral = "vector_thruster_0", group = "lift" } } },
+  })
+  local per = Peripherals.new(cfg, log)
+  for _ = 1, 6 do per:scan() end
+
+  local guesses = 0
+  for _, line in ipairs(seen.warn) do
+    if line:find("auto%-picked") then guesses = guesses + 1 end
+  end
+  T.eq(guesses, 1, "said once across six scans, got " .. guesses)
+end)
+
+T.it("a piped install does NOT claim the fuel display will be blank", function()
+  -- Reported from the cockpit: this spammed the flight console once per thruster, and what it
+  -- said was false -- the tank gauge was configured and reading correctly the whole time.
+  mock.reset()
+  _G.peripheral = mock.install()
+  local log, seen = countingLog()
+  local cfg = Config.withDefaults({
+    hardware = {
+      thrusters = {
+        { id = "lift_fl", peripheral = "vector_thruster_0", group = "lift" },
+        { id = "lift_fr", peripheral = "vector_thruster_1", group = "lift" },
+        { id = "lift_rl", peripheral = "vector_thruster_2", group = "lift" },
+        { id = "lift_rr", peripheral = "vector_thruster_3", group = "lift" },
+      },
+      tanks = { { peripheral = "fluid_tank_0", label = "Main fuel", capacityMb = 0 } },
+    },
+  })
+  local state = State.new({})
+  local per = Peripherals.new(cfg, log):scan()
+  stripFuelApi(per)
+  local fuel = Fuel.new(per, cfg, log, state)
+
+  for _ = 1, 5 do fuel:readAll() end
+  local fuelWarnings = {}
+  for _, line in ipairs(seen.warn) do
+    if line:find("fuel") or line:find("FUEL") then fuelWarnings[#fuelWarnings + 1] = line end
+  end
+  T.eq(#fuelWarnings, 0, "no fuel warning at all, because nothing is wrong: "
+    .. table.concat(fuelWarnings, " | "))
+  local mentions = 0
+  for _, line in ipairs(seen.info) do if line:find("no fuel of their own") then mentions = mentions + 1 end end
+  T.eq(mentions, 1, "said ONCE across five read cycles, not once per thruster per cycle")
+
+  -- and the thing the old message claimed would be blank
+  local tanks = state:get("fuel.tanks") or {}
+  T.eq(#tanks, 1, "the tank is read")
+  T.near(tanks[1].fraction, 0.375, 1e-9, "and has a real fraction -- nothing is blank")
+end)
+
+T.it("clearing the kind cache does not re-announce it", function()
+  -- The cache is cleared on every tank and vault assignment, which is how four wrong lines
+  -- became a burst of them every time the pilot touched the config screen.
+  mock.reset()
+  _G.peripheral = mock.install()
+  local log, seen = countingLog()
+  local cfg = Config.withDefaults({
+    hardware = {
+      thrusters = { { id = "lift_fl", peripheral = "vector_thruster_0", group = "lift" } },
+      tanks = { { peripheral = "fluid_tank_0", label = "Main fuel", capacityMb = 0 } },
+    },
+  })
+  local per = Peripherals.new(cfg, log):scan()
+  stripFuelApi(per)
+  local fuel = Fuel.new(per, cfg, log, State.new({}))
+  fuel:readAll()
+  local after = #seen.info
+  for _ = 1, 3 do
+    fuel.kinds = {}            -- exactly what setTank/setVault does
+    fuel:readAll()
+  end
+  T.eq(#seen.info, after, "re-detecting is fine; re-announcing is not")
+end)
+
+T.it("WARNS when there is no fuel reading anywhere -- no API and no tank", function()
+  mock.reset()
+  _G.peripheral = mock.install()
+  local log, seen = countingLog()
+  local cfg = Config.withDefaults({
+    hardware = {
+      thrusters = { { id = "lift_fl", peripheral = "vector_thruster_0", group = "lift" } },
+      tanks = {},
+    },
+  })
+  local per = Peripherals.new(cfg, log):scan()
+  stripFuelApi(per)
+  local fuel = Fuel.new(per, cfg, log, State.new({}))
+  fuel:readAll()
+  local found = nil
+  for _, line in ipairs(seen.warn) do if line:find("NO TANK") then found = line end end
+  T.notNil(found, "this one IS worth a warning")
+  T.isTrue(found:find("FUEL TANK") ~= nil, "and points at the fix: " .. tostring(found))
+end)
+
 T.it("fuel kind is detected from the methods present", function()
   mock.reset()
   _G.peripheral = mock.install()

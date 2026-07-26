@@ -135,9 +135,9 @@
         },
         {
           ["dst"] = "flight/lib/io/fuel.lua",
-          ["size"] = 7899,
+          ["size"] = 9621,
           ["src"] = "flight/lib/io/fuel.lua",
-          ["sum"] = "b44be91a",
+          ["sum"] = "0eb88765",
         },
         {
           ["dst"] = "flight/lib/io/relays.lua",
@@ -171,9 +171,9 @@
         },
         {
           ["dst"] = "flight/lib/peripherals.lua",
-          ["size"] = 12418,
+          ["size"] = 13005,
           ["src"] = "flight/lib/peripherals.lua",
-          ["sum"] = "01fd10cf",
+          ["sum"] = "1b246235",
         },
         {
           ["dst"] = "flight/lib/state.lua",
@@ -402,5 +402,5 @@
     ["size"] = 36872,
     ["sum"] = "305c58ce",
   },
-  ["version"] = "2dafcb62",
+  ["version"] = "551510d7",
 }
