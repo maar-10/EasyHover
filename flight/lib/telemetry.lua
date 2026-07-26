@@ -83,6 +83,9 @@ local function configView(cfg)
     brakeMaxTiltDeg = cfg.brake.maxTiltDeg,
     assistEnabled = cfg.assist.enabled,
     assistGain = cfg.assist.gain,
+    -- The whole typewriter map, so the config screen can show and remap every action.
+    typewriterBindings = cfg.input.typewriter.bindings,
+    typewriterRate = cfg.input.typewriter.rate,
     feelDefault = cfg.modes.default,
     lateralDefault = cfg.modes.lateralDefault,
     holdAltitude = cfg.failsafe.holdAltitude,

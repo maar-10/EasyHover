@@ -28,8 +28,14 @@ local Slots = {}
 ---   set        function(slot, peripheral)   -- "" unassigns
 ---   refusedCmd string   the command name whose refusal belongs to this page
 ---   lastAck    function() -> ack table or nil
+---   fitValue   "tail" (default) | "head" -- which end of a long value to keep. A peripheral
+---              name is distinguished by its TAIL; a key name by its HEAD ("leftShift" and
+---              "rightShift" differ at the front), so the choice belongs to the caller.
+---   status     optional function() -> text, colour -- replaces the "N of M set" subtitle when
+---              it returns something, for a page with a more urgent thing to say.
 function Slots.build(parent, x, y, width, height, opts)
   local slots = opts.slots
+  local fitValue = (opts.fitValue == "head") and Theme.fit or Theme.fitEnd
   local page, chosen, pageIndex = "slots", nil, 1
   local pending = nil            -- { key, name } asked for but not yet confirmed
   local refused = false
@@ -86,7 +92,7 @@ function Slots.build(parent, x, y, width, height, opts)
       text = label .. " --"
     else
       local room = width - #label - 1
-      text = room < 4 and Theme.fitEnd(name, width) or (label .. " " .. Theme.fitEnd(name, room))
+      text = room < 4 and fitValue(name, width) or (label .. " " .. fitValue(name, room))
     end
     return Theme.fit(text .. (" "):rep(math.max(0, width - #text)), width)
   end
@@ -100,8 +106,15 @@ function Slots.build(parent, x, y, width, height, opts)
       for _, slot in ipairs(slots) do
         if (opts.assigned(slot) or "") ~= "" then filled = filled + 1 end
       end
-      subtitle:setText(Theme.fit(("%d of %d set"):format(filled, #slots), width))
-      subtitle:setForeground(filled == #slots and Theme.ok or Theme.dim)
+      local override, overrideColour = nil, nil
+      if opts.status then override, overrideColour = opts.status() end
+      if override then
+        subtitle:setText(Theme.fit(override, width))
+        subtitle:setForeground(overrideColour or Theme.warning)
+      else
+        subtitle:setText(Theme.fit(("%d of %d set"):format(filled, #slots), width))
+        subtitle:setForeground(filled == #slots and Theme.ok or Theme.dim)
+      end
       entries = slots
     else
       title:setText(Theme.fit(chosen.title or chosen.label, width))
@@ -131,7 +144,7 @@ function Slots.build(parent, x, y, width, height, opts)
         else
           entry.slot, entry.name = nil, item
           local isCurrent = (item == (opts.assigned(chosen) or ""))
-          entry.button:setText(Theme.fitEnd(item == "" and "(none)" or item, width))
+          entry.button:setText(fitValue(item == "" and "(none)" or item, width))
           entry.button:setBackground(isCurrent and Theme.ok or Theme.buttonBg)
           entry.button:setForeground(isCurrent and colours.black or Theme.buttonFg)
         end

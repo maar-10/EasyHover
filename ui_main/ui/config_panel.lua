@@ -100,6 +100,56 @@ local SECTION_SLOTS = {
   } },
 }
 
+--- Every action the typewriter can drive, in the order a pilot thinks about them: the flight
+--- axes first, then the momentary and toggle controls.
+---
+--- `key` is the config field under input.typewriter.bindings, so these names must match
+--- flight/lib/input/bindings.lua exactly -- a label change is free, a key change is not.
+local TYPEWRITER_ACTIONS = {
+  { key = "pitchUp",       label = "PITCH+",  title = "PITCH UP",      hint = "nose up" },
+  { key = "pitchDown",     label = "PITCH-",  title = "PITCH DOWN",    hint = "nose down" },
+  { key = "rollLeft",      label = "ROLL L",  title = "ROLL LEFT" },
+  { key = "rollRight",     label = "ROLL R",  title = "ROLL RIGHT" },
+  { key = "yawLeft",       label = "YAW L",   title = "YAW LEFT" },
+  { key = "yawRight",      label = "YAW R",   title = "YAW RIGHT" },
+  { key = "climb",         label = "CLIMB",   title = "CLIMB" },
+  { key = "descend",       label = "DESCEND", title = "DESCEND" },
+  { key = "accelerate",    label = "ACCEL+",  title = "ACCELERATE",    hint = "forward" },
+  { key = "decelerate",    label = "ACCEL-",  title = "DECELERATE",    hint = "then reverse" },
+  { key = "brake",         label = "BRAKE",   title = "BRAKE",         hint = "hold, or tap" },
+  { key = "cycleFeel",     label = "FEEL",    title = "CYCLE FEEL",    hint = "cruise/rate/stutter" },
+  { key = "toggleLateral", label = "LATERAL", title = "LATERAL MODE",  hint = "flight/precision" },
+  { key = "toggleAssist",  label = "ASSIST",  title = "FLIGHT ASSIST" },
+  { key = "gear",          label = "GEAR",    title = "LANDING GEAR" },
+  { key = "lights",        label = "LIGHTS",  title = "LIGHTS" },
+  { key = "engineMaster",  label = "ENGINE",  title = "ENGINE MASTER" },
+}
+
+ConfigPanel.TYPEWRITER_ACTIONS = TYPEWRITER_ACTIONS
+
+--- The keys offered, most-reachable first. A curated list rather than everything CC's `keys`
+--- table holds: a monitor can only be tapped, so every extra entry is another page to wade
+--- through, and half of `keys` is unreachable on a typewriter anyway.
+---
+--- REMEMBER: a key does nothing at all unless it is bound to a frequency ON THE TYPEWRITER.
+--- This list is what the software will accept, not what your typewriter actually sends.
+local KEY_NAMES = (function()
+  local out = {}
+  local function add(...) for _, k in ipairs({ ... }) do out[#out + 1] = k end end
+  add("space", "leftShift", "leftCtrl", "leftAlt", "tab", "enter", "backspace")
+  for c in ("abcdefghijklmnopqrstuvwxyz"):gmatch(".") do add(c) end
+  add("one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "zero")
+  add("up", "down", "left", "right")
+  add("rightShift", "rightCtrl", "rightAlt", "capsLock")
+  add("comma", "period", "semicolon", "apostrophe", "minus", "equals", "slash", "backslash")
+  add("leftBracket", "rightBracket", "grave")
+  add("insert", "delete", "home", "end", "pageUp", "pageDown")
+  for i = 1, 12 do add("f" .. i) end
+  return out
+end)()
+
+ConfigPanel.KEY_NAMES = KEY_NAMES
+
 ConfigPanel.SECTION_SLOTS = SECTION_SLOTS
 
 --- opts = { cfg, actions, monitors, log, savePanels, lastAck }
@@ -130,7 +180,7 @@ function ConfigPanel.build(frame, opts)
 
   local home = page()
   local enginePage, timesPage = page(), page()
-  local flightPage, diskPage, tankPage = page(), page(), page()
+  local flightPage, diskPage, tankPage, keysPage = page(), page(), page(), page()
   local slotPages = {}
   for _, name in ipairs({ "lift", "accel", "lateral", "velocity", "attitude", "optical" }) do
     slotPages[name] = page()
@@ -158,6 +208,7 @@ function ConfigPanel.build(frame, opts)
     { label = "ALT+GIMBAL", page = function() return slotPages.attitude end },
     { label = "FUEL TANK",  page = function() return tankPage end },
     { label = "OPTICAL",    page = function() return slotPages.optical end },
+    { label = "KEYS",       page = function() return keysPage end },
     { label = "DISK",       page = function() return diskPage end },
   }
 
@@ -350,6 +401,50 @@ function ConfigPanel.build(frame, opts)
   Theme.line(tankPage, height - 1, width, "0 = auto scale", Theme.dim)
   backButton(tankPage)
 
+  -- ------------------------------------------------------------ typewriter
+
+  --- Which key each action is bound to, and whether two actions are fighting over one key --
+  --- which is the failure a remapping screen exists to prevent. The craft reports it as a
+  --- keybind "problem" and flies on; the pilot deserves to see it where they caused it.
+  local function bindingOf(action)
+    return (live.config.typewriterBindings or {})[action.key] or ""
+  end
+
+  local function bindingConflict()
+    local byKey = {}
+    for _, action in ipairs(TYPEWRITER_ACTIONS) do
+      local bound = bindingOf(action)
+      if bound ~= "" then
+        if byKey[bound] then return bound, byKey[bound], action.label end
+        byKey[bound] = action.label
+      end
+    end
+    return nil
+  end
+
+  sections.keys = Slots.build(keysPage, 1, 1, width, height - 1, {
+    title = "TYPEWRITER",
+    slots = TYPEWRITER_ACTIONS,
+    candidates = function() return KEY_NAMES end,
+    assigned = bindingOf,
+    set = function(action, keyName)
+      actions.configSet("input.typewriter.bindings." .. action.key, keyName)
+    end,
+    -- HEAD, not tail: "leftShift" and "rightShift" differ at the front, so truncating the
+    -- start would render the two identically -- the opposite of a peripheral name.
+    fitValue = "head",
+    status = function()
+      local key, first, second = bindingConflict()
+      if key then
+        return ("%s: %s+%s"):format(key, first, second), Theme.warning
+      end
+      return nil
+    end,
+    refusedCmd = "configSet",
+    lastAck = opts.lastAck,
+  })
+  backButton(keysPage)
+
   -- ---------------------------------------------------------------- flight
 
   Theme.line(flightPage, 1, width, Theme.centre("FLT LIMITS", width), Theme.accent)
@@ -522,7 +617,7 @@ function ConfigPanel.build(frame, opts)
     menuRows = menuRows,
     pages = {
       home = home, engine = enginePage, times = timesPage, flight = flightPage,
-      disk = diskPage, tank = tankPage,
+      disk = diskPage, tank = tankPage, keys = keysPage,
       lift = slotPages.lift, accel = slotPages.accel, lateral = slotPages.lateral,
       velocity = slotPages.velocity, attitude = slotPages.attitude,
       optical = slotPages.optical,

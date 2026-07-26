@@ -40,11 +40,41 @@ function Bindings.new(cfg, log)
   return self
 end
 
+--- Every action, in a FIXED order: the axis pairs as declared, then held, then edges, then
+--- anything else alphabetically.
+---
+--- The order matters because of what happens on a conflict. When two actions share a key, the
+--- first one resolved keeps it and the second is left with NO binding -- so iterating with
+--- pairs() meant a duplicate binding disabled an ARBITRARY one of the two, and a different one
+--- on each boot. Same config, same behaviour, every time.
+function Bindings:actionOrder()
+  local order, seen = {}, {}
+  local function add(name)
+    if name and not seen[name] then seen[name] = true; order[#order + 1] = name end
+  end
+  for _, axis in ipairs({ "pitch", "roll", "yaw", "climb", "accel" }) do
+    local pair = Bindings.AXES[axis]
+    if pair then add(pair[1]); add(pair[2]) end
+  end
+  for _, name in ipairs(Bindings.HELD) do add(name) end
+  for _, name in ipairs(Bindings.EDGES) do add(name) end
+
+  -- anything the config holds that the lists above do not name
+  local extra = {}
+  for action in pairs(self.cfg.input.typewriter.bindings or {}) do
+    if not seen[action] then extra[#extra + 1] = action end
+  end
+  table.sort(extra)
+  for _, name in ipairs(extra) do add(name) end
+  return order
+end
+
 function Bindings:resolve()
   self.keyToAction, self.actionToKey, self.problems = {}, {}, {}
   local bind = self.cfg.input.typewriter.bindings or {}
 
-  for action, keyName in pairs(bind) do
+  for _, action in ipairs(self:actionOrder()) do
+    local keyName = bind[action]
     if type(keyName) ~= "string" or keyName == "" then
       self.problems[#self.problems + 1] = ("%s: not bound"):format(action)
     else

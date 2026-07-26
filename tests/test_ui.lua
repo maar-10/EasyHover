@@ -444,7 +444,7 @@ end)
 T.it("offers every config section the craft has", function()
   local panel = configRig()
   local wanted = { "ENGINE", "LIMITS", "LIFT THR", "ACCEL THR", "LAT THR", "VELOCITY",
-                   "ALT+GIMBAL", "FUEL TANK", "OPTICAL", "DISK" }
+                   "ALT+GIMBAL", "FUEL TANK", "OPTICAL", "KEYS", "DISK" }
   for _, label in ipairs(wanted) do
     local found = false
     for _, entry in ipairs(panel.menu) do if entry.label == label then found = true end end
@@ -840,6 +840,116 @@ T.it("the tank scale says SET A TANK rather than showing dead buttons", function
     "says what is missing: " .. panel.elements.capacity:getText())
   click(panel.elements.capacityPlus)
   T.eq(#commands, 0, "and the buttons genuinely have nothing to send")
+end)
+
+-- ------------------------------------------------------------ typewriter keys
+
+T.suite("typewriter keybinds")
+
+local function keysRig(bindings)
+  local panel, commands = configRig()
+  local m = model()
+  m.telemetry.config.typewriterBindings = bindings or {
+    pitchUp = "s", pitchDown = "w", rollLeft = "a", rollRight = "d",
+    yawLeft = "q", yawRight = "e", climb = "space", descend = "leftShift",
+    accelerate = "r", decelerate = "f", brake = "b",
+    cycleFeel = "m", toggleLateral = "n", toggleAssist = "h",
+    gear = "g", lights = "l", engineMaster = "z",
+  }
+  panel.update(m)
+  return panel, commands, panel.sections.keys
+end
+
+T.it("the KEYS menu entry opens the keybind page", function()
+  local panel = configRig()
+  panel.update(model())
+  T.notNil(panel.pages.keys, "the page is exposed")
+  click(menuRowFor(panel, "KEYS"))
+  T.isTrue(panel.pages.keys:getVisible(), "and the menu entry reaches it")
+end)
+
+T.it("lists every remappable action with the key it is bound to", function()
+  local panel, _, keys = keysRig()
+  T.eq(keys.elements.title:getText(), "TYPEWRITER", "title")
+  T.eq(#ConfigPanel.TYPEWRITER_ACTIONS, 17, "every action the bindings table holds")
+  local shown = {}
+  for _, row in ipairs(keys.rows) do
+    if row.button:getVisible() then shown[#shown + 1] = row.button:getText() end
+  end
+  T.isTrue(#shown > 0, "rows drawn")
+  T.isTrue(shown[1]:find("PITCH%+") ~= nil, "first action: " .. shown[1])
+  T.isTrue(shown[1]:find("s") ~= nil, "with its key")
+end)
+
+T.it("every action name matches a real binding field", function()
+  -- A typo here is a control that silently never remaps, so it is worth asserting against the
+  -- flight side's own default set rather than trusting the two lists to stay in step.
+  local defaults = {
+    pitchUp = true, pitchDown = true, rollLeft = true, rollRight = true,
+    yawLeft = true, yawRight = true, climb = true, descend = true,
+    accelerate = true, decelerate = true, brake = true, cycleFeel = true,
+    toggleLateral = true, toggleAssist = true, gear = true, lights = true,
+    engineMaster = true,
+  }
+  for _, action in ipairs(ConfigPanel.TYPEWRITER_ACTIONS) do
+    T.isTrue(defaults[action.key], "bindings has a field named " .. action.key)
+    defaults[action.key] = nil
+  end
+  local leftover = {}
+  for name in pairs(defaults) do leftover[#leftover + 1] = name end
+  T.eq(#leftover, 0, "and none is missing from the page: " .. table.concat(leftover, ", "))
+end)
+
+T.it("picking a key sends configSet for that action's binding", function()
+  local panel, commands, keys = keysRig()
+  click(keys.rows[1].button)                    -- PITCH+
+  T.eq(keys.page(), "candidates", "opened the key list")
+  T.eq(keys.elements.title:getText(), "PITCH UP", "for the action tapped")
+
+  local target
+  for _, row in ipairs(keys.rows) do
+    if row.button:getVisible() and row.name == "space" then target = row.button end
+  end
+  T.notNil(target, "space is offered")
+  click(target)
+  T.eq(commands[1].cmd, "configSet", "sends configSet")
+  T.eq(commands[1].path, "input.typewriter.bindings.pitchUp", "for the right binding")
+  T.eq(commands[1].value, "space", "with the key that was tapped")
+end)
+
+T.it("offers the keys a pilot reaches for, and keeps their HEAD when truncating", function()
+  local _, _, keys = keysRig()
+  local offered = {}
+  for _, name in ipairs(ConfigPanel.KEY_NAMES) do offered[name] = true end
+  for _, name in ipairs({ "space", "leftShift", "rightShift", "leftCtrl", "a", "z",
+                          "one", "up", "f1" }) do
+    T.isTrue(offered[name], name .. " is offered")
+  end
+  -- leftShift and rightShift differ at the FRONT; tail-truncating would render them alike.
+  T.isTrue(#ConfigPanel.KEY_NAMES > 50, "a usable range of keys")
+end)
+
+T.it("SHOWS A CONFLICT when two actions share one key", function()
+  -- The craft reports this as a keybind "problem" and flies on. The pilot should see it on the
+  -- screen where they caused it, not discover it in the air.
+  local panel, _, keys = keysRig({
+    pitchUp = "s", pitchDown = "s",         -- the same key twice
+    rollLeft = "a", rollRight = "d",
+  })
+  local subtitle = keys.elements.subtitle:getText()
+  T.isTrue(subtitle:find("s:") ~= nil, "names the key: " .. subtitle)
+  T.eq(keys.elements.subtitle:getForeground(), Theme.warning, "and flags it as a problem")
+end)
+
+T.it("says how many are bound when there is no conflict", function()
+  local _, _, keys = keysRig()
+  T.eq(keys.elements.subtitle:getText(), "17 of 17 set", "all bound")
+  T.eq(keys.elements.subtitle:getForeground(), Theme.ok, "and says so calmly")
+end)
+
+T.it("an unbound action reads as unset rather than as blank", function()
+  local _, _, keys = keysRig({ pitchUp = "s" })
+  T.eq(keys.elements.subtitle:getText(), "1 of 17 set", "counts what is bound")
 end)
 
 -- ------------------------------------------------------------ terminal panel

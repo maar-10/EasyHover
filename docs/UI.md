@@ -53,9 +53,10 @@ both at once.
 | **ALT+GIMBAL** | The altimeter, the attitude gimbal, and the **down-facing laser** — that one is the radar altimeter, so it belongs with height rather than with the obstacle rays |
 | **FUEL TANK** | The liquid tank and its gauge scale |
 | **OPTICAL** | The proximity lasers — forward, back, left, right |
+| **KEYS** | The typewriter keybind for each of the 17 flight actions |
 | **DISK** | Save and load every config to a floppy |
 
-The menu pages itself when the screen is too short for all ten.
+The menu pages itself when the screen is too short for all eleven.
 
 ## Assigning hardware
 
@@ -104,6 +105,30 @@ The velocity page says MEDIAL, LATERAL and VERTICAL. `x`/`y`/`z` depend on whose
 mean and which way the sensor is bolted on, and a sensor on the wrong axis makes the flight
 assistant push the craft the wrong way. The config keys stay `x`/`y`/`z`, because that is what
 the control code reads.
+
+## Typewriter keybinds
+
+**KEYS** is the same slot widget again: the seventeen actions on one page with the key each is
+bound to, and a curated key list behind whichever you tap. Long names keep their **head**, not
+their tail — `leftShift` and `rightShift` differ at the front, the opposite of a peripheral name,
+which is why the widget takes a `fitValue` option.
+
+The key list is curated rather than all of CC's `keys` table: a monitor can only be tapped, so
+every extra entry is another page to wade through, and most of `keys` is unreachable on a
+typewriter anyway. Modifiers and letters come first.
+
+> **A key does nothing at all unless it is bound to a frequency on the typewriter itself.** This
+> page sets what the *software* listens for; the typewriter decides what it *sends*.
+
+A rebind takes effect immediately — `configSet` runs `App:applyConfig`, which re-resolves the
+bindings — and an invalid key name is refused by the validator rather than becoming a control
+that silently does nothing.
+
+**Conflicts are shown where you cause them.** Two actions on one key means the second resolved
+gets *no* binding, so the page's subtitle turns red and names both (`space: CLIMB+BRAKE`). That
+resolution order used to come from `pairs()`, which made a duplicate binding disable an
+arbitrary one of the two — and a different one on each boot. It is now a fixed order: axes as
+declared, then held, then edges. Same config, same behaviour, every time.
 
 ## The engine feed interval
 

@@ -696,4 +696,85 @@ T.it("PUTS THE OLD ASSIGNMENT BACK when the result would not validate", function
   fs.delete(path)
 end)
 
+-- ------------------------------------------------------------ keybinds
+
+T.suite("typewriter rebinding")
+
+T.it("A REBIND TAKES EFFECT WITHOUT A REBOOT", function()
+  -- Bindings resolve key NAMES to codes once, at construction. If a remap did not re-resolve,
+  -- the config screen would write the file and the control would keep answering the old key --
+  -- the same trap the mixer had.
+  local app, path = appRig()
+  local before = app.pilot.bindings.actionToKey.brake
+  T.eq(before, keys.b, "brake starts on B")
+
+  local ok = app:handleCommand({ cmd = "configSet",
+    path = "input.typewriter.bindings.brake", value = "x" })
+  T.isTrue(ok, "accepted")
+  T.eq(app.pilot.bindings.actionToKey.brake, keys.x, "and the LIVE binding moved")
+  T.isNil(app.pilot.bindings.keyToAction[keys.b], "the old key no longer triggers brake")
+  fs.delete(path)
+end)
+
+T.it("A CONFLICT DISABLES THE SAME ACTION EVERY TIME, not an arbitrary one", function()
+  -- When two actions share a key the first resolved keeps it and the second gets nothing. With
+  -- pairs() iteration that was a coin flip -- a duplicate binding disabled an arbitrary control,
+  -- and a different one on each boot. The order is now fixed, so a conflict is reproducible.
+  local app, path = appRig()
+  local victims = {}
+  for _ = 1, 8 do
+    app:handleCommand({ cmd = "configSet",
+      path = "input.typewriter.bindings.brake", value = "space" })   -- climb already has space
+    local losers = {}
+    for _, action in ipairs({ "brake", "climb" }) do
+      if app.pilot.bindings.actionToKey[action] == nil then losers[#losers + 1] = action end
+    end
+    victims[table.concat(losers, ",")] = true
+    -- put it back and re-resolve, so each pass starts from the same place
+    app:handleCommand({ cmd = "configSet",
+      path = "input.typewriter.bindings.brake", value = "b" })
+  end
+  local outcomes = 0
+  for _ in pairs(victims) do outcomes = outcomes + 1 end
+  T.eq(outcomes, 1, "one outcome across eight resolutions, not two")
+  T.isTrue(victims["brake"], "and it is the LATER action that loses, every time")
+  fs.delete(path)
+end)
+
+T.it("the action order is fixed and covers every bound action", function()
+  local app, path = appRig()
+  local order = app.pilot.bindings:actionOrder()
+  T.eq(order[1], "pitchUp", "axes first, as declared")
+  local seen = {}
+  for _, name in ipairs(order) do
+    T.isNil(seen[name], name .. " appears once")
+    seen[name] = true
+  end
+  for action in pairs(app.cfg.input.typewriter.bindings) do
+    T.isTrue(seen[action], action .. " is in the order")
+  end
+  fs.delete(path)
+end)
+
+T.it("REFUSES a key name that does not exist", function()
+  -- A typo would otherwise become a control that silently does nothing.
+  local app, path = appRig()
+  local ok, detail = app:handleCommand({ cmd = "configSet",
+    path = "input.typewriter.bindings.brake", value = "bananas" })
+  T.isFalse(ok, "refused")
+  T.containsMatch((detail or {}).errors or {}, "is not a key name", "and says why")
+  T.eq(app.pilot.bindings.actionToKey.brake, keys.b, "the old binding stands")
+  fs.delete(path)
+end)
+
+T.it("the whole binding map is published so the config screen can show it", function()
+  local app, path = appRig()
+  local published = app.telemetry:build().config.typewriterBindings
+  T.notNil(published, "reported")
+  T.eq(published.brake, "b", "with each action's key name")
+  T.eq(published.climb, "space", "including the ones with long names")
+  fs.delete(path)
+end)
+
+
 return true

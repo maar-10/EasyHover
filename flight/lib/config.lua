@@ -739,6 +739,16 @@ function Config.validate(cfg)
     end
   end
 
+  -- typewriter bindings: a name that `keys` does not know is a control that will silently do
+  -- nothing, so refuse it here rather than let it become a runtime "problem".
+  for action, keyName in pairs(cfg.input.typewriter.bindings or {}) do
+    if type(keyName) ~= "string" then
+      err("input.typewriter.bindings.%s must be a key name string", tostring(action))
+    elseif keyName ~= "" and type(keys) == "table" and type(keys[keyName]) ~= "number" then
+      err("input.typewriter.bindings.%s: '%s' is not a key name", tostring(action), keyName)
+    end
+  end
+
   -- relays
   for i, r in ipairs(cfg.hardware.relays or {}) do
     local where = ("hardware.relays[%d]"):format(i)
