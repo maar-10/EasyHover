@@ -500,8 +500,11 @@ T.it("assigns a lift thruster to a named corner, with a real moment arm", functi
   T.isTrue(ok, "accepted")
 
   local entry
-  for _, t in ipairs(app.cfg.hardware.thrusters) do if t.id == "fr" then entry = t end end
+  for _, t in ipairs(app.cfg.hardware.thrusters) do
+    if t.group == "lift" and Config.slotKey(t) == "fr" then entry = t end
+  end
   T.notNil(entry, "the slot was created")
+  T.eq(entry.id, "lift_fr", "stored with a group-qualified id, unique across the craft")
   T.eq(entry.peripheral, "vector_thruster_1", "peripheral")
   T.eq(entry.group, "lift", "group")
   T.eq(entry.thrustAxis, "down", "lift thrust points down")
@@ -518,7 +521,7 @@ T.it("gives the four lift corners opposing arms, so pitch and roll both work", f
       peripheral = "vector_thruster_" .. ({ fl = 0, fr = 1, rl = 2, rr = 3 })[key] })
   end
   local pos = {}
-  for _, t in ipairs(app.cfg.hardware.thrusters) do pos[t.id] = t.pos end
+  for _, t in ipairs(app.cfg.hardware.thrusters) do pos[Config.slotKey(t)] = t.pos end
   T.isTrue(pos.fl.x < 0 and pos.fr.x > 0, "left and right are on opposite sides -> roll")
   T.isTrue(pos.fl.z > 0 and pos.rl.z < 0, "front and rear are opposed -> pitch")
   fs.delete(path)
@@ -529,7 +532,7 @@ T.it("makes the lateral FRONT pair steer and the REAR pair precision-only", func
   app:handleCommand({ cmd = "setSlot", kind = "lateral", key = "fl", peripheral = "vector_thruster_1" })
   app:handleCommand({ cmd = "setSlot", kind = "lateral", key = "rr", peripheral = "vector_thruster_2" })
   local byId = {}
-  for _, t in ipairs(app.cfg.hardware.thrusters) do byId[t.id] = t end
+  for _, t in ipairs(app.cfg.hardware.thrusters) do byId[Config.slotKey(t)] = t end
   T.isTrue(byId.fl.yawAuthority, "the front pair yaws")
   T.isFalse(byId.fl.precisionOnly, "and is used in normal flight")
   T.isTrue(byId.rr.precisionOnly, "the rear pair is precision/assistant only")
@@ -543,7 +546,9 @@ T.it("REPLACES a slot rather than accumulating duplicates", function()
   app:handleCommand({ cmd = "setSlot", kind = "lift", key = "fr", peripheral = "vector_thruster_2" })
   local count, found = 0, nil
   for _, t in ipairs(app.cfg.hardware.thrusters) do
-    if t.id == "fr" then count = count + 1; found = t.peripheral end
+    if t.group == "lift" and Config.slotKey(t) == "fr" then
+      count = count + 1; found = t.peripheral
+    end
   end
   T.eq(count, 1, "one entry for the slot")
   T.eq(found, "vector_thruster_2", "holding the latest choice")
@@ -555,9 +560,64 @@ T.it("an empty peripheral clears the slot", function()
   app:handleCommand({ cmd = "setSlot", kind = "lift", key = "fr", peripheral = "vector_thruster_1" })
   app:handleCommand({ cmd = "setSlot", kind = "lift", key = "fr", peripheral = "" })
   for _, t in ipairs(app.cfg.hardware.thrusters) do
-    T.isFalse(t.id == "fr", "the slot is gone")
+    T.isFalse(t.group == "lift" and Config.slotKey(t) == "fr", "the slot is gone")
   end
   fs.delete(path)
+end)
+
+T.it("THE SAME CORNER IN TWO GROUPS DOES NOT COLLIDE", function()
+  -- Reported from the cockpit: with the lift corners assigned, assigning ANY lateral thruster
+  -- came back CRAFT REFUSED. Slot keys are unique only within a group -- "fl" is a corner of
+  -- the lift set and of the lateral set -- but ids are what the mixer addresses thrusters by,
+  -- and the validator rightly requires those to be unique across the whole craft.
+  local app, path = appRig({ hardware = { thrusters = {} } })
+  for _, key in ipairs({ "fl", "fr", "rl", "rr" }) do
+    T.isTrue((app:handleCommand({ cmd = "setSlot", kind = "lift", key = key,
+      peripheral = "vector_thruster_" .. ({ fl = 0, fr = 1, rl = 2, rr = 3 })[key] })),
+      "lift " .. key)
+  end
+  local ok, detail = app:handleCommand({ cmd = "setSlot", kind = "lateral", key = "fl",
+    peripheral = "vector_thruster_4" })
+  T.isTrue(ok, "lateral fl accepted: " .. table.concat((detail or {}).errors or {}, "; "))
+  T.eq(#app.cfg.hardware.thrusters, 5, "five thrusters, no collision")
+
+  local ids = {}
+  for _, t in ipairs(app.cfg.hardware.thrusters) do
+    T.isNil(ids[t.id], "id " .. t.id .. " is unique across the craft")
+    ids[t.id] = true
+  end
+  T.isTrue(ids["lift_fl"] and ids["lateral_fl"], "the same corner in two groups coexists")
+  fs.delete(path)
+end)
+
+T.it("assigning a thruster ALREADY IN ANOTHER SLOT moves it rather than doubling it", function()
+  -- The cockpit had one nozzle wired into two slots under two ids. The mixer would command it
+  -- twice with different values and fight itself, so the assignment has to be a move.
+  local app, path = appRig({ hardware = { thrusters = {} } })
+  -- Two lift thrusters, so moving one out does not empty the group -- the craft rightly
+  -- refuses a config with no lift at all, which is a different rule.
+  app:handleCommand({ cmd = "setSlot", kind = "lift", key = "fl", peripheral = "vector_thruster_0" })
+  app:handleCommand({ cmd = "setSlot", kind = "lift", key = "fr", peripheral = "vector_thruster_1" })
+  T.isTrue((app:handleCommand({ cmd = "setSlot", kind = "lateral", key = "rr",
+    peripheral = "vector_thruster_0" })), "accepted")
+
+  local uses, group = 0, nil
+  for _, t in ipairs(app.cfg.hardware.thrusters) do
+    if t.peripheral == "vector_thruster_0" then uses = uses + 1; group = t.group end
+  end
+  T.eq(uses, 1, "the nozzle is in exactly one slot")
+  T.eq(group, "lateral", "the newest assignment is the one kept")
+  fs.delete(path)
+end)
+
+T.it("a config with one nozzle in two slots is REFUSED, as a backstop", function()
+  local cfg = Config.withDefaults({ hardware = { thrusters = {
+    { id = "lift_fl", peripheral = "vector_thruster_0", group = "lift" },
+    { id = "lateral_rr", peripheral = "vector_thruster_0", group = "lateral" },
+  } } })
+  local ok, errors = Config.validate(cfg)
+  T.isFalse(ok, "refused")
+  T.containsMatch(errors, "already assigned", "and says which: " .. table.concat(errors, "; "))
 end)
 
 T.it("assigns velocity axes, the altimeter, the gimbal and a laser direction", function()

@@ -678,7 +678,7 @@ function Config.validate(cfg)
   end
 
   -- thrusters
-  local seenId, lift, lateral = {}, 0, 0
+  local seenId, seenPeripheral, lift, lateral = {}, {}, 0, 0
   local main, yawCapable, precisionOnly = 0, 0, 0
   for i, t in ipairs(cfg.hardware.thrusters or {}) do
     local where = ("hardware.thrusters[%d]"):format(i)
@@ -691,6 +691,12 @@ function Config.validate(cfg)
     end
     if type(t.peripheral) ~= "string" or t.peripheral == "" then
       err("%s.peripheral is required (id '%s')", where, tostring(t.id))
+    elseif seenPeripheral[t.peripheral] then
+      -- One nozzle, two slots: the mixer would command it twice with different values and
+      -- fight itself. Physically impossible, so it is an error rather than a warning.
+      err("%s: %s is already assigned to '%s'", where, t.peripheral, seenPeripheral[t.peripheral])
+    else
+      seenPeripheral[t.peripheral] = t.id
     end
     if not GROUPS[t.group] then
       err("%s.group must be lift|main|lateral (got %s)", where, tostring(t.group))

@@ -49,7 +49,7 @@ both at once.
 | **LIFT THR** | The four lift thrusters — FL, FR, RL, RR |
 | **ACCEL THR** | The four main accelerators |
 | **LAT THR** | The four lateral thrusters; the front pair steers, the rear pair is precision-only |
-| **VELOCITY** | One velocity sensor per craft axis — X (right), Y (up), Z (forward) |
+| **VELOCITY** | One velocity sensor per axis, named for what it measures: **MEDIAL** (forward/back), **LATERAL** (left/right), **VERTICAL** (up/down) |
 | **ALT+GIMBAL** | The altimeter, the attitude gimbal, and the **down-facing laser** — that one is the radar altimeter, so it belongs with height rather than with the obstacle rays |
 | **FUEL TANK** | The liquid tank and its gauge scale |
 | **OPTICAL** | The proximity lasers — forward, back, left, right |
@@ -81,6 +81,29 @@ are a unit default that scales gains, and an unusual frame can tune them in the 
 
 The same table is why the lateral front pair gets `yawAuthority` and the rear pair
 `precisionOnly` without anyone being asked ([MODES.md](MODES.md)).
+
+### Slot keys are per group; ids are not
+
+`fl` is a corner of the **lift** set *and* of the **lateral** set, so a slot key only means
+something alongside its group. But the **id** is what the mixer addresses a thruster by, and
+those must be unique across the whole craft — so `setSlot` stores `lift_fl` and `lateral_fl`,
+and `Config.slotKey` strips the prefix back off to recover the slot.
+
+> Storing the bare key was a real bug: with the lift corners assigned, **every** lateral
+> assignment came back `CRAFT REFUSED`, because the validator correctly refuses a duplicated id.
+> It is also why the original naming scheme was group-prefixed, which is worth knowing before
+> "simplifying" it again.
+
+**A nozzle can only be in one slot.** Assigning one that is already used elsewhere *moves* it,
+and a config with the same peripheral in two entries is refused — the mixer would otherwise
+command that nozzle twice, with two different values, and fight itself.
+
+### Axis names, not axis letters
+
+The velocity page says MEDIAL, LATERAL and VERTICAL. `x`/`y`/`z` depend on whose convention you
+mean and which way the sensor is bolted on, and a sensor on the wrong axis makes the flight
+assistant push the craft the wrong way. The config keys stay `x`/`y`/`z`, because that is what
+the control code reads.
 
 ## The engine feed interval
 

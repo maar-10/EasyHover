@@ -502,8 +502,20 @@ function App:handleSetSlot(cmd)
       end
     end
     if name ~= "" then
+      -- A physical thruster can only be in ONE place. Moving it into this slot has to take it
+      -- out of whatever slot it was in, or the mixer would command the same nozzle twice with
+      -- two different values and fight itself.
+      for i = #self.cfg.hardware.thrusters, 1, -1 do
+        if self.cfg.hardware.thrusters[i].peripheral == name then
+          table.remove(self.cfg.hardware.thrusters, i)
+        end
+      end
+      -- GROUP-QUALIFIED ID. Slot keys are unique only within their group -- "fl" is a corner of
+      -- the lift set AND of the lateral set -- but ids are what the mixer addresses thrusters
+      -- by, so they must be unique across the whole craft. Config.slotKey strips the prefix
+      -- back off to recover the slot, which is also how a pre-existing "lift_fl" still resolves.
       local entry = Util.deepMerge(self.cfg.hardware.thrusterTemplate or {}, {
-        id = key, peripheral = name, group = kind,
+        id = kind .. "_" .. key, peripheral = name, group = kind,
         pos = geometry.pos, thrustAxis = geometry.thrustAxis,
         yawAuthority = geometry.yawAuthority or false,
         precisionOnly = geometry.precisionOnly or false,

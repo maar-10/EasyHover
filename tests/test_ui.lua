@@ -749,6 +749,21 @@ T.it("the lateral page names which pair steers and which is precision-only", fun
   T.eq(byKey.rr.hint, "precision", "the rear pair is precision-only")
 end)
 
+T.it("velocity axes are named by WHAT THEY MEASURE, not by a letter", function()
+  -- x/y/z depends on whose convention you use and which way the sensor is bolted on. The keys
+  -- stay x/y/z because the control code reads velocity.x and velocity.z.
+  local byKey = {}
+  for _, slot in ipairs(ConfigPanel.SECTION_SLOTS.velocity.slots) do byKey[slot.key] = slot end
+  T.eq(byKey.z.label, "MEDIAL", "forward/back is medial")
+  T.eq(byKey.z.hint, "forward / back", "and says so")
+  T.eq(byKey.x.label, "LATERAL", "sideways is lateral")
+  T.eq(byKey.x.hint, "left / right", "and says so")
+  T.eq(byKey.y.label, "VERTICAL", "spelled in full -- an abbreviation reads as a typo")
+  T.eq(byKey.y.hint, "up / down", "and vertical says so")
+  T.eq(ConfigPanel.SECTION_SLOTS.velocity.slots[1].key, "z",
+    "medial is offered first -- it is the one the brake law needs most")
+end)
+
 T.it("the down-facing laser lives with ALTITUDE, not with the proximity rays", function()
   -- It is the radar altimeter. Grouping it with the forward/back/left/right rays would put it
   -- on the page about obstacles rather than the page about height.

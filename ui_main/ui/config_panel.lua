@@ -65,10 +65,16 @@ local SECTION_SLOTS = {
     { kind = "lateral", key = "rl", label = "RL", title = "LAT REAR L", hint = "precision" },
     { kind = "lateral", key = "rr", label = "RR", title = "LAT REAR R", hint = "precision" },
   } },
+  -- NAMED BY WHAT THEY MEASURE, not by an axis letter. x/y/z depend on whose convention you
+  -- are using and which way the sensor is bolted on; "medial" is unambiguous. The keys stay
+  -- x/y/z because that is what the control code reads (velocity.x, velocity.z).
   velocity = { source = "velocity", hint = "velocity sensor", slots = {
-    { kind = "velocity", key = "x", label = "X", title = "VEL X", hint = "right" },
-    { kind = "velocity", key = "y", label = "Y", title = "VEL Y", hint = "up" },
-    { kind = "velocity", key = "z", label = "Z", title = "VEL Z", hint = "forward" },
+    { kind = "velocity", key = "z", label = "MEDIAL", title = "MEDIAL VEL",
+      hint = "forward / back" },
+    { kind = "velocity", key = "x", label = "LATERAL", title = "LATERAL VEL",
+      hint = "left / right" },
+    { kind = "velocity", key = "y", label = "VERTICAL", title = "VERTICAL VEL",
+      hint = "up / down" },
   } },
   attitude = { hint = "sensor", slots = {
     { kind = "altitude", key = "sensor", label = "ALT", title = "ALTIMETER",
