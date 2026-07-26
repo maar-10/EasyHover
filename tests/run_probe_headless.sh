@@ -12,6 +12,16 @@ DATA="$HERE/.craftos/probe"
 C0="$DATA/computer/0"
 
 rm -rf "$DATA"
+# A stale results.txt from a PREVIOUS run is a false green: if CraftOS-PC cannot start
+# (an orphaned instance still holding this directory is the usual cause), the grep below
+# would happily find the old SUITE_PASS and report success in zero seconds. Refuse to run
+# rather than lie about it.
+if [[ -e "$DATA" ]]; then
+  echo "FAIL: cannot clear $DATA"
+  echo "      An orphaned CraftOS-PC is probably holding it. Kill it and re-run:"
+  echo "      taskkill //F //IM CraftOS-PC_console.exe"
+  exit 1
+fi
 mkdir -p "$C0/tools" "$C0/tests/mocks"
 cp "$ROOT/tools/probe.lua" "$C0/tools/probe.lua"
 cp "$ROOT/tests/mocks/peripherals.lua" "$C0/tests/mocks/peripherals.lua"

@@ -246,3 +246,10 @@ end
 local header = ("=== %s === %s"):format(phase, failed == 0 and "PASS" or "FAIL")
 table.insert(lines, 1, header)
 write("/pc_result.txt", table.concat(lines, "\n") .. "\n")
+
+-- SHUT THE COMPUTER DOWN. Without this the probe finishes, CraftOS-PC drops to its shell and
+-- sits there until the runner's `timeout 180` kills it -- every phase paying the full 180s
+-- even though its work took about a second. Nine phases turned a half-minute suite into 27
+-- minutes, and since pc_result.txt was already written by then the runner still reported PASS,
+-- so nothing ever pointed at the cause.
+os.shutdown()
