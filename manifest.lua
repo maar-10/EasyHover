@@ -387,8 +387,8 @@
   },
   ["schema"] = 1,
   ["updater"] = {
-    ["size"] = 29343,
-    ["sum"] = "393f2bf2",
+    ["size"] = 32380,
+    ["sum"] = "2bc204de",
   },
   ["version"] = "ad3f68f0",
 }

@@ -92,6 +92,112 @@ T.it("checksums survive the 256-byte batching boundary", function()
   T.isFalse(a == Suite.checksum(long .. "!"), "sensitive to a one-byte change")
 end)
 
+-- ------------------------------------------------------------------ role picker
+
+T.suite("suite: role picker layout")
+
+-- The bug this exists for: the picker printed two lines per role without measuring the
+-- terminal, so on a basic computer the first four roles scrolled off with no way to scroll back.
+
+T.it("a basic computer (39x13) fits every role on one page", function()
+  local layout = Suite.rolePickerLayout(2, 6, 13)
+  T.eq(layout.mode, "compact", "one line each, no blurbs")
+  T.isTrue(layout.perPage >= 8, ("all 8 roles on a page (perPage=%d)"):format(layout.perPage))
+end)
+
+T.it("an advanced computer (51x19) shows blurbs for the INSTALLABLE roles", function()
+  local layout = Suite.rolePickerLayout(2, 6, 19)
+  T.eq(layout.mode, "blurbs", "blurbs where the detail actually helps")
+  T.eq(layout.perPage, 8, "still one page")
+end)
+
+T.it("blurbs are dropped rather than overflowing when they would not fit", function()
+  -- eight released roles all wanting a blurb needs 16 rows
+  local layout = Suite.rolePickerLayout(8, 0, 19)
+  T.eq(layout.mode, "compact", "detail sacrificed before anything scrolls away")
+end)
+
+T.it("a tiny terminal pages instead of losing entries off the top", function()
+  local layout = Suite.rolePickerLayout(2, 6, 10)
+  T.eq(layout.mode, "paged", "paged")
+  T.isTrue(layout.perPage >= 1, "at least one per page")
+  T.isTrue(layout.perPage < 8, ("and fewer than all of them (perPage=%d)"):format(layout.perPage))
+end)
+
+T.it("every plausible terminal height yields a layout that fits", function()
+  for height = 6, 40 do
+    local layout = Suite.rolePickerLayout(2, 6, height)
+    local rows
+    if layout.mode == "blurbs" then
+      rows = 2 * 2 + 6                       -- blurb for each released role
+    else
+      rows = math.min(8, layout.perPage)
+    end
+    -- title + blank + prompt + input, plus a page footer when paging
+    local chrome = 5 + (layout.mode == "paged" and 1 or 0)
+    T.isTrue(rows + chrome <= height + 1,
+      ("height %d: %s needs %d rows of %d"):format(height, layout.mode, rows + chrome, height))
+    T.isTrue(layout.perPage >= 1, "perPage is never zero at height " .. height)
+  end
+end)
+
+--- Drive the real picker with a scripted sequence of answers.
+local function pick(answers)
+  local index = 0
+  local realRead = _G.read
+  _G.read = function()
+    index = index + 1
+    return answers[index]
+  end
+  local order = {}
+  for name in pairs(manifest.roles) do order[#order + 1] = name end
+  table.sort(order, function(a, b)
+    local sa = (manifest.roles[a].status == "released") and 0 or 1
+    local sb = (manifest.roles[b].status == "released") and 0 or 1
+    if sa ~= sb then return sa < sb end
+    return a < b
+  end)
+  local ok, result = pcall(Suite.askForRole, manifest, order)
+  _G.read = realRead
+  if not ok then error(result, 0) end
+  return result, order
+end
+
+T.it("picking by number returns that role", function()
+  local role, order = pick({ "1" })
+  T.eq(role, order[1], "the first listed role")
+end)
+
+T.it("picking by name works too", function()
+  T.eq(pick({ "ui_main" }), "ui_main", "typed name")
+  T.eq(pick({ "  FLIGHT  " }), "flight", "trimmed and lower-cased")
+end)
+
+T.it("a blank answer cancels", function()
+  T.isNil(pick({ "" }), "cancelled")
+end)
+
+T.it("a bad answer is rejected and the picker asks again", function()
+  local role = pick({ "banana", "2" })
+  T.notNil(role, "recovered and accepted the second answer")
+end)
+
+T.it("the paging keys move between pages without losing entries", function()
+  -- Force paging by shrinking the terminal the picker measures.
+  local realGetSize = term.getSize
+  term.getSize = function() return 39, 9 end
+  local ok, role = pcall(function() return pick({ "n", "p", "1" }) end)
+  term.getSize = realGetSize
+  T.isTrue(ok, "the paged picker ran: " .. tostring(role))
+  T.notNil(role, "and still returned a role after paging around")
+end)
+
+T.it("degrades sanely with no height information", function()
+  local layout = Suite.rolePickerLayout(2, 6, nil)
+  T.notNil(layout.mode, "still returns a layout")
+  T.isTrue(layout.perPage >= 1, "usable")
+end)
+
 -- ------------------------------------------------------------------ protection
 
 T.suite("suite: protected paths")

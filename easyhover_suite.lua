@@ -373,38 +373,118 @@ end
 
 -- ---------------------------------------------------------------- role picker
 
-local function askForRole(manifest, order)
-  warn("No EasyHover install found on this computer.")
-  print("")
-  say("Which role should this computer be?")
-  print("")
+--- How should the role list be laid out on THIS terminal?
+---
+--- Pure, so tests/test_suite.lua can check it against every terminal size instead of us
+--- discovering on a basic computer that the first four roles scrolled off with no way back.
+---
+--- released/reserved are counts; `height` is the terminal's rows. Returns:
+---   mode    "blurbs"  one line per role plus a blurb for the INSTALLABLE ones
+---           "compact" one line per role
+---           "paged"   one line per role, split across pages
+---   perPage how many roles fit on a page (only meaningful for "paged")
+function Suite.rolePickerLayout(released, reserved, height)
+  local total = released + reserved
+  -- Reserved rows: title, blank, blank, prompt, input line.
+  local available = math.max(1, (height or 19) - 5)
+
+  -- Blurbs only for the roles you can actually install -- that is where the detail helps, and
+  -- it is what makes the list fit on an advanced terminal.
+  if (released * 2) + reserved <= available then
+    return { mode = "blurbs", perPage = total }
+  end
+  if total <= available then
+    return { mode = "compact", perPage = total }
+  end
+  -- Paged: one row goes to the "page x/y" footer.
+  return { mode = "paged", perPage = math.max(1, available - 1) }
+end
+
+--- Exposed so tests can drive the real draw-and-input loop with a stubbed read().
+function Suite.askForRole(manifest, order)
+  local width, height = term.getSize()
 
   local choices = {}
+  local released, reserved = 0, 0
   for _, name in ipairs(order) do
-    local spec = manifest.roles[name]
-    if spec then
+    if manifest.roles[name] then
       choices[#choices + 1] = name
-      local index = #choices
-      if spec.status == "released" then
-        say(("  %d) %s"):format(index, spec.title or name), colours.white)
+      if manifest.roles[name].status == "released" then
+        released = released + 1
       else
-        say(("  %d) %s  [not released yet]"):format(index, spec.title or name), colours.lightGrey)
+        reserved = reserved + 1
       end
-      dim("     " .. (spec.blurb or ""))
     end
   end
-  print("")
-  dim("Enter a number, or a role name, or nothing to cancel.")
-  write("> ")
-  local answer = read()
-  if answer == nil or answer == "" then return nil end
+  if #choices == 0 then return nil end
 
-  local index = tonumber(answer)
-  if index and choices[index] then return choices[index] end
-  answer = answer:lower():gsub("%s", "")
-  if manifest.roles[answer] then return answer end
-  bad("Not a role: " .. tostring(answer))
-  return nil
+  local layout = Suite.rolePickerLayout(released, reserved, height)
+  local pages = math.max(1, math.ceil(#choices / layout.perPage))
+  local page = 1
+
+  local function fit(text)
+    text = tostring(text)
+    if #text > width then return text:sub(1, width) end
+    return text
+  end
+
+  local function draw()
+    -- Start from a clean screen every time. Whatever the Suite printed before this point has
+    -- already scrolled, and the operator cannot scroll back in a CC terminal.
+    term.clear()
+    term.setCursorPos(1, 1)
+    colour(colours.cyan)
+    print(fit("EasyHover -- which role is this computer?"))
+
+    local first = (page - 1) * layout.perPage + 1
+    local last = math.min(#choices, first + layout.perPage - 1)
+    for index = first, last do
+      local name = choices[index]
+      local spec = manifest.roles[name]
+      local isReleased = spec.status == "released"
+      local line
+      if layout.mode == "blurbs" then
+        line = ("%d) %s"):format(index, spec.title or name)
+      else
+        -- name AND title, so a typed answer is obvious too
+        line = ("%d) %-9s %s"):format(index, name, spec.title or "")
+      end
+      if not isReleased then line = line .. " (soon)" end
+      say(fit(line), isReleased and colours.white or colours.lightGrey)
+      if layout.mode == "blurbs" and isReleased then
+        dim(fit("   " .. (spec.blurb or "")))
+      end
+    end
+
+    if pages > 1 then
+      colour(colours.lightGrey)
+      print(fit(("page %d/%d -- 'n' next, 'p' previous"):format(page, pages)))
+    end
+    print("")
+    colour(colours.lightGrey)
+    print(fit("number or name, blank to cancel"))
+    colour(colours.white)
+    write("> ")
+  end
+
+  while true do
+    draw()
+    local answer = read()
+    if answer == nil or answer == "" then return nil end
+    answer = answer:lower():gsub("%s", "")
+
+    if pages > 1 and (answer == "n" or answer == "next") then
+      page = page % pages + 1
+    elseif pages > 1 and (answer == "p" or answer == "prev" or answer == "previous") then
+      page = (page - 2) % pages + 1
+    else
+      local index = tonumber(answer)
+      if index and choices[index] then return choices[index] end
+      if manifest.roles[answer] then return answer end
+      bad(fit("Not a role: " .. tostring(answer)))
+      sleep(1.2)
+    end
+  end
 end
 
 -- ---------------------------------------------------------------- main
@@ -510,7 +590,7 @@ function Suite.main(args)
   end
 
   if not role then
-    role = askForRole(manifest, order)
+    role = Suite.askForRole(manifest, order)
     if not role then
       warn("Cancelled. Nothing was changed.")
       return false
