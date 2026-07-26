@@ -1,35 +1,104 @@
---[[ The config panel -- the upward-facing monitor, bottom right.
+--[[ The config panel -- the upward-facing monitor, bottom right of the cockpit.
 
-     Its MAIN page carries values worth having on screen for the whole flight; everything you
-     configure lives in a submenu:
+     EVERY craft setting lives here, and nothing else does. Its home page is a MENU AND NOTHING
+     ELSE: one button per section, no flight values. Flight information belongs on the screens
+     you look at while flying; this is the screen you look at while setting the vehicle up, and
+     mixing the two only made both worse.
 
-       MON    assign which UI renders on which monitor (including this one)
-       HW     assign the engine relay, the fuel tank and the engine vault
-       DISK   save and load every config to a floppy
-       FLT    the flight-control limits
+       ENGINE      relay, engine vault, and the feed timings
+       LIMITS      the flight-control envelope
+       LIFT THR    the four lift thrusters
+       ACCEL THR   the four main accelerators
+       LAT THR     the four lateral thrusters
+       VELOCITY    one velocity sensor per craft axis
+       ALT+GIMBAL  the altimeter and the attitude gimbal
+       FUEL TANK   the liquid fuel tank and its scale
+       OPTICAL     the laser rays, one per direction
+       DISK        save and load every config to a floppy
 
-     IT HAS TO FIT A 1x1 MONITOR. At text scale 0.5 that is 15x10 characters, which is what the
-     first dry run actually had assigned -- and the old 18x10 minimum meant every screen just
-     said TOO SMALL. So the layout is computed from the real size: buttons stack into a grid,
-     labels shorten, and the live-value block takes whatever rows are left.
+     MONITOR ASSIGNMENT IS NOT HERE. Which panel renders on which monitor is a property of the
+     UI computer, not of the craft, so it lives on that computer's own terminal (ui/terminal.lua)
+     -- which is also the one screen guaranteed to exist before anything has been assigned.
 
-     Monitor assignment is reachable from this panel AND from the computer's own terminal, so a
-     cockpit with nothing assigned yet is never a dead end.
+     IT HAS TO FIT A 1x1 MONITOR: 15x10 characters at text scale 0.5. The menu pages itself and
+     every section computes its layout from the real size.
 ]]
 
 local Theme = require("ui.theme")
 local Util = require("shared.util")
-local UiConfig = require("lib.config")
-local Hardware = require("ui.hardware")
+local Slots = require("ui.slots")
 
 local ConfigPanel = {}
 
--- A 1x1 monitor at scale 0.5 is 15x10. Anything smaller genuinely cannot carry a menu.
 local MIN_WIDTH, MIN_HEIGHT = 14, 9
+
+--- ms -> "1m 00s" / "45s". The feed interval is minutes-long, so milliseconds are unreadable.
+local function formatDuration(ms)
+  if type(ms) ~= "number" then return "--" end
+  local total = math.floor(ms / 1000 + 0.5)
+  local minutes = math.floor(total / 60)
+  local seconds = total % 60
+  if minutes > 0 then return ("%dm %02ds"):format(minutes, seconds) end
+  return ("%ds"):format(seconds)
+end
+
+ConfigPanel.formatDuration = formatDuration
+
+--- Which named slots each hardware section offers. `kind` and `key` address `setSlot`
+--- exactly, and `source` names the candidate list in telemetry.
+local SECTION_SLOTS = {
+  lift = { source = "thrusters", hint = "lift thruster", slots = {
+    { kind = "lift", key = "fl", label = "FL", title = "LIFT FRONT L" },
+    { kind = "lift", key = "fr", label = "FR", title = "LIFT FRONT R" },
+    { kind = "lift", key = "rl", label = "RL", title = "LIFT REAR L" },
+    { kind = "lift", key = "rr", label = "RR", title = "LIFT REAR R" },
+  } },
+  accel = { source = "thrusters", hint = "main thruster", slots = {
+    { kind = "main", key = "1", label = "M1", title = "ACCEL 1" },
+    { kind = "main", key = "2", label = "M2", title = "ACCEL 2" },
+    { kind = "main", key = "3", label = "M3", title = "ACCEL 3" },
+    { kind = "main", key = "4", label = "M4", title = "ACCEL 4" },
+  } },
+  lateral = { source = "thrusters", hint = "lateral thruster", slots = {
+    { kind = "lateral", key = "fl", label = "FL", title = "LAT FRONT L", hint = "steers" },
+    { kind = "lateral", key = "fr", label = "FR", title = "LAT FRONT R", hint = "steers" },
+    { kind = "lateral", key = "rl", label = "RL", title = "LAT REAR L", hint = "precision" },
+    { kind = "lateral", key = "rr", label = "RR", title = "LAT REAR R", hint = "precision" },
+  } },
+  velocity = { source = "velocity", hint = "velocity sensor", slots = {
+    { kind = "velocity", key = "x", label = "X", title = "VEL X", hint = "right" },
+    { kind = "velocity", key = "y", label = "Y", title = "VEL Y", hint = "up" },
+    { kind = "velocity", key = "z", label = "Z", title = "VEL Z", hint = "forward" },
+  } },
+  attitude = { hint = "sensor", slots = {
+    { kind = "altitude", key = "sensor", label = "ALT", title = "ALTIMETER",
+      source = "altimeters" },
+    { kind = "gimbal", key = "sensor", label = "GMB", title = "GIMBAL", source = "gimbals" },
+    -- The down-facing laser is the RADAR altimeter, so it belongs with altitude rather than
+    -- with the proximity rays.
+    { kind = "optical", key = "down", label = "RDR", title = "RADAR (DOWN)",
+      source = "optical" },
+  } },
+  optical = { source = "optical", hint = "laser", slots = {
+    { kind = "optical", key = "forward", label = "FWD", title = "LASER FWD" },
+    { kind = "optical", key = "back", label = "BCK", title = "LASER BACK" },
+    { kind = "optical", key = "left", label = "LFT", title = "LASER LEFT" },
+    { kind = "optical", key = "right", label = "RGT", title = "LASER RIGHT" },
+  } },
+  engine = { hint = "peripheral", slots = {
+    { kind = "relay", key = "relay", label = "RLY", title = "ENGINE RELAY", source = "relays" },
+    { kind = "vault", key = "vault", label = "VLT", title = "ENGINE VAULT", source = "vaults" },
+  } },
+  tank = { hint = "tank", slots = {
+    { kind = "tank", key = "tank", label = "TNK", title = "FUEL TANK", source = "tanks" },
+  } },
+}
+
+ConfigPanel.SECTION_SLOTS = SECTION_SLOTS
 
 --- opts = { cfg, actions, monitors, log, savePanels, lastAck }
 function ConfigPanel.build(frame, opts)
-  local cfg, actions = opts.cfg, opts.actions
+  local actions = opts.actions
   local width, height = frame:getWidth(), frame:getHeight()
   frame:setBackground(Theme.bg)
 
@@ -38,10 +107,11 @@ function ConfigPanel.build(frame, opts)
     Theme.line(frame, 2, width, "SMALL", Theme.warning)
     Theme.line(frame, 3, width, ("%dx%d"):format(width, height), Theme.dim)
     Theme.line(frame, 4, width, ("need %dx%d"):format(MIN_WIDTH, MIN_HEIGHT), Theme.dim)
-    return { update = function() end, elements = {} }
+    return { update = function() end, elements = {}, pages = {} }
   end
 
-  local narrow = width < 26
+  -- The craft's last reported state. Every page reads THIS, never what it asked for.
+  local live = { candidates = {}, slots = {}, config = {}, disk = {}, stale = true }
 
   local pages = {}
   local function page()
@@ -52,150 +122,268 @@ function ConfigPanel.build(frame, opts)
     return p
   end
 
+  local home = page()
+  local enginePage, timesPage = page(), page()
+  local flightPage, diskPage, tankPage = page(), page(), page()
+  local slotPages = {}
+  for _, name in ipairs({ "lift", "accel", "lateral", "velocity", "attitude", "optical" }) do
+    slotPages[name] = page()
+  end
+  home:setVisible(true)
+
   local function show(target)
     for _, p in ipairs(pages) do p:setVisible(p == target) end
   end
 
-  local home = page()
-  local monitorPage = page()
-  local hardwarePage = page()
-  local diskPage = page()
-  local flightPage = page()
-  home:setVisible(true)
-
-  local function backButton(parent)
-    return Theme.button(parent, 1, height, math.min(6, width), "BACK", function() show(home) end)
+  local function backButton(parent, target)
+    return Theme.button(parent, 1, height, math.min(6, width), "BACK",
+      function() show(target or home) end)
   end
 
-  -- ---------------------------------------------------------------- home
+  -- ---------------------------------------------------------------- the menu
 
-  local y = 1
-  Theme.line(home, y, width, Theme.centre(narrow and "CONFIG" or "EASYHOVER CONFIG", width),
-    Theme.accent)
-  y = y + 1
-  local homeStale = Theme.staleBanner(home, y, width)
-  local homeStatus = Theme.line(home, y, width, "", Theme.dim); y = y + 1
-
-  -- Buttons occupy the bottom. Two rows of two when narrow, one row of four when there is room.
-  local buttonRows = narrow and 2 or 1
-  local liveRowCount = math.max(1, height - y - buttonRows - 1)
-  local liveLines = {}
-  for _ = 1, math.min(liveRowCount, 6) do
-    liveLines[#liveLines + 1] = Theme.line(home, y, width, "", Theme.fg)
-    y = y + 1
-  end
-  local alarmLine = Theme.line(home, math.min(y, height - buttonRows), width, "", Theme.dim)
-
-  local menu = {
-    { label = narrow and "MON" or "MONITORS", target = monitorPage },
-    { label = narrow and "HW" or "HARDWARE", target = hardwarePage },
-    { label = "DISK", target = diskPage },
-    { label = narrow and "FLT" or "FLIGHT", target = flightPage },
+  local MENU = {
+    { label = "ENGINE",     page = function() return enginePage end },
+    { label = "LIMITS",     page = function() return flightPage end },
+    { label = "LIFT THR",   page = function() return slotPages.lift end },
+    { label = "ACCEL THR",  page = function() return slotPages.accel end },
+    { label = "LAT THR",    page = function() return slotPages.lateral end },
+    { label = "VELOCITY",   page = function() return slotPages.velocity end },
+    { label = "ALT+GIMBAL", page = function() return slotPages.attitude end },
+    { label = "FUEL TANK",  page = function() return tankPage end },
+    { label = "OPTICAL",    page = function() return slotPages.optical end },
+    { label = "DISK",       page = function() return diskPage end },
   }
-  if narrow then
-    local half = math.floor((width - 1) / 2)
-    for index, entry in ipairs(menu) do
-      local col = (index - 1) % 2
-      local rowOffset = math.floor((index - 1) / 2)
-      Theme.button(home, 1 + col * (half + 1), height - 1 + rowOffset, half,
-        entry.label, function() show(entry.target) end)
-    end
-  else
-    local quarter = math.max(6, math.floor((width - 3) / 4))
-    for index, entry in ipairs(menu) do
-      Theme.button(home, 1 + (index - 1) * (quarter + 1), height, quarter,
-        entry.label, function() show(entry.target) end)
-    end
-  end
 
-  -- ---------------------------------------------------------------- monitors
+  Theme.line(home, 1, width, Theme.centre("CONFIG", width), Theme.accent)
+  local menuFooterRow = height
+  local menuRowCount = math.max(1, menuFooterRow - 2)
+  local menuPage = 1
+  local menuRows = {}
+  local refreshMenu
 
-  Theme.line(monitorPage, 1, width, Theme.centre(narrow and "MONITORS" or "MONITOR ASSIGNMENT",
-    width), Theme.accent)
-  Theme.line(monitorPage, 2, width, "tap to cycle", Theme.dim)
-
-  local monitorRows = {}
-  local rowStart = 3
-  local maxRows = math.max(1, height - rowStart - 1)
-  local tag = narrow and 7 or 9
-
-  -- The click handler is registered ONCE here, not in refreshMonitorRows(). Basalt APPENDS
-  -- callbacks rather than replacing them, so re-registering on every refresh accumulated
-  -- handlers and one tap cycled the assignment several times. It reads row.name, which refresh
-  -- updates, instead of closing over whatever name the row had at build time.
-  local cycleAssignment
-  local refreshMonitorRows
-  for index = 1, maxRows do
-    local rowY = rowStart + index - 1
-    local label = Theme.line(monitorPage, rowY, math.max(1, width - tag - 1), "", Theme.fg)
-    local row = { label = label, name = nil }
-    row.button = Theme.button(monitorPage, width - tag, rowY, tag, "--", function()
-      if row.name then cycleAssignment(row.name) end
+  for i = 1, menuRowCount do
+    local slot = { entry = nil }
+    slot.button = Theme.button(home, 1, i + 1, width, "", function()
+      if slot.entry then show(slot.entry.page()) end
     end)
-    monitorRows[index] = row
+    menuRows[i] = slot
   end
 
-  --- none -> overhead -> config -> pfd -> autopilot -> nav -> none.
-  --- Saves immediately: a half-made assignment lost on reboot is worse than one you undo.
-  local CYCLE = { "overhead", "config", "pfd", "autopilot", "nav" }
-  function cycleAssignment(monitorName)
-    local current = UiConfig.panelFor(cfg, monitorName)
-    local nextPanel = CYCLE[1]
-    if current then
-      for i, name in ipairs(CYCLE) do
-        if name == current then
-          nextPanel = CYCLE[i + 1]      -- nil past the end = unassign
-          break
-        end
-      end
-    end
-    if nextPanel == nil then
-      UiConfig.unassign(cfg, monitorName)
-    else
-      UiConfig.assign(cfg, nextPanel, monitorName)
-    end
-    -- Redraw the rows NOW. The frames are reconciled a moment later by the app, but the label
-    -- under your finger has to change on the tap -- the first dry run only saw it update when
-    -- RESCAN was pressed, which is exactly what this fixes.
-    refreshMonitorRows()
-    opts.savePanels()
-  end
-
-  function refreshMonitorRows()
-    local available = opts.monitors:available()
-    for index, row in ipairs(monitorRows) do
-      local entry = available[index]
-      if entry then
-        row.name = entry.name
-        local size = (entry.width and entry.height)
-          and ("%dx%d"):format(entry.width, entry.height) or "?"
-        local shown = narrow and entry.name:gsub("^monitor_", "m") or entry.name
-        row.label:setText(Theme.fit(("%s %s"):format(shown, size), width - tag - 1))
-        local panel = UiConfig.panelFor(cfg, entry.name) or "none"
-        row.button:setText(Theme.fit(panel, tag))
-        row.button:setBackground(panel == "none" and Theme.buttonBg or Theme.accent)
-        row.button:setForeground(panel == "none" and Theme.buttonFg or colours.black)
-        row.button:setVisible(true)
-        row.label:setVisible(true)
-      else
-        row.name = nil
-        row.label:setVisible(false)
-        row.button:setVisible(false)
-      end
-    end
-  end
-  refreshMonitorRows()
-
-  Theme.button(monitorPage, math.max(1, width - 7), height, 8, "RESCAN", function()
-    refreshMonitorRows()
+  local menuFooter = Theme.line(home, menuFooterRow, width, "", Theme.dim)
+  local menuPrev = Theme.button(home, math.max(1, width - 7), menuFooterRow, 3, "^", function()
+    menuPage = menuPage - 1; refreshMenu()
   end)
-  backButton(monitorPage)
+  local menuNext = Theme.button(home, math.max(1, width - 3), menuFooterRow, 3, "v", function()
+    menuPage = menuPage + 1; refreshMenu()
+  end)
 
-  -- ---------------------------------------------------------------- hardware
+  function refreshMenu()
+    local total = math.max(1, math.ceil(#MENU / menuRowCount))
+    menuPage = math.max(1, math.min(menuPage, total))
+    for i, slot in ipairs(menuRows) do
+      local entry = MENU[(menuPage - 1) * menuRowCount + i]
+      slot.entry = entry
+      if entry then
+        slot.button:setText(Theme.fit(entry.label, width))
+        slot.button:setVisible(true)
+      else
+        slot.button:setVisible(false)
+      end
+    end
+    menuFooter:setText(total > 1 and ("pg %d/%d"):format(menuPage, total) or "")
+    menuPrev:setVisible(total > 1)
+    menuNext:setVisible(total > 1)
+  end
+  refreshMenu()
 
-  Theme.line(hardwarePage, 1, width, Theme.centre("HARDWARE", width), Theme.accent)
-  local hardware = Hardware.build(hardwarePage, 1, 2, width, height - 2, opts)
-  backButton(hardwarePage)
+  -- ------------------------------------------------------------ slot sections
+
+  --- Build one hardware section from SECTION_SLOTS. All of them are the same widget; only the
+  --- slot list and the candidate source differ.
+  local function slotSection(parent, title, spec, back)
+    return Slots.build(parent, 1, 1, width, height - 1, {
+      title = title,
+      slots = spec.slots,
+      candidates = function(slot)
+        return live.candidates[slot.source or spec.source] or {}
+      end,
+      assigned = function(slot)
+        if slot.kind == "relay" then return live.config.engineRelay or "" end
+        if slot.kind == "vault" then return live.config.vaultPeripheral or "" end
+        if slot.kind == "tank" then return live.config.tankPeripheral or "" end
+        return (live.slots or {})[slot.kind .. ":" .. slot.key] or ""
+      end,
+      set = function(slot, peripheral)
+        if slot.kind == "relay" then
+          actions.setEngineRelay(peripheral, live.config.engineSide or "top")
+        elseif slot.kind == "vault" then
+          actions.setVault(peripheral)
+        elseif slot.kind == "tank" then
+          actions.setTank(peripheral)
+        else
+          actions.setSlot(slot.kind, slot.key, peripheral)
+        end
+      end,
+      refusedCmd = "setSlot",
+      lastAck = opts.lastAck,
+    }), backButton(parent, back)
+  end
+
+  local sections = {}
+  sections.lift = slotSection(slotPages.lift, "LIFT THRUSTERS", SECTION_SLOTS.lift)
+  sections.accel = slotSection(slotPages.accel, "ACCEL THRUSTERS", SECTION_SLOTS.accel)
+  sections.lateral = slotSection(slotPages.lateral, "LATERAL THR", SECTION_SLOTS.lateral)
+  sections.velocity = slotSection(slotPages.velocity, "VELOCITY SENS", SECTION_SLOTS.velocity)
+  sections.attitude = slotSection(slotPages.attitude, "ALT + GIMBAL", SECTION_SLOTS.attitude)
+  sections.optical = slotSection(slotPages.optical, "OPTICAL SENS", SECTION_SLOTS.optical)
+
+  -- ---------------------------------------------------------------- engine
+
+  local engineRows = math.max(Slots.rows(), height - 3)
+  sections.engine = Slots.build(enginePage, 1, 1, width, engineRows, {
+    title = "ENGINE HW",
+    slots = SECTION_SLOTS.engine.slots,
+    candidates = function(slot) return live.candidates[slot.source] or {} end,
+    assigned = function(slot)
+      if slot.kind == "relay" then return live.config.engineRelay or "" end
+      return live.config.vaultPeripheral or ""
+    end,
+    set = function(slot, peripheral)
+      if slot.kind == "relay" then
+        actions.setEngineRelay(peripheral, live.config.engineSide or "top")
+      else
+        actions.setVault(peripheral)
+      end
+    end,
+    refusedCmd = "setEngineRelay",
+    lastAck = opts.lastAck,
+  })
+  local sideButton = Theme.button(enginePage, 1, height - 1, math.min(9, width), "side --",
+    function()
+      local SIDES = { "top", "bottom", "left", "right", "front", "back" }
+      local current, index = live.config.engineSide or "top", 1
+      for i, s in ipairs(SIDES) do if s == current then index = i end end
+      local wanted = SIDES[index % #SIDES + 1]
+      -- Only the craft can change this; if no relay is assigned there is nothing to send to.
+      if (live.config.engineRelay or "") ~= "" then
+        actions.setEngineRelay(live.config.engineRelay, wanted)
+      end
+    end)
+  Theme.button(enginePage, math.max(1, width - 6), height - 1, 7, "TIMES", function()
+    show(timesPage)
+  end)
+  backButton(enginePage)
+
+  -- ---------------------------------------------------------------- timings
+
+  Theme.line(timesPage, 1, width, Theme.centre("FEED TIMES", width), Theme.accent)
+  Theme.rule(timesPage, 2, width)
+
+  Theme.line(timesPage, 3, width, "pulse", Theme.dim)
+  local pulseValue = Theme.line(timesPage, 4, width, "--", Theme.fg)
+  local pulseState = { value = nil }
+  local function nudgePulse(delta)
+    if type(pulseState.value) ~= "number" then return end
+    local next = Util.clamp(pulseState.value + delta, 50, 5000)
+    if next ~= pulseState.value then actions.configSet("engine.pulseMs", next) end
+  end
+  Theme.button(timesPage, math.max(1, width - 6), 4, 3, "-", function() nudgePulse(-50) end)
+  Theme.button(timesPage, math.max(1, width - 2), 4, 3, "+", function() nudgePulse(50) end)
+
+  Theme.line(timesPage, 5, width, "interval", Theme.dim)
+  local intervalValue = Theme.line(timesPage, 6, width, "--", Theme.fg)
+  local intervalState = { value = nil }
+  --- The interval has to match ONE FUEL UNIT'S BURN TIME, which is minutes for blaze cake.
+  --- Two step sizes, because 15 s steps get you across an hour and 1 s steps land on the
+  --- number -- and a single step size cannot do both.
+  local function nudgeInterval(deltaSeconds)
+    if type(intervalState.value) ~= "number" then return end
+    local next = Util.clamp(intervalState.value + deltaSeconds * 1000, 15000, 3600000)
+    if next ~= intervalState.value then actions.configSet("engine.intervalMs", next) end
+  end
+  local stepWidth = math.max(3, math.floor((width - 3) / 4))
+  local steps = { { "-15", -15 }, { "-1", -1 }, { "+1", 1 }, { "+15", 15 } }
+  local stepButtons = {}
+  for i, step in ipairs(steps) do
+    stepButtons[i] = Theme.button(timesPage, 1 + (i - 1) * (stepWidth + 1), 7, stepWidth,
+      step[1], function() nudgeInterval(step[2]) end)
+  end
+  Theme.line(timesPage, 8, width, "15s to 1h", Theme.dim)
+
+  Theme.button(timesPage, math.max(1, width - 5), height, 6, "SAVE", function()
+    actions.configSave()
+  end)
+  backButton(timesPage, enginePage)
+
+  -- ---------------------------------------------------------------- tank
+
+  sections.tank = Slots.build(tankPage, 1, 1, width, height - 3, {
+    title = "FUEL TANK",
+    slots = SECTION_SLOTS.tank.slots,
+    candidates = function() return live.candidates.tanks or {} end,
+    assigned = function() return live.config.tankPeripheral or "" end,
+    set = function(_, peripheral) actions.setTank(peripheral) end,
+    refusedCmd = "setTank",
+    lastAck = opts.lastAck,
+  })
+  local capacityLine = Theme.line(tankPage, height - 2, width, "max --", Theme.dim)
+  local capacityState = { value = nil }
+  local function nudgeCapacity(delta)
+    if type(capacityState.value) ~= "number" then return end
+    local next = Util.clamp(capacityState.value + delta, 0, 1000000)
+    if next ~= capacityState.value then
+      actions.configSet("hardware.tanks.1.capacityMb", next)
+    end
+  end
+  local capMinus = Theme.button(tankPage, math.max(1, width - 6), height - 2, 3, "-",
+    function() nudgeCapacity(-1000) end)
+  local capPlus = Theme.button(tankPage, math.max(1, width - 2), height - 2, 3, "+",
+    function() nudgeCapacity(1000) end)
+  Theme.line(tankPage, height - 1, width, "0 = auto scale", Theme.dim)
+  backButton(tankPage)
+
+  -- ---------------------------------------------------------------- flight
+
+  Theme.line(flightPage, 1, width, Theme.centre("FLT LIMITS", width), Theme.accent)
+
+  local narrow = width < 26
+  local fy = 2
+  local function tunable(label, path, step, minimum, maximum, decimals)
+    if fy > height - 1 then return nil end
+    local buttonWidth = narrow and 3 or 4
+    local textWidth = math.max(1, width - buttonWidth * 2 - 1)
+    local nameLabel = Theme.line(flightPage, fy, textWidth, label, Theme.fg)
+    local row = { path = path, value = nil, decimals = decimals or 0, display = nameLabel }
+    local function nudge(delta)
+      if type(row.value) ~= "number" then return end
+      local next = Util.clamp(row.value + delta, minimum, maximum)
+      if next ~= row.value then actions.configSet(path, next) end
+    end
+    row.minus = Theme.button(flightPage, textWidth + 1, fy, buttonWidth, "-",
+      function() nudge(-step) end)
+    row.plus = Theme.button(flightPage, textWidth + buttonWidth + 1, fy, buttonWidth, "+",
+      function() nudge(step) end)
+    row.set = function(value)
+      row.value = value
+      nameLabel:setText(Theme.fit(("%s %s"):format(label,
+        type(value) == "number" and Util.num(value, row.decimals) or "--"), textWidth))
+    end
+    fy = fy + 1
+    return row
+  end
+
+  local bankRow = tunable("bank", "envelope.maxBankDeg", 1, 1, 45, 0)
+  local pitchRow = tunable("ptch", "envelope.maxPitchDeg", 1, 1, 45, 0)
+  local climbRow = tunable("clmb", "envelope.maxClimbRate", 0.5, 0.5, 20, 1)
+  local sinkRow = tunable("sink", "envelope.maxSinkRate", 0.5, 0.5, 20, 1)
+  local yawRow = tunable("yaw", "envelope.maxYawRateDps", 5, 5, 180, 0)
+  local brakeRow = tunable("brake", "brake.maxTiltDeg", 1, 1, 45, 0)
+
+  Theme.button(flightPage, math.max(1, width - 5), height, 6, "SAVE", function()
+    actions.configSave()
+  end)
+  backButton(flightPage)
 
   -- ---------------------------------------------------------------- disk
 
@@ -217,108 +405,60 @@ function ConfigPanel.build(frame, opts)
   end)
   backButton(diskPage)
 
-  -- ---------------------------------------------------------------- flight
-
-  Theme.line(flightPage, 1, width, Theme.centre(narrow and "LIMITS" or "FLIGHT CONTROL", width),
-    Theme.accent)
-
-  local fy = 2
-  local rows = {}
-  --- One tunable per row: "name value" on the left, -/+ on the right. The buttons send a
-  --- configSet, which the craft re-validates and can refuse.
-  local function tunable(label, path, step, minimum, maximum, decimals)
-    if fy > height - 1 then return nil end
-    local buttonWidth = narrow and 3 or 4
-    local textWidth = math.max(1, width - buttonWidth * 2 - 1)
-    local nameLabel = Theme.line(flightPage, fy, textWidth, label, Theme.fg)
-    local row = { path = path, value = nil, decimals = decimals or 0, display = nameLabel }
-    local function nudge(delta)
-      if type(row.value) ~= "number" then return end
-      local next = Util.clamp(row.value + delta, minimum, maximum)
-      if next ~= row.value then actions.configSet(path, next) end
-    end
-    Theme.button(flightPage, textWidth + 1, fy, buttonWidth, "-", function() nudge(-step) end)
-    Theme.button(flightPage, textWidth + buttonWidth + 1, fy, buttonWidth, "+",
-      function() nudge(step) end)
-    row.set = function(value)
-      row.value = value
-      nameLabel:setText(Theme.fit(("%s %s"):format(label,
-        type(value) == "number" and Util.num(value, row.decimals) or "--"), textWidth))
-    end
-    fy = fy + 1
-    rows[#rows + 1] = row
-    return row
-  end
-
-  local bankRow = tunable("bank", "envelope.maxBankDeg", 1, 1, 45, 0)
-  local pitchRow = tunable("ptch", "envelope.maxPitchDeg", 1, 1, 45, 0)
-  local climbRow = tunable("clmb", "envelope.maxClimbRate", 0.5, 0.5, 20, 1)
-  local sinkRow = tunable("sink", "envelope.maxSinkRate", 0.5, 0.5, 20, 1)
-  local yawRow = tunable("yaw", "envelope.maxYawRateDps", 5, 5, 180, 0)
-  local brakeRow = tunable("brake", "brake.maxTiltDeg", 1, 1, 45, 0)
-
-  Theme.button(flightPage, math.max(1, width - 5), height, 6, "SAVE", function()
-    actions.configSave()
-  end)
-  backButton(flightPage)
-
   -- ---------------------------------------------------------------- update
 
+  local staleBanner = Theme.staleBanner(frame, 1, width)
+
   local function update(model)
-    local t = model.telemetry
-    homeStale:setVisible(model.stale)
-    homeStatus:setVisible(not model.stale)
-    hardware.update(model)
-
+    local t = model.telemetry or {}
+    live.stale = model.stale
+    staleBanner:setVisible(model.stale)
     if model.stale then
-      homeStale:setText(Theme.centre(model.ageMs == math.huge and "NO LINK" or "NO DATA", width))
-      for _, line in ipairs(liveLines) do line:setText("") end
-      alarmLine:setText("")
-      return
+      staleBanner:setText(Theme.centre(
+        model.ageMs == math.huge and "NO LINK" or "NO DATA", width))
     end
 
-    homeStatus:setText(Theme.fit(("%s %s/%s"):format(tostring(t.mode or "--"),
-      tostring((t.modes or {}).feel or "-"):sub(1, 3),
-      tostring((t.modes or {}).lateral or "-"):sub(1, 4)), width))
+    live.candidates = t.candidates or {}
+    live.slots = t.slots or {}
+    live.config = t.config or {}
+    live.disk = t.disk or {}
 
-    local altitude = t.altitude or {}
-    local attitude = t.attitude or {}
-    local velocity = t.velocity or {}
-    local values = {
-      ("ALT %s"):format(Util.num(altitude.baro, 1)),
-      ("VS  %s"):format(Util.num(altitude.vs, 1)),
-      ("P%s R%s"):format(Util.num(attitude.pitch, 1), Util.num(attitude.roll, 1)),
-      ("SPD %s"):format(Util.num(velocity.horizontal or velocity.scalar, 1)),
-      ("THR %s%%"):format(Util.num(((t.modes or {}).throttle or 0) * 100, 0)),
-      ("FUEL %s"):format(Util.pct((t.fuel or {}).worstTank)
-        and (Util.pct((t.fuel or {}).worstTank) .. "%") or "--"),
-    }
-    for index, line in ipairs(liveLines) do
-      line:setText(Theme.fit(values[index] or "", width))
-    end
+    for _, section in pairs(sections) do section.update() end
 
-    local alarms = t.alarms or {}
-    if #alarms > 0 then
-      alarmLine:setText(Theme.fit("! " .. tostring(alarms[1].msg or alarms[1].key), width))
-      alarmLine:setForeground(alarms[1].level == "warning" and Theme.warning or Theme.caution)
+    sideButton:setText(Theme.fit("side " .. tostring(live.config.engineSide or "--"),
+      math.min(9, width)))
+
+    pulseState.value = live.config.enginePulseMs
+    pulseValue:setText(type(pulseState.value) == "number"
+      and (tostring(pulseState.value) .. "ms") or "--")
+    intervalState.value = live.config.engineIntervalMs
+    intervalValue:setText(formatDuration(intervalState.value))
+
+    capacityState.value = live.config.tankCapacityMb
+    if capacityState.value == nil then
+      capacityLine:setText(Theme.fit("set a tank", width))
+      capacityLine:setForeground(Theme.dim)
+    elseif capacityState.value == 0 then
+      capacityLine:setText(Theme.fit("max auto", width))
+      capacityLine:setForeground(Theme.fg)
     else
-      alarmLine:setText("")
+      capacityLine:setText(Theme.fit("max " .. tostring(capacityState.value), width))
+      capacityLine:setForeground(Theme.fg)
     end
 
-    local disk = t.disk or {}
+    if bankRow then bankRow.set(live.config.maxBankDeg) end
+    if pitchRow then pitchRow.set(live.config.maxPitchDeg) end
+    if climbRow then climbRow.set(live.config.maxClimbRate) end
+    if sinkRow then sinkRow.set(live.config.maxSinkRate) end
+    if yawRow then yawRow.set(live.config.maxYawRateDps) end
+    if brakeRow then brakeRow.set(live.config.brakeMaxTiltDeg) end
+
+    local disk = live.disk
     diskStatus:setText(Theme.fit(disk.diskPresent
       and ("disk " .. tostring(disk.label or "unnamed")) or "no disk", width))
     diskStatus:setForeground(disk.diskPresent and Theme.ok or Theme.dim)
     diskLocal:setText(Theme.fit(("disk %s here %s")
       :format(tostring(disk.onDisk or 0), tostring(disk.localConfigs or 0)), width))
-
-    local liveCfg = t.config or {}
-    if bankRow then bankRow.set(liveCfg.maxBankDeg) end
-    if pitchRow then pitchRow.set(liveCfg.maxPitchDeg) end
-    if climbRow then climbRow.set(liveCfg.maxClimbRate) end
-    if sinkRow then sinkRow.set(liveCfg.maxSinkRate) end
-    if yawRow then yawRow.set(liveCfg.maxYawRateDps) end
-    if brakeRow then brakeRow.set(liveCfg.brakeMaxTiltDeg) end
 
     local ack = opts.lastAck and opts.lastAck()
     if ack and (ack.cmd == "diskSave" or ack.cmd == "diskLoad") then
@@ -336,16 +476,26 @@ function ConfigPanel.build(frame, opts)
 
   return {
     update = update,
-    refreshMonitors = refreshMonitorRows,
     show = show,
     narrow = narrow,
-    hardware = hardware,
-    pages = { home = home, monitors = monitorPage, hardware = hardwarePage,
-              disk = diskPage, flight = flightPage },
+    sections = sections,
+    menu = MENU,
+    menuRows = menuRows,
+    pages = {
+      home = home, engine = enginePage, times = timesPage, flight = flightPage,
+      disk = diskPage, tank = tankPage,
+      lift = slotPages.lift, accel = slotPages.accel, lateral = slotPages.lateral,
+      velocity = slotPages.velocity, attitude = slotPages.attitude,
+      optical = slotPages.optical,
+    },
     elements = {
-      status = homeStatus, stale = homeStale, live = liveLines, alarm = alarmLine,
+      stale = staleBanner, menuFooter = menuFooter,
+      pulse = pulseValue, interval = intervalValue, side = sideButton,
+      intervalSteps = stepButtons, capacity = capacityLine,
+      capacityMinus = capMinus, capacityPlus = capPlus,
       diskStatus = diskStatus, diskLocal = diskLocal, diskResult = diskResult,
-      monitorRows = monitorRows, bank = bankRow, pitch = pitchRow,
+      bank = bankRow, pitch = pitchRow, climb = climbRow, sink = sinkRow,
+      yaw = yawRow, brake = brakeRow,
     },
   }
 end

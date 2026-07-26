@@ -246,7 +246,7 @@ elseif phase == "uimain" then
     tostring(stateField("role")))
   check(fs.exists("/startup.lua"), "launcher installed as /startup.lua")
   check(fs.exists("/ui_main/app.lua"), "role files installed")
-  check(fs.exists("/ui_main/ui/hardware.lua"), "nested ui files installed")
+  check(fs.exists("/ui_main/ui/slots.lua"), "nested ui files installed")
   check(fs.exists("/ui_main/lib/monitors.lua"), "nested lib files installed")
   check(fs.exists("/shared/util.lua"), "the SECOND source tree landed too")
 

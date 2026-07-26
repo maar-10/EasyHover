@@ -23,7 +23,7 @@ local function vehicleCfg(overrides)
       tanks = { { peripheral = "fluid_tank_0", label = "Main fuel", capacityMb = 0 } },
       vaults = { { peripheral = "item_vault_0", label = "Engine fuel", item = "" } },
     },
-    engine = { enabled = true, pulseMs = 400, intervalMs = 8000 },
+    engine = { enabled = true, pulseMs = 400, intervalMs = 60000 },
   })
   if overrides then cfg = require("lib.util").deepMerge(cfg, overrides) end
   return cfg
@@ -441,6 +441,129 @@ T.it("status summarises for the UI", function()
   T.eq(status.localConfigs, 1, "one config here")
   T.isTrue(r.state:get("disk.diskPresent"), "published to state")
   cleanConfigs()
+end)
+
+-- ---------------------------------------------------------------- slots
+
+T.suite("slot assignment")
+
+local App = require("app")
+
+--- A booted flight computer with the config on a scratch path, so handleCommand can save.
+local function appRig(overrides)
+  mock.reset()
+  _G.peripheral = mock.install()
+  local path = "/test_slot_cfg.tbl"
+  Config.save(path, vehicleCfg(overrides))
+  local app = App.new({ configPath = path })
+  app:boot()
+  return app, path
+end
+
+T.it("assigns a lift thruster to a named corner, with a real moment arm", function()
+  local app, path = appRig()
+  local ok = app:handleCommand({ cmd = "setSlot", kind = "lift", key = "fr", peripheral = "vector_thruster_1" })
+  T.isTrue(ok, "accepted")
+
+  local entry
+  for _, t in ipairs(app.cfg.hardware.thrusters) do if t.id == "fr" then entry = t end end
+  T.notNil(entry, "the slot was created")
+  T.eq(entry.peripheral, "vector_thruster_1", "peripheral")
+  T.eq(entry.group, "lift", "group")
+  T.eq(entry.thrustAxis, "down", "lift thrust points down")
+  -- The signs are the whole point: front-right must be +x, +z or the mixer rolls the wrong way.
+  T.isTrue(entry.pos.x > 0, "front RIGHT is +x, got " .. tostring(entry.pos.x))
+  T.isTrue(entry.pos.z > 0, "FRONT right is +z, got " .. tostring(entry.pos.z))
+  fs.delete(path)
+end)
+
+T.it("gives the four lift corners opposing arms, so pitch and roll both work", function()
+  local app, path = appRig()
+  for _, key in ipairs({ "fl", "fr", "rl", "rr" }) do
+    app:handleCommand({ cmd = "setSlot", kind = "lift", key = key,
+      peripheral = "vector_thruster_" .. ({ fl = 0, fr = 1, rl = 2, rr = 3 })[key] })
+  end
+  local pos = {}
+  for _, t in ipairs(app.cfg.hardware.thrusters) do pos[t.id] = t.pos end
+  T.isTrue(pos.fl.x < 0 and pos.fr.x > 0, "left and right are on opposite sides -> roll")
+  T.isTrue(pos.fl.z > 0 and pos.rl.z < 0, "front and rear are opposed -> pitch")
+  fs.delete(path)
+end)
+
+T.it("makes the lateral FRONT pair steer and the REAR pair precision-only", function()
+  local app, path = appRig()
+  app:handleCommand({ cmd = "setSlot", kind = "lateral", key = "fl", peripheral = "vector_thruster_1" })
+  app:handleCommand({ cmd = "setSlot", kind = "lateral", key = "rr", peripheral = "vector_thruster_2" })
+  local byId = {}
+  for _, t in ipairs(app.cfg.hardware.thrusters) do byId[t.id] = t end
+  T.isTrue(byId.fl.yawAuthority, "the front pair yaws")
+  T.isFalse(byId.fl.precisionOnly, "and is used in normal flight")
+  T.isTrue(byId.rr.precisionOnly, "the rear pair is precision/assistant only")
+  T.isFalse(byId.rr.yawAuthority, "and does not yaw")
+  fs.delete(path)
+end)
+
+T.it("REPLACES a slot rather than accumulating duplicates", function()
+  local app, path = appRig()
+  app:handleCommand({ cmd = "setSlot", kind = "lift", key = "fr", peripheral = "vector_thruster_1" })
+  app:handleCommand({ cmd = "setSlot", kind = "lift", key = "fr", peripheral = "vector_thruster_2" })
+  local count, found = 0, nil
+  for _, t in ipairs(app.cfg.hardware.thrusters) do
+    if t.id == "fr" then count = count + 1; found = t.peripheral end
+  end
+  T.eq(count, 1, "one entry for the slot")
+  T.eq(found, "vector_thruster_2", "holding the latest choice")
+  fs.delete(path)
+end)
+
+T.it("an empty peripheral clears the slot", function()
+  local app, path = appRig()
+  app:handleCommand({ cmd = "setSlot", kind = "lift", key = "fr", peripheral = "vector_thruster_1" })
+  app:handleCommand({ cmd = "setSlot", kind = "lift", key = "fr", peripheral = "" })
+  for _, t in ipairs(app.cfg.hardware.thrusters) do
+    T.isFalse(t.id == "fr", "the slot is gone")
+  end
+  fs.delete(path)
+end)
+
+T.it("assigns velocity axes, the altimeter, the gimbal and a laser direction", function()
+  local app, path = appRig()
+  T.isTrue((app:handleCommand({ cmd = "setSlot", kind = "velocity", key = "z",
+    peripheral = "velocity_sensor_0" })), "velocity z")
+  T.isTrue((app:handleCommand({ cmd = "setSlot", kind = "altitude", key = "sensor",
+    peripheral = "altitude_sensor_0" })), "altimeter")
+  T.isTrue((app:handleCommand({ cmd = "setSlot", kind = "gimbal", key = "sensor",
+    peripheral = "gimbal_sensor_0" })), "gimbal")
+  T.isTrue((app:handleCommand({ cmd = "setSlot", kind = "optical", key = "forward",
+    peripheral = "optical_sensor_0" })), "forward laser")
+
+  T.eq(app.cfg.hardware.sensors.velocityVector[1].axis, "z", "axis recorded")
+  T.eq(app.cfg.hardware.sensors.altitude, "altitude_sensor_0", "altimeter recorded")
+  T.eq(app.cfg.hardware.sensors.gimbal, "gimbal_sensor_0", "gimbal recorded")
+  T.eq(app.cfg.hardware.sensors.optical[1].direction, "forward", "direction recorded")
+  fs.delete(path)
+end)
+
+T.it("REFUSES a slot that does not exist rather than inventing one", function()
+  local app, path = appRig()
+  T.isFalse((app:handleCommand({ cmd = "setSlot", kind = "lift", key = "middle",
+    peripheral = "vector_thruster_1" })), "no such lift corner")
+  T.isFalse((app:handleCommand({ cmd = "setSlot", kind = "velocity", key = "w",
+    peripheral = "velocity_sensor_0" })), "no such axis")
+  fs.delete(path)
+end)
+
+T.it("PUTS THE OLD ASSIGNMENT BACK when the result would not validate", function()
+  local app, path = appRig()
+  app:handleCommand({ cmd = "setSlot", kind = "optical", key = "forward", peripheral = "optical_sensor_0" })
+  local before = #app.cfg.hardware.sensors.optical
+  -- a second sensor on the same direction is illegal
+  local ok = app:handleCommand({ cmd = "setSlot", kind = "optical", key = "sideways",
+    peripheral = "optical_sensor_1" })
+  T.isFalse(ok, "refused")
+  T.eq(#app.cfg.hardware.sensors.optical, before, "and nothing was left behind")
+  T.eq(app.cfg.hardware.sensors.optical[1].peripheral, "optical_sensor_0", "original intact")
+  fs.delete(path)
 end)
 
 return true

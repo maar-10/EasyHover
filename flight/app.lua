@@ -424,6 +424,130 @@ end
 ---
 --- Telemetry has already whitelisted the name and type-checked the fields, so this is about
 --- what the vehicle does, not about whether the message is well formed. Returns ok, detail.
+--- Where each named thruster slot sits, in the CRAFT frame (x = right, y = up, z = forward).
+---
+--- The config screens ask "which peripheral is the front-left lift thruster", not "what are its
+--- coordinates" -- but the mixer needs a moment arm, and a thruster at 0,0,0 produces no pitch
+--- or roll at all. THE SIGNS ARE WHAT MATTER: they decide which way the craft rotates when a
+--- corner pushes harder. The magnitudes are a sane unit default and can be tuned in the config
+--- file for an unusual frame; they scale gains, they do not change stability.
+local SLOT_GEOMETRY = {
+  lift = {
+    fl = { pos = { x = -1, y = 0, z =  1 }, thrustAxis = "down" },
+    fr = { pos = { x =  1, y = 0, z =  1 }, thrustAxis = "down" },
+    rl = { pos = { x = -1, y = 0, z = -1 }, thrustAxis = "down" },
+    rr = { pos = { x =  1, y = 0, z = -1 }, thrustAxis = "down" },
+  },
+  main = {
+    -- Main thrust points BACKWARD so the craft accelerates forward. Mounted in a block, so
+    -- they carry no roll authority and their lateral offset is deliberately zero.
+    ["1"] = { pos = { x = 0, y = 0, z = -1 }, thrustAxis = "back" },
+    ["2"] = { pos = { x = 0, y = 0, z = -1 }, thrustAxis = "back" },
+    ["3"] = { pos = { x = 0, y = 0, z = -1 }, thrustAxis = "back" },
+    ["4"] = { pos = { x = 0, y = 0, z = -1 }, thrustAxis = "back" },
+  },
+  lateral = {
+    -- Front pair steers (yaw); the rear pair idles in normal flight and is used only by
+    -- Precision mode and the Flight Assistant -- see docs/MODES.md.
+    fl = { pos = { x = -1, y = 0, z =  1 }, thrustAxis = "right", yawAuthority = true },
+    fr = { pos = { x =  1, y = 0, z =  1 }, thrustAxis = "left",  yawAuthority = true },
+    rl = { pos = { x = -1, y = 0, z = -1 }, thrustAxis = "right", precisionOnly = true },
+    rr = { pos = { x =  1, y = 0, z = -1 }, thrustAxis = "left",  precisionOnly = true },
+  },
+}
+
+App.SLOT_GEOMETRY = SLOT_GEOMETRY
+
+--- Assign (or clear) one named hardware slot, then re-validate the WHOLE config and put the
+--- previous state back if the result would be illegal. Same contract as setTank/setVault: the
+--- craft never ends up in a config it would refuse to boot from.
+function App:handleSetSlot(cmd)
+  local kind, key, name = cmd.kind, cmd.key, cmd.peripheral
+  local sensors = self.cfg.hardware.sensors
+
+  -- Snapshot exactly what this command can touch, so a rollback is exact.
+  local snapshot = textutils.serialise({
+    thrusters = self.cfg.hardware.thrusters,
+    velocityVector = sensors.velocityVector,
+    optical = sensors.optical,
+    altitude = sensors.altitude,
+    gimbal = sensors.gimbal,
+  })
+
+  local function restore()
+    local back = textutils.unserialise(snapshot)
+    self.cfg.hardware.thrusters = back.thrusters
+    sensors.velocityVector = back.velocityVector
+    sensors.optical = back.optical
+    sensors.altitude = back.altitude
+    sensors.gimbal = back.gimbal
+  end
+
+  --- Remove whichever entry of `list` matches `field == value`.
+  local function dropWhere(list, field, value)
+    for i = #list, 1, -1 do
+      if list[i][field] == value then table.remove(list, i) end
+    end
+  end
+
+  if kind == "lift" or kind == "main" or kind == "lateral" then
+    local geometry = (SLOT_GEOMETRY[kind] or {})[key]
+    if not geometry then return false, { errors = { "unknown " .. kind .. " slot: " .. tostring(key) } } end
+    dropWhere(self.cfg.hardware.thrusters, "id", key)
+    if name ~= "" then
+      local entry = Util.deepMerge(self.cfg.hardware.thrusterTemplate or {}, {
+        id = key, peripheral = name, group = kind,
+        pos = geometry.pos, thrustAxis = geometry.thrustAxis,
+        yawAuthority = geometry.yawAuthority or false,
+        precisionOnly = geometry.precisionOnly or false,
+      })
+      self.cfg.hardware.thrusters[#self.cfg.hardware.thrusters + 1] = entry
+    end
+
+  elseif kind == "velocity" then
+    if key ~= "x" and key ~= "y" and key ~= "z" then
+      return false, { errors = { "velocity axis must be x, y or z" } }
+    end
+    dropWhere(sensors.velocityVector, "axis", key)
+    if name ~= "" then
+      sensors.velocityVector[#sensors.velocityVector + 1] =
+        { peripheral = name, axis = key, invert = false }
+    end
+
+  elseif kind == "optical" then
+    local Config = require("lib.config")
+    if not Config.OPTICAL_DIRECTIONS[key] then
+      return false, { errors = { "unknown optical direction: " .. tostring(key) } }
+    end
+    dropWhere(sensors.optical, "direction", key)
+    if name ~= "" then
+      sensors.optical[#sensors.optical + 1] = { peripheral = name, direction = key }
+    end
+
+  elseif kind == "altitude" then
+    sensors.altitude = name
+
+  elseif kind == "gimbal" then
+    sensors.gimbal = name
+
+  else
+    return false, { errors = { "unknown slot kind: " .. tostring(kind) } }
+  end
+
+  local ok, errors = Config.validate(self.cfg)
+  if not ok then
+    restore()
+    return false, { errors = errors }
+  end
+
+  self.per:scan()
+  self.state:set("candidates", self.per:candidates())
+  Config.save(self.configPath, self.cfg)
+  self.log:info("slot %s:%s -> %s", tostring(kind), tostring(key),
+    name == "" and "(none)" or name)
+  return true, { kind = kind, key = key, peripheral = name }
+end
+
 function App:handleCommand(cmd)
   local now = os.epoch("utc")
 
@@ -492,6 +616,9 @@ function App:handleCommand(cmd)
     Config.save(self.configPath, self.cfg)
     self.log:info("%s -> %s", cmd.cmd, cmd.peripheral == "" and "(none)" or cmd.peripheral)
     return true, { peripheral = cmd.peripheral }
+
+  elseif cmd.cmd == "setSlot" then
+    return self:handleSetSlot(cmd)
 
   elseif cmd.cmd == "engineFeed" then
     local ok, err = self.engine:feedNow(now)

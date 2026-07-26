@@ -32,6 +32,11 @@ local COMMANDS = {
   setEngineRelay = { peripheral = "string", side = "string" },
   setTank        = { peripheral = "string" },
   setVault       = { peripheral = "string" },
+  -- One command for every "which peripheral fills this named role" question the config
+  -- screens ask -- thrusters, velocity axes, the altimeter, the gimbal and the laser rays.
+  -- `kind` says which family, `key` which slot inside it. An empty peripheral UNASSIGNS.
+  setSlot        = { kind = "enum:lift,main,lateral,velocity,altitude,gimbal,optical",
+                     key = "string", peripheral = "string" },
   engineFeed    = {},
   setAux        = { label = "string", value = "boolean" },
   setFeel       = { value = "enum:cruise,rate,stutter" },
@@ -83,6 +88,38 @@ local function configView(cfg)
     holdAltitude = cfg.failsafe.holdAltitude,
   }
 end
+
+--- What is assigned to each named slot right now, keyed exactly as `setSlot` addresses them.
+---
+--- Flat "kind:key" -> peripheral, because the panels look up one slot at a time and a flat
+--- table costs nothing to serialise. An unassigned slot is simply absent.
+local function slotView(cfg)
+  local slots = {}
+  for _, t in ipairs(cfg.hardware.thrusters or {}) do
+    if t.id ~= "" and t.peripheral ~= "" then
+      slots[t.group .. ":" .. t.id] = t.peripheral
+    end
+  end
+  for _, entry in ipairs(cfg.hardware.sensors.velocityVector or {}) do
+    if entry.axis and entry.peripheral ~= "" then
+      slots["velocity:" .. entry.axis] = entry.peripheral
+    end
+  end
+  for _, entry in ipairs(cfg.hardware.sensors.optical or {}) do
+    local dir = type(entry) == "table" and entry.direction or nil
+    local name = type(entry) == "table" and entry.peripheral or entry
+    if dir and dir ~= "" and name and name ~= "" then slots["optical:" .. dir] = name end
+  end
+  if cfg.hardware.sensors.altitude ~= "" then
+    slots["altitude:sensor"] = cfg.hardware.sensors.altitude
+  end
+  if cfg.hardware.sensors.gimbal ~= "" then
+    slots["gimbal:sensor"] = cfg.hardware.sensors.gimbal
+  end
+  return slots
+end
+
+Telemetry.slotView = slotView
 
 function Telemetry.new(cfg, log, state)
   local self = setmetatable({}, Telemetry)
@@ -239,6 +276,7 @@ function Telemetry:build(extra)
     },
 
     config = configView(self.cfg),
+    slots = slotView(self.cfg),
     oscillation = s:get("oscillation"),
     envelopeClipped = s:get("envelope.clipped"),
     alarms = s:activeAlarms(),

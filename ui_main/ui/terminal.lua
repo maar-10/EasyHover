@@ -1,0 +1,131 @@
+--[[ The UI computer's own terminal.
+
+     One job: decide WHICH MONITOR SHOWS WHICH PANEL. That is a property of this computer, not
+     of the craft, so it does not belong on the config monitor with the vehicle's settings --
+     and this is the one screen that is guaranteed to exist before anything has been assigned,
+     which makes it the only place the bootstrap case can live.
+
+     Tapping a monitor cycles it through the panels; each change saves immediately, because a
+     half-made assignment lost to a reboot is worse than one you have to undo.
+]]
+
+local Theme = require("ui.theme")
+local UiConfig = require("lib.config")
+
+local Terminal = {}
+
+--- opts = { cfg, monitors, log, savePanels }
+function Terminal.build(frame, opts)
+  local cfg, monitors = opts.cfg, opts.monitors
+  local width, height = frame:getWidth(), frame:getHeight()
+  frame:setBackground(Theme.bg)
+
+  Theme.line(frame, 1, width, Theme.centre("EasyHover UI", width), Theme.accent)
+  Theme.line(frame, 2, width, "which screen shows what", Theme.dim)
+  Theme.rule(frame, 3, width)
+
+  local listStart = 4
+  local footerRow = height
+  local perPage = math.max(1, footerRow - listStart)
+  local pageIndex = 1
+  local refresh
+
+  -- Widths are held HERE, not read back off the elements. A Basalt label auto-sizes to its
+  -- text, so an empty one reports width 0 -- and fitEnd() to width 0 quietly returns nothing,
+  -- which is a blank row that looks exactly like a missing monitor.
+  local labelWidth = math.max(6, width - 14)
+  local buttonWidth = math.max(6, width - labelWidth - 2)
+
+  local rows = {}
+  for i = 1, perPage do
+    local entry = { name = nil }
+    entry.label = Theme.line(frame, listStart + i - 1, labelWidth, "", Theme.fg)
+    entry.button = Theme.button(frame, labelWidth + 2, listStart + i - 1,
+      buttonWidth, "", function()
+        if entry.name == nil then return end
+        -- none -> overhead -> config -> pfd -> autopilot -> nav -> none
+        local current = UiConfig.panelFor(cfg, entry.name)
+        local order = UiConfig.PANEL_ORDER
+        local nextPanel = order[1]
+        if current then
+          for j, panel in ipairs(order) do
+            if panel == current then nextPanel = order[j + 1]; break end   -- nil = unassign
+          end
+        end
+        if nextPanel == nil then
+          UiConfig.unassign(cfg, entry.name)
+        else
+          UiConfig.assign(cfg, nextPanel, entry.name)
+        end
+        opts.savePanels()
+        refresh()          -- redraw on the tap, not on the next data frame
+      end)
+    rows[i] = entry
+  end
+
+  local footer = Theme.line(frame, footerRow, math.max(1, width - 8), "", Theme.dim)
+  local prevButton = Theme.button(frame, math.max(1, width - 7), footerRow, 3, "^", function()
+    pageIndex = pageIndex - 1; refresh()
+  end)
+  local nextButton = Theme.button(frame, math.max(1, width - 3), footerRow, 3, "v", function()
+    pageIndex = pageIndex + 1; refresh()
+  end)
+
+  local found = {}
+
+  function refresh()
+    found = monitors:available()
+    local pages = math.max(1, math.ceil(#found / perPage))
+    pageIndex = math.max(1, math.min(pageIndex, pages))
+
+    for i, entry in ipairs(rows) do
+      local item = found[(pageIndex - 1) * perPage + i]
+      if item == nil then
+        entry.name = nil
+        entry.label:setVisible(false)
+        entry.button:setVisible(false)
+      else
+        entry.name = item.name
+        entry.label:setText(Theme.fitEnd(("%s %dx%d"):format(item.name, item.width or 0,
+          item.height or 0), labelWidth))
+        local panel = UiConfig.panelFor(cfg, item.name) or "none"
+        entry.button:setText(Theme.fit(panel, buttonWidth))
+        entry.button:setBackground(panel == "none" and Theme.buttonBg or Theme.accent)
+        entry.button:setForeground(panel == "none" and Theme.buttonFg or colours.black)
+        entry.label:setVisible(true)
+        entry.button:setVisible(true)
+      end
+    end
+
+    if #found == 0 then
+      footer:setText(Theme.fit("no monitors found", math.max(1, width - 8)))
+      footer:setForeground(Theme.warning)
+    elseif pages > 1 then
+      footer:setText(("pg %d/%d  %d screens"):format(pageIndex, pages, #found))
+      footer:setForeground(Theme.dim)
+    else
+      footer:setText(Theme.fit(("%d screens  tap to cycle"):format(#found),
+        math.max(1, width - 8)))
+      footer:setForeground(Theme.dim)
+    end
+    prevButton:setVisible(pages > 1)
+    nextButton:setVisible(pages > 1)
+  end
+
+  refresh()
+
+  --- The terminal shows no craft data, so an update is just a rescan -- a monitor plugged in
+  --- while you are looking at this screen should appear on it.
+  local function update()
+    refresh()
+  end
+
+  return {
+    update = update,
+    refresh = refresh,
+    rows = rows,
+    elements = { footer = footer, prev = prevButton, next = nextButton },
+  }
+end
+
+return Terminal

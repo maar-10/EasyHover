@@ -178,6 +178,116 @@ T.it("the payload reports what is assigned and what could be", function()
   T.eq(#payload.candidates.vaults, 0, "and an empty category is still reported")
 end)
 
+-- ------------------------------------------------------- slot assignment
+
+T.suite("slot assignment")
+
+T.it("setSlot is whitelisted, enum-checked on kind, and allows an empty peripheral", function()
+  local _, _, tel = rig()
+  T.notNil(tel:parseCommand({ cmd = "setSlot", kind = "lift", key = "fl", peripheral = "t0" },
+    1, 1000), "a lift slot")
+  T.notNil(tel:parseCommand({ cmd = "setSlot", kind = "optical", key = "forward", peripheral = "" },
+    1, 1001), "an empty peripheral UNASSIGNS")
+  T.isNil(tel:parseCommand({ cmd = "setSlot", kind = "wings", key = "fl", peripheral = "t0" },
+    1, 1002), "an unknown kind is refused before it reaches the craft")
+  T.isNil(tel:parseCommand({ cmd = "setSlot", kind = "lift", peripheral = "t0" }, 1, 1003),
+    "a slot without a key is refused")
+end)
+
+T.it("the payload reports what fills every named slot", function()
+  local cfg, _, tel = rig()
+  cfg.hardware.thrusters = {
+    { id = "fl", peripheral = "thruster_0", group = "lift" },
+    { id = "1", peripheral = "thruster_9", group = "main" },
+  }
+  cfg.hardware.sensors.velocityVector = { { peripheral = "vel_2", axis = "z" } }
+  cfg.hardware.sensors.optical = { { peripheral = "laser_3", direction = "forward" } }
+  cfg.hardware.sensors.altitude = "alt_0"
+  cfg.hardware.sensors.gimbal = "gimbal_0"
+
+  local slots = tel:build().slots
+  T.eq(slots["lift:fl"], "thruster_0", "a lift thruster")
+  T.eq(slots["main:1"], "thruster_9", "a main thruster")
+  T.eq(slots["velocity:z"], "vel_2", "a velocity axis")
+  T.eq(slots["optical:forward"], "laser_3", "a laser ray")
+  T.eq(slots["altitude:sensor"], "alt_0", "the altimeter")
+  T.eq(slots["gimbal:sensor"], "gimbal_0", "the gimbal")
+  T.isNil(slots["lift:rr"], "and an unfilled slot is simply absent")
+end)
+
+T.it("optical sensors keep a direction, and reject a duplicate or a bogus one", function()
+  local cfg = Config.withDefaults({
+    hardware = {
+      thrusters = { { id = "a", peripheral = "p", group = "lift" } },
+      sensors = { optical = {
+        { peripheral = "laser_0", direction = "down" },
+        { peripheral = "laser_1", direction = "forward" },
+      } },
+    },
+  })
+  T.isTrue((Config.validate(cfg)), "two different directions are fine")
+
+  cfg.hardware.sensors.optical[2].direction = "down"
+  local ok, errors = Config.validate(cfg)
+  T.isFalse(ok, "the same direction twice is not")
+  T.containsMatch(errors, "already taken", "reason")
+
+  cfg.hardware.sensors.optical[2].direction = "sideways"
+  local ok2, errors2 = Config.validate(cfg)
+  T.isFalse(ok2, "nor is a direction that does not exist")
+  T.containsMatch(errors2, "must be down|forward", "reason")
+end)
+
+T.it("an old config's bare optical names become the down-facing altimeter first", function()
+  -- Written before directions existed: index 1 was the altimeter by convention alone.
+  local cfg = Config.withDefaults({
+    hardware = { sensors = { optical = { "laser_0", "laser_1" } } },
+  })
+  T.eq(cfg.hardware.sensors.optical[1].peripheral, "laser_0", "kept in order")
+  T.eq(cfg.hardware.sensors.optical[1].direction, "down", "the old convention is honoured")
+  T.eq(cfg.hardware.sensors.optical[2].direction, "", "the rest wait to be told where they point")
+end)
+
+-- ------------------------------------------------- engine interval migration
+
+T.suite("engine feed interval")
+
+T.it("defaults to one minute, matching a fuel unit's burn time", function()
+  local cfg = Config.withDefaults({})
+  T.eq(cfg.engine.intervalMs, 60000, "one minute")
+end)
+
+T.it("accepts 15 s to 1 hour and refuses outside that", function()
+  local cfg = Config.withDefaults({
+    hardware = { thrusters = { { id = "a", peripheral = "p", group = "lift" } } },
+  })
+  T.isTrue((Config.set(cfg, "engine.intervalMs", 15000)), "the 15 s floor")
+  T.isTrue((Config.set(cfg, "engine.intervalMs", 3600000)), "the 1 hour ceiling")
+  T.isFalse((Config.set(cfg, "engine.intervalMs", 14000)), "below the floor")
+  T.isFalse((Config.set(cfg, "engine.intervalMs", 3600001)), "above the ceiling")
+end)
+
+T.it("CLAMPS an older config whose interval is now illegal, instead of refusing to boot", function()
+  -- 8000 ms was the old default and was legal when it was written. A tightened limit must not
+  -- strand the pilot on a config they never chose -- everything else they set is kept.
+  local cfg = Config.withDefaults({
+    engine = { intervalMs = 8000, pulseMs = 250 },
+    envelope = { maxBankDeg = 17 },
+  })
+  T.eq(cfg.engine.intervalMs, 15000, "raised to the new minimum")
+  T.eq(cfg.engine.pulseMs, 250, "and the pilot's other engine value is untouched")
+  T.eq(cfg.envelope.maxBankDeg, 17, "as is everything else")
+  T.isTrue((Config.validate(cfg)), "so the config is loadable")
+end)
+
+T.it("reports what it migrated rather than changing the craft silently", function()
+  local cfg = Config.defaults()
+  cfg.engine.intervalMs = 500
+  local changes = Config.migrate(cfg)
+  T.eq(#changes, 1, "one change")
+  T.isTrue(changes[1]:find("intervalMs") ~= nil, "and it says which: " .. changes[1])
+end)
+
 -- ------------------------------------------------------------------ config paths
 
 T.suite("config paths")
@@ -195,10 +305,10 @@ T.it("writes a valid value and reports the previous one", function()
   local cfg = Config.withDefaults({
     hardware = { thrusters = { { id = "a", peripheral = "p", group = "lift" } } },
   })
-  local ok, errors, previous = Config.set(cfg, "engine.intervalMs", 6000)
+  local ok, errors, previous = Config.set(cfg, "engine.intervalMs", 90000)
   T.isTrue(ok, "accepted: " .. table.concat(errors or {}, "; "))
-  T.eq(cfg.engine.intervalMs, 6000, "written")
-  T.eq(previous, 8000, "previous value returned")
+  T.eq(cfg.engine.intervalMs, 90000, "written")
+  T.eq(previous, 60000, "previous value returned")
 end)
 
 T.it("refuses an unknown path rather than inventing a setting", function()

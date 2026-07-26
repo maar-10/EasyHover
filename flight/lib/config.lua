@@ -17,6 +17,10 @@ local THRUST_AXES = { down = true, up = true, forward = true, back = true, left 
 local GROUPS = { lift = true, main = true, lateral = true }
 local FEEL_MODES = { cruise = true, rate = true, stutter = true }
 local AXES = { x = true, y = true, z = true }
+--- Where an optical sensor points. "down" is the radar altimeter; the rest are proximity.
+local OPTICAL_DIRECTIONS =
+  { down = true, forward = true, back = true, left = true, right = true }
+Config.OPTICAL_DIRECTIONS = OPTICAL_DIRECTIONS
 
 --- A single thruster's defaults. Every configured thruster is merged over this.
 local function thrusterTemplate()
@@ -77,7 +81,11 @@ function Config.defaults()
         --        { peripheral = "velocity_sensor_1", axis = "x", invert = true } }
         velocityVector = {},
         navTable = "",
-        -- down-facing first; extras are proximity rays (phase 8)
+        -- Optical (laser) sensors, each pointed at a named direction:
+        --   down = the radar altimeter, forward/back/left/right = proximity rays.
+        -- e.g. { { peripheral = "optical_sensor_0", direction = "down" }, ... }
+        -- A bare string is accepted for configs written before directions existed; the first
+        -- one becomes "down" (the old convention) and the rest are left unassigned.
         optical = {},
       },
       inputs = {
@@ -113,7 +121,12 @@ function Config.defaults()
     engine = {
       enabled = false,      -- turns on once hardware.engine.relay is set
       pulseMs = 400,        -- how long the signal drops -- long enough for ONE item
-      intervalMs = 8000,    -- gap between interrupt pulses while running
+      -- Gap between interrupt pulses. THIS MUST ROUGHLY MATCH THE BURN TIME OF ONE FUEL UNIT.
+      -- Feed faster and the engine hoards a whole stack, which means it keeps running for over
+      -- an hour after the master switch goes off and burns the lot whether or not the craft
+      -- needs it. Matched to the burn time it takes only what it needs, and a shutdown costs
+      -- at most one unit. Blaze cake is minutes, hence the range up to a full hour.
+      intervalMs = 60000,   -- 1 minute
       kickstart = true,     -- pulse immediately when the master switch goes on
       masterDefault = false,-- the vehicle boots OFF, as a vehicle should
       invert = false,       -- flip if HIGH lets items through on your build
@@ -405,7 +418,49 @@ function Config.withDefaults(loaded)
     cfg.hardware.relays[i] = Util.deepMerge(rTemplate, entry)
   end
 
+  -- Optical sensors used to be a plain list of names with "index 1 is the altimeter" as the
+  -- only convention. Normalise to { peripheral, direction } so the UI can address them by
+  -- where they point, and honour the old convention for a config written before that.
+  local optical = cfg.hardware.sensors.optical or {}
+  for i, entry in ipairs(optical) do
+    if type(entry) == "string" then
+      optical[i] = { peripheral = entry, direction = (i == 1) and "down" or "" }
+    else
+      entry.peripheral = entry.peripheral or ""
+      entry.direction = entry.direction or ((i == 1) and "down" or "")
+    end
+  end
+
+  Config.migrate(cfg)
   return cfg
+end
+
+--- Bring a config saved by an OLDER release inside the current limits.
+---
+--- Configs are only ever extended, never replaced -- but a tightened limit can leave a value
+--- that was legal when it was written and is not any more, and validate() would then refuse to
+--- start the craft over a setting the pilot never chose. Clamping the one offending field keeps
+--- everything else the pilot set, which is the whole point of the extend-only rule.
+---
+--- Returns the list of changes, so the caller can say what it did rather than change the
+--- vehicle's behaviour silently.
+function Config.migrate(cfg)
+  local changes = {}
+  local engine = cfg.engine
+  if type(engine) == "table" and type(engine.intervalMs) == "number" then
+    -- The feed interval used to allow 200 ms. It must now match a fuel unit's burn time, so
+    -- the floor is 15 s -- see the comment on the default.
+    if engine.intervalMs < 15000 then
+      changes[#changes + 1] = ("engine.intervalMs %d -> 15000 (below the new minimum)")
+        :format(engine.intervalMs)
+      engine.intervalMs = 15000
+    elseif engine.intervalMs > 3600000 then
+      changes[#changes + 1] = ("engine.intervalMs %d -> 3600000 (above the new maximum)")
+        :format(engine.intervalMs)
+      engine.intervalMs = 3600000
+    end
+  end
+  return changes
 end
 
 --- Structural validation. Returns ok, errors, warnings.
@@ -530,7 +585,7 @@ function Config.validate(cfg)
 
   -- engine
   num(cfg.engine.pulseMs, "engine.pulseMs", 50, 5000)
-  num(cfg.engine.intervalMs, "engine.intervalMs", 200, 600000)
+  num(cfg.engine.intervalMs, "engine.intervalMs", 15000, 3600000)
   if type(cfg.engine.pulseMs) == "number" and type(cfg.engine.intervalMs) == "number"
     and cfg.engine.pulseMs >= cfg.engine.intervalMs then
     err("engine.pulseMs (%s) must be shorter than engine.intervalMs (%s), or the funnel would "
@@ -587,6 +642,25 @@ function Config.validate(cfg)
   if not (axesSeen.x and axesSeen.z) then
     warn("no horizontal velocity vector configured (need axes x and z): "
       .. "the flight assistant and the brake law will degrade -- see docs/MODES.md section 6")
+  end
+
+  -- optical sensors: one direction each, at most one per direction
+  local dirSeen = {}
+  for i, entry in ipairs(cfg.hardware.sensors.optical or {}) do
+    local where = ("hardware.sensors.optical[%d]"):format(i)
+    if type(entry.peripheral) ~= "string" or entry.peripheral == "" then
+      err("%s.peripheral is required", where)
+    end
+    local dir = entry.direction
+    if dir ~= nil and dir ~= "" then
+      if not OPTICAL_DIRECTIONS[dir] then
+        err("%s.direction must be down|forward|back|left|right (got %s)", where, tostring(dir))
+      elseif dirSeen[dir] then
+        err("%s: direction %s is already taken", where, dir)
+      else
+        dirSeen[dir] = true
+      end
+    end
   end
 
   -- thrusters

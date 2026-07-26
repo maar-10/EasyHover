@@ -156,20 +156,32 @@ function Peripherals:scan()
 
   -- optical sensors are a list; index 1 is by convention the down-facing altimeter
   self.sensors.optical = {}
-  local opticalNames = hs.optical or {}
-  if #opticalNames == 0 then
-    -- auto-discover, deterministic order, so a single-laser install just works
-    opticalNames = Peripherals.findByType("optical_sensor")
-    if #opticalNames > 0 then
-      self.log:info("auto-discovered %d optical sensor(s); first is the altimeter", #opticalNames)
+  local opticalSpecs = {}
+  for i, entry in ipairs(hs.optical or {}) do
+    -- entries are normalised to { peripheral, direction } by Config.withDefaults, but accept
+    -- a bare string too so a hand-edited config still loads
+    if type(entry) == "string" then
+      opticalSpecs[i] = { peripheral = entry, direction = (i == 1) and "down" or "" }
+    else
+      opticalSpecs[i] = entry
     end
   end
-  for i, name in ipairs(opticalNames) do
-    local dev = safeWrap(name)
+  if #opticalSpecs == 0 then
+    -- auto-discover, deterministic order, so a single-laser install just works
+    for i, name in ipairs(Peripherals.findByType("optical_sensor")) do
+      opticalSpecs[i] = { peripheral = name, direction = (i == 1) and "down" or "" }
+    end
+    if #opticalSpecs > 0 then
+      self.log:info("auto-discovered %d optical sensor(s); first is the altimeter", #opticalSpecs)
+    end
+  end
+  for i, spec in ipairs(opticalSpecs) do
+    local dev = safeWrap(spec.peripheral)
     if dev then
-      self.sensors.optical[#self.sensors.optical + 1] = { name = name, dev = dev, index = i }
+      self.sensors.optical[#self.sensors.optical + 1] =
+        { name = spec.peripheral, dev = dev, index = i, direction = spec.direction or "" }
     else
-      self.missing[#self.missing + 1] = ("optical sensor %d (%s)"):format(i, name)
+      self.missing[#self.missing + 1] = ("optical sensor %d (%s)"):format(i, tostring(spec.peripheral))
     end
   end
 
@@ -292,6 +304,12 @@ function Peripherals:candidates()
     monitors = Peripherals.findByType("monitor"),
     drives = Peripherals.findByType("drive"),
     thrusters = thrusters,
+    -- Every sensor family the config screens can assign. Same reasoning as the rest: the
+    -- flight computer is the one that will open these, so its names are authoritative.
+    altimeters = Peripherals.findByType("altitude_sensor"),
+    gimbals = Peripherals.findByType("gimbal_sensor"),
+    velocity = Peripherals.findByType("velocity_sensor"),
+    optical = Peripherals.findByType("optical_sensor"),
   }
 end
 

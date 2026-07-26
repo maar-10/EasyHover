@@ -1,9 +1,10 @@
 --[[ The overhead panel -- above the driver's seat, facing down, 1 wide x 2 high.
 
-     Engine start/stop, both fuel gauges (liquid tank and solid vault), and their configuration
-     in a submenu. Mirrored to one monitor on either side of the cockpit: this module is
-     instantiated once per assigned monitor and every instance is fed the same model, so the
-     two screens cannot disagree.
+     Engine start/stop and both fuel gauges (liquid tank and solid vault). NOTHING IS
+     CONFIGURED HERE -- every craft setting lives on the config monitor, which freed the rows
+     this panel needed for the things a pilot reads at a glance. Mirrored to one monitor on
+     either side of the cockpit: this module is instantiated once per assigned monitor and
+     every instance is fed the same model, so the two screens cannot disagree.
 
      A 1x2 monitor at text scale 0.5 is about 15 x 20 characters. Everything is laid out from
      the frame's real size rather than from that assumption, and if a monitor turns out too
@@ -12,7 +13,6 @@
 
 local Theme = require("ui.theme")
 local Util = require("shared.util")
-local Hardware = require("ui.hardware")
 
 local Overhead = {}
 
@@ -34,12 +34,8 @@ function Overhead.build(frame, opts)
     return { update = function() end }
   end
 
-  -- Two pages in one frame: only one is visible at a time.
   local main = frame:addFrame({ x = 1, y = 1, width = width, height = height,
     background = Theme.bg })
-  local settings = frame:addFrame({ x = 1, y = 1, width = width, height = height,
-    background = Theme.bg })
-  settings:setVisible(false)
 
   -- ---------------------------------------------------------------- main page
 
@@ -58,13 +54,9 @@ function Overhead.build(frame, opts)
   -- owns field access on an element, so an arbitrary key there is not a safe place for state.
   local reported = { master = false, invert = false, available = false }
   local engineButton = Theme.button(main, 1, y, math.min(width, 9), "START", function()
-    -- With no relay assigned there is nothing to switch, so the button becomes the way IN to
-    -- assigning one instead of a dead "--".
-    if not reported.available then
-      main:setVisible(false)
-      settings:setVisible(true)
-      return
-    end
+    -- With no relay assigned there is nothing to switch. The label says CONFIG and the button
+    -- does nothing, rather than sending a command the craft would only refuse.
+    if not reported.available then return end
     -- Act on what the craft last told us, not on a local guess about what we asked for.
     actions.engineMaster(not reported.master)
   end)
@@ -91,69 +83,8 @@ function Overhead.build(frame, opts)
       actions.engineFeed()
     end)
   end
-  Theme.button(main, math.max(1, width - 4), math.min(height, y), 5, "CFG", function()
-    main:setVisible(false)
-    settings:setVisible(true)
-  end)
-
-  -- ---------------------------------------------------------------- settings page
-
-  local sy = 1
-  Theme.line(settings, sy, width, Theme.centre("ENGINE CFG", width), Theme.accent); sy = sy + 1
-  Theme.rule(settings, sy, width); sy = sy + 1
-
-  --- A "label / value / -+" row driven by a config path.
-  local function tunable(label, path, step, minimum, maximum, unit)
-    local nameLine = Theme.line(settings, sy, width, label, Theme.dim); sy = sy + 1
-    local valueLine = Theme.line(settings, sy, width, "--", Theme.fg)
-    local row = { path = path, value = nil, label = nameLine, display = valueLine }
-    local function nudge(delta)
-      if type(row.value) ~= "number" then return end
-      local next = Util.clamp(row.value + delta, minimum, maximum)
-      if next ~= row.value then actions.configSet(path, next) end
-    end
-    row.minus = Theme.button(settings, math.max(1, width - 6), sy, 3, "-", function() nudge(-step) end)
-    row.plus = Theme.button(settings, math.max(1, width - 2), sy, 3, "+", function() nudge(step) end)
-    sy = sy + 1
-    row.set = function(value)
-      row.value = value
-      valueLine:setText(type(value) == "number"
-        and (Util.num(value, 0) .. (unit or "")) or "--")
-    end
-    return row
-  end
-
-  local pulseRow = tunable("pulse", "engine.pulseMs", 50, 50, 5000, "ms")
-  local intervalRow = tunable("interval", "engine.intervalMs", 500, 500, 120000, "ms")
-
-  local invertLine = Theme.line(settings, sy, width, "invert", Theme.dim)
-  local invertButton = Theme.button(settings, math.max(1, width - 5), sy, 6, "OFF", function()
-    actions.configSet("engine.invert", not reported.invert)
-  end)
-  sy = sy + 1
-
-  -- The gauge needs a maximum to draw a bar against. Create usually reports one; when it does
-  -- not, this is the fallback, and 0 means "trust whatever the tank reports" -- which the row
-  -- itself says by showing "auto", so no hint line is spent on it. Rows are scarce here: every
-  -- one saved is a hardware candidate the pilot can see without paging.
-  local capacityRow = tunable("tank max", "hardware.tanks.1.capacityMb", 1000, 0, 1000000, "")
-
-  Theme.rule(settings, sy, width); sy = sy + 1
-
-  -- The same hardware picker the config panel uses, so the overhead monitor can assign the
-  -- relay, tank and vault without walking to another screen.
-  local hardware = nil
-  if sy + Hardware.rows() <= height then
-    hardware = Hardware.build(settings, 1, sy, width, height - sy, opts)
-  else
-    Theme.line(settings, sy, width, "hardware: use", Theme.dim)
-    Theme.line(settings, sy + 1, width, "CONFIG > HW", Theme.dim)
-  end
-
-  Theme.button(settings, 1, height, math.min(width, 6), "BACK", function()
-    settings:setVisible(false)
-    main:setVisible(true)
-  end)
+  -- The rows the settings page used to need are now free, so the vault gauge and the
+  -- altitude line both fit on a 1x2 screen. Configuration lives on the config monitor.
 
   -- ---------------------------------------------------------------- update
 
@@ -183,7 +114,7 @@ function Overhead.build(frame, opts)
     if not engine.available then
       engineState:setText("NO RELAY")
       engineState:setForeground(Theme.warning)
-      engineButton:setText("SET UP")
+      engineButton:setText("CONFIG")
       engineButton:setBackground(Theme.caution)
       engineButton:setForeground(colours.black)
     else
@@ -234,45 +165,20 @@ function Overhead.build(frame, opts)
         type(vs) == "number" and (vs >= 0 and "+" or "") .. Util.num(vs, 1) or ""), width))
     end
 
-    -- settings page mirrors the live config values the flight computer reports back
-    local liveCfg = t.config or {}
-    pulseRow.set(liveCfg.enginePulseMs)
-    intervalRow.set(liveCfg.engineIntervalMs)
-    if liveCfg.tankCapacityMb == nil then
-      -- There is no tank assigned, so there is no capacity to edit and -/+ cannot do anything.
-      -- Say which, rather than showing "--" over two buttons that silently refuse.
-      capacityRow.value = nil
-      capacityRow.display:setText("set tank")
-      capacityRow.display:setForeground(Theme.dim)
-    elseif liveCfg.tankCapacityMb == 0 then
-      capacityRow.value = 0
-      capacityRow.display:setText("auto")
-      capacityRow.display:setForeground(Theme.fg)
-    else
-      capacityRow.set(liveCfg.tankCapacityMb)
-      capacityRow.display:setForeground(Theme.fg)
-    end
-    if hardware then hardware.update(model) end
-    if liveCfg.engineInvert ~= nil then
-      reported.invert = liveCfg.engineInvert and true or false
-      invertButton:setText(reported.invert and "ON" or "OFF")
-    end
+    reported.invert = (t.config or {}).engineInvert and true or false
   end
 
   return {
     update = update,
     main = main,
-    settings = settings,
     -- A deliberate test seam: tests/test_ui.lua asserts on the rendered text rather than on
     -- the model, so a panel that silently stops updating is caught.
     elements = {
       modeLine = modeLine, stale = stale, engineState = engineState,
       engineButton = engineButton, engineFeed = engineFeedLine,
       tankValue = tankGauge.value, tankBar = tankGauge.bar, vault = vaultLine,
-      pulse = pulseRow, interval = intervalRow, invert = invertButton,
-      capacity = capacityRow, feed = primeButton,
+      feed = primeButton,
     },
-    hardware = hardware,
   }
 end
 

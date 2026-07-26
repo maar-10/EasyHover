@@ -15,7 +15,8 @@ local Link = require("lib.link")
 local Monitors = require("lib.monitors")
 local Overhead = require("ui.overhead")
 local ConfigPanel = require("ui.config_panel")
-local Hardware = require("ui.hardware")
+local Slots = require("ui.slots")
+local Terminal = require("ui.terminal")
 local Theme = require("ui.theme")
 local Log = require("shared.log")
 local basalt = require("basalt")
@@ -40,7 +41,7 @@ local function telemetry(overrides)
       vaults = { { label = "Engine fuel", count = 96, empty = false } },
     },
     config = {
-      enginePulseMs = 400, engineIntervalMs = 8000, engineInvert = false,
+      enginePulseMs = 400, engineIntervalMs = 60000, engineInvert = false,
       tankCapacityMb = 0, maxBankDeg = 20, maxPitchDeg = 20,
       maxClimbRate = 6, maxSinkRate = 4, maxYawRateDps = 45, brakeMaxTiltDeg = 12,
     },
@@ -109,6 +110,9 @@ local function sent()
     end,
     setTank = function(pe) out[#out + 1] = { cmd = "setTank", peripheral = pe } end,
     setVault = function(pe) out[#out + 1] = { cmd = "setVault", peripheral = pe } end,
+    setSlot = function(kind, key, pe)
+      out[#out + 1] = { cmd = "setSlot", kind = kind, key = key, peripheral = pe }
+    end,
   }
 end
 
@@ -375,31 +379,23 @@ T.it("the engine button sends the OPPOSITE of the reported state", function()
   T.eq(commands[1].value, false, "asks to stop, because it is running")
 end)
 
-T.it("the settings page mirrors the craft's live config", function()
-  local panel = overheadRig()
-  panel.update(model())
-  T.isTrue(panel.elements.pulse.display:getText():find("400") ~= nil,
-    "pulse: " .. panel.elements.pulse.display:getText())
-  T.isTrue(panel.elements.interval.display:getText():find("8000") ~= nil,
-    "interval: " .. panel.elements.interval.display:getText())
-  T.eq(panel.elements.invert:getText(), "OFF", "invert flag")
-end)
-
 T.it("a too-small monitor says so instead of drawing nonsense", function()
   local panel = overheadRig(8, 6)
   panel.update(model())        -- must not throw
   T.isTrue(true, "degraded cleanly")
 end)
-
 -- ------------------------------------------------------------------ config panel
 
 T.suite("config panel")
 
+local configAck = nil
+
 local function configRig(width, height)
   mock.reset()
   _G.peripheral = mock.install()
+  configAck = nil
   local cfg = UiConfig.withDefaults({})
-  local monitor = mock.monitor(width or 29, height or 12)
+  local monitor = mock.monitor(width or 15, height or 20)
   local frame = basalt.createFrame()
   frame:setTerm(monitor)
   local commands, actions = sent()
@@ -408,67 +404,78 @@ local function configRig(width, height)
   local panel = ConfigPanel.build(frame, {
     cfg = cfg, actions = actions, monitors = monitors, log = quietLog(),
     savePanels = function() saved.count = saved.count + 1 end,
-    lastAck = function() return nil end,
+    lastAck = function() return configAck end,
   })
   return panel, commands, cfg, saved
 end
 
-T.it("the home page shows live flight values", function()
+--- The menu labels currently drawn on the home page.
+local function menuLabels(panel)
+  local out = {}
+  for _, row in ipairs(panel.menuRows) do
+    if row.button:getVisible() then out[#out + 1] = row.button:getText() end
+  end
+  return out
+end
+
+local function menuRowFor(panel, label)
+  for _, row in ipairs(panel.menuRows) do
+    if row.button:getVisible() and row.entry and row.entry.label == label then
+      return row.button
+    end
+  end
+  return nil
+end
+
+T.it("the home page is a MENU and nothing else -- no flight values", function()
+  -- Flight information belongs on the screens you read while flying. This is the screen you
+  -- read while setting the craft up, and mixing the two made both worse.
   local panel = configRig()
   panel.update(model())
-  T.isTrue(panel.elements.status:getText():find("HOVER") ~= nil,
-    "mode: " .. panel.elements.status:getText())
-  T.isTrue(panel.elements.live[1]:getText():find("82.5") ~= nil,
-    "altitude on the first line: " .. panel.elements.live[1]:getText())
-  T.isTrue(panel.elements.live[2]:getText():find("VS") ~= nil,
-    "vertical speed on the second: " .. panel.elements.live[2]:getText())
-  T.isTrue(panel.elements.live[3]:getText():find("2.5") ~= nil,
-    "attitude on the third: " .. panel.elements.live[3]:getText())
-end)
-
-T.it("an alarm is surfaced on the home page", function()
-  local panel = configRig()
-  local m = model()
-  m.telemetry.alarms = { { key = "fuel", level = "warning", msg = "tank 8%" } }
-  panel.update(m)
-  T.isTrue(panel.elements.alarm:getText():find("tank 8%%") ~= nil,
-    "alarm text: " .. panel.elements.alarm:getText())
-  T.eq(panel.elements.alarm:getForeground(), colours.red, "coloured by severity")
-end)
-
-T.it("the monitor page lists every monitor and its assignment", function()
-  local panel, _, cfg = configRig()
-  UiConfig.assign(cfg, "overhead", "monitor_0")
-  panel.refreshMonitors()
-  T.isTrue(panel.elements.monitorRows[1].label:getText():find("monitor_0") ~= nil,
-    "name: " .. panel.elements.monitorRows[1].label:getText())
-  T.isTrue(panel.elements.monitorRows[1].label:getText():find("15x20") ~= nil, "size shown")
-  T.eq(panel.elements.monitorRows[1].button:getText(), "overhead", "assignment shown")
-  T.eq(panel.elements.monitorRows[2].button:getText(), "none", "unassigned shown as none")
-end)
-
-T.it("tapping a monitor row cycles its panel and saves immediately", function()
-  local panel, _, cfg, saved = configRig()
-  panel.refreshMonitors()
-  local row = panel.elements.monitorRows[1]
-  click(row.button)
-  T.eq(UiConfig.panelFor(cfg, "monitor_0"), "overhead", "first tap assigns the overhead panel")
-  T.eq(saved.count, 1, "saved at once, so a reboot cannot lose it")
-  panel.refreshMonitors()
-  click(row.button)
-  T.eq(UiConfig.panelFor(cfg, "monitor_0"), "config", "second tap moves it on")
-end)
-
-T.it("cycling past the last panel unassigns", function()
-  local panel, _, cfg = configRig()
-  panel.refreshMonitors()
-  local row = panel.elements.monitorRows[1]
-  for _ = 1, 5 do
-    click(row.button)
-    panel.refreshMonitors()
+  local labels = menuLabels(panel)
+  T.isTrue(#labels > 0, "the menu is drawn")
+  for _, label in ipairs(labels) do
+    T.isFalse(label:find("ALT ") ~= nil, "no altitude on the menu: " .. label)
+    T.isFalse(label:find("82") ~= nil, "no live numbers on the menu: " .. label)
   end
-  click(row.button)
-  T.isNil(UiConfig.panelFor(cfg, "monitor_0"), "back to unassigned")
+  T.isNil(panel.elements.live, "and there is no live-value block at all")
+end)
+
+T.it("offers every config section the craft has", function()
+  local panel = configRig()
+  local wanted = { "ENGINE", "LIMITS", "LIFT THR", "ACCEL THR", "LAT THR", "VELOCITY",
+                   "ALT+GIMBAL", "FUEL TANK", "OPTICAL", "DISK" }
+  for _, label in ipairs(wanted) do
+    local found = false
+    for _, entry in ipairs(panel.menu) do if entry.label == label then found = true end end
+    T.isTrue(found, "menu has " .. label)
+  end
+  T.eq(#panel.menu, #wanted, "and nothing else")
+end)
+
+T.it("MONITOR ASSIGNMENT IS NOT HERE -- it belongs to the UI computer", function()
+  local panel = configRig()
+  for _, entry in ipairs(panel.menu) do
+    T.isFalse(entry.label:find("MON") ~= nil, "no monitor page: " .. entry.label)
+  end
+  T.isNil(panel.pages.monitors, "and no such page exists")
+end)
+
+T.it("pages the menu rather than dropping entries off a short screen", function()
+  local panel = configRig(15, 10)
+  local shown = menuLabels(panel)
+  T.isTrue(#shown >= 1, "entries fit")
+  T.isTrue(#shown < #panel.menu, "not all of them, on a screen this short")
+  T.isTrue(panel.elements.menuFooter:getText():find("pg 1/") ~= nil,
+    "so it pages: " .. panel.elements.menuFooter:getText())
+end)
+
+T.it("tapping a menu entry opens its page", function()
+  local panel = configRig()
+  panel.update(model())
+  click(menuRowFor(panel, "LIMITS"))
+  T.isTrue(panel.pages.flight:getVisible(), "the limits page is up")
+  T.isFalse(panel.pages.home:getVisible(), "and the menu is not")
 end)
 
 T.it("the disk page reports what the craft sees", function()
@@ -479,12 +486,15 @@ T.it("the disk page reports what the craft sees", function()
   T.isTrue(panel.elements.diskLocal:getText():find("2") ~= nil, "counts shown")
 end)
 
-T.it("the flight page mirrors the craft's limits and sends configSet", function()
+T.it("the limits page mirrors the craft and sends configSet", function()
   local panel, commands = configRig()
   panel.update(model())
   T.isTrue(panel.elements.bank.display:getText():find("20") ~= nil,
     "bank limit: " .. panel.elements.bank.display:getText())
-  T.eq(panel.elements.bank.value, 20, "value tracked for the -/+ buttons")
+  click(panel.elements.bank.plus)
+  T.eq(commands[1].cmd, "configSet", "a nudge sends configSet")
+  T.eq(commands[1].path, "envelope.maxBankDeg", "for the right path")
+  T.eq(commands[1].value, 21, "one step up")
 end)
 
 T.it("shows NO DATA when the link drops", function()
@@ -492,48 +502,371 @@ T.it("shows NO DATA when the link drops", function()
   panel.update(model())
   panel.update({ stale = true, ageMs = math.huge, telemetry = nil })
   T.isTrue(panel.elements.stale:getVisible(), "banner up")
-  T.eq(panel.elements.live[1]:getText(), "", "stale values cleared, not left frozen")
 end)
 
--- ------------------------------------------------------- the dry-run bugs
-
-T.suite("dry-run fixes")
-
-T.it("BUG 1: tapping a monitor row updates its label immediately", function()
-  local panel, _, cfg = configRig()
-  panel.refreshMonitors()
-  local row = panel.elements.monitorRows[1]
-  T.eq(row.button:getText(), "none", "starts unassigned")
-  click(row.button)
-  -- The old code only redrew on RESCAN, so the label under your finger stayed stale.
-  T.eq(row.button:getText(), "overhead", "label changed on the tap, with no rescan")
-end)
-
-T.it("BUG 2: the config panel fits a 1x1 monitor (15x10)", function()
-  local panel = configRig(15, 10)
-  T.notNil(panel.elements.status, "it built a real panel, not the TOO SMALL notice")
-  T.isTrue(panel.narrow, "and took its narrow layout")
-  panel.update(model())
-  T.isTrue(panel.elements.live[1]:getText():find("ALT") ~= nil,
-    "showing live values: " .. panel.elements.live[1]:getText())
-end)
-
-T.it("a genuinely unusable screen still says so", function()
+T.it("still says so when the screen is genuinely unusable", function()
   local panel = configRig(8, 5)
-  T.isNil(panel.elements.status, "no panel built")
+  T.isNil(panel.elements.stale, "no panel built")
   panel.update(model())
 end)
 
-T.it("BUG 3: with no relay the engine button offers SET UP, not a bare dash", function()
+-- ------------------------------------------------------------ engine timings
+
+T.suite("engine feed timings")
+
+T.it("shows the interval in minutes and seconds, not milliseconds", function()
+  -- A blaze cake burns for minutes. "60000ms" is unreadable at a glance and, worse, invites
+  -- the pilot to think in the wrong unit.
+  local panel = configRig()
+  panel.update(model())
+  T.eq(panel.elements.interval:getText(), "1m 00s", "one minute")
+
+  local m = model()
+  m.telemetry.config.engineIntervalMs = 135000
+  panel.update(m)
+  T.eq(panel.elements.interval:getText(), "2m 15s", "two and a quarter minutes")
+
+  m.telemetry.config.engineIntervalMs = 45000
+  panel.update(m)
+  T.eq(panel.elements.interval:getText(), "45s", "under a minute needs no minute field")
+end)
+
+T.it("steps by 1 SECOND and by 15 SECONDS, so an hour is reachable and a second is landable",
+  function()
+    local panel, commands = configRig()
+    panel.update(model())
+    T.eq(#panel.elements.intervalSteps, 4, "four step buttons")
+
+    click(panel.elements.intervalSteps[4])          -- +15
+    T.eq(commands[1].path, "engine.intervalMs", "path")
+    T.eq(commands[1].value, 75000, "+15 s from one minute")
+
+    click(panel.elements.intervalSteps[3])          -- +1
+    T.eq(commands[2].value, 61000, "+1 s from one minute")
+
+    click(panel.elements.intervalSteps[1])          -- -15
+    T.eq(commands[3].value, 45000, "-15 s")
+
+    click(panel.elements.intervalSteps[2])          -- -1
+    T.eq(commands[4].value, 59000, "-1 s")
+  end)
+
+T.it("clamps to the 15 s floor and the 1 hour ceiling", function()
+  local panel, commands = configRig()
+  local m = model()
+  m.telemetry.config.engineIntervalMs = 15000
+  panel.update(m)
+  click(panel.elements.intervalSteps[1])           -- -15 from the floor
+  T.eq(#commands, 0, "already at the floor, so nothing is sent")
+
+  m.telemetry.config.engineIntervalMs = 3600000
+  panel.update(m)
+  click(panel.elements.intervalSteps[4])           -- +15 from the ceiling
+  T.eq(#commands, 0, "already at the ceiling")
+end)
+
+T.it("pulse stays in milliseconds, because that is the unit it lives in", function()
+  local panel = configRig()
+  panel.update(model())
+  T.eq(panel.elements.pulse:getText(), "400ms", "shown in ms")
+end)
+
+-- ------------------------------------------------------------------ slots
+
+T.suite("slot pickers")
+
+local slotAck = nil
+
+local function slotsRig(spec, width, height)
+  mock.reset()
+  _G.peripheral = mock.install()
+  slotAck = nil
+  local monitor = mock.monitor(width or 15, height or 20)
+  local frame = basalt.createFrame()
+  frame:setTerm(monitor)
+  local commands, actions = sent()
+  local assigned = {}
+  local widget = Slots.build(frame, 1, 1, frame:getWidth(), frame:getHeight(), {
+    title = spec.title,
+    slots = spec.slots,
+    candidates = function() return spec.candidates end,
+    assigned = function(slot) return assigned[slot.kind .. ":" .. slot.key] or "" end,
+    set = function(slot, peripheral)
+      actions.setSlot(slot.kind, slot.key, peripheral)
+    end,
+    refusedCmd = "setSlot",
+    lastAck = function() return slotAck end,
+  })
+  return widget, commands, assigned
+end
+
+local LIFT = {
+  title = "LIFT THRUSTERS",
+  slots = ConfigPanel.SECTION_SLOTS.lift.slots,
+  candidates = { "vector_thruster_0", "vector_thruster_1", "vector_thruster_2" },
+}
+
+local function visibleRows(widget)
+  local out = {}
+  for _, row in ipairs(widget.rows) do
+    if row.button:getVisible() then out[#out + 1] = row.button:getText() end
+  end
+  return out
+end
+
+local function rowLabelled(widget, prefix)
+  for _, row in ipairs(widget.rows) do
+    if row.button:getVisible() and row.button:getText():sub(1, #prefix) == prefix then
+      return row.button
+    end
+  end
+  return nil
+end
+
+local function candidateRow(widget, name)
+  for _, row in ipairs(widget.rows) do
+    if row.button:getVisible() and row.name == name then return row.button end
+  end
+  return nil
+end
+
+T.it("lists every slot with what fills it, and how many are done", function()
+  local widget, _, assigned = slotsRig(LIFT)
+  assigned["lift:fl"] = "vector_thruster_0"
+  widget.update()
+  T.eq(widget.elements.title:getText(), "LIFT THRUSTERS", "title")
+  T.eq(widget.elements.subtitle:getText(), "1 of 4 set", "progress, so you can see what is left")
+  local rows = visibleRows(widget)
+  T.eq(#rows, 4, "four corners: " .. table.concat(rows, " | "))
+  T.isTrue(rows[1]:find("FL") ~= nil, "labelled by corner: " .. rows[1])
+  T.isTrue(rows[1]:find("thruster_0") ~= nil, "and shows its peripheral: " .. rows[1])
+  T.isTrue(rows[2]:find("--") ~= nil, "an empty slot says so: " .. rows[2])
+  -- Every row spans the width, so an empty one does not sit centred among filled ones.
+  for _, text in ipairs(rows) do T.eq(#text, 15, "row fills the width: " .. text) end
+end)
+
+T.it("tapping a slot opens the candidates, and tapping one assigns THAT slot", function()
+  local widget, commands = slotsRig(LIFT)
+  widget.update()
+  click(rowLabelled(widget, "RL"))
+  T.eq(widget.page(), "candidates", "moved to the candidate list")
+  T.eq(widget.elements.title:getText(), "LIFT REAR L", "for the slot that was tapped")
+
+  click(candidateRow(widget, "vector_thruster_2"))
+  T.eq(#commands, 1, "one command")
+  T.eq(commands[1].cmd, "setSlot", "the right command")
+  T.eq(commands[1].kind, "lift", "kind")
+  T.eq(commands[1].key, "rl", "the slot that was chosen")
+  T.eq(commands[1].peripheral, "vector_thruster_2", "the candidate that was tapped")
+  T.eq(widget.page(), "slots", "and it returns to the slot list")
+end)
+
+T.it("offers (none) first, so an assignment is always undoable", function()
+  local widget, commands, assigned = slotsRig(LIFT)
+  assigned["lift:fl"] = "vector_thruster_0"
+  widget.update()
+  click(rowLabelled(widget, "FL"))
+  click(candidateRow(widget, ""))
+  T.eq(commands[1].peripheral, "", "cleared")
+end)
+
+T.it("NEVER shows an assignment the craft has not confirmed", function()
+  local widget, commands, assigned = slotsRig(LIFT)
+  widget.update()
+  click(rowLabelled(widget, "FL"))
+  click(candidateRow(widget, "vector_thruster_0"))
+  T.eq(#commands, 1, "the command went out")
+  widget.update()
+  T.eq(widget.elements.subtitle:getText(), "0 of 4 set", "still nothing confirmed")
+  T.isTrue(widget.elements.footer:getText():find("waiting") ~= nil,
+    "and it says it is waiting: " .. widget.elements.footer:getText())
+
+  assigned["lift:fl"] = "vector_thruster_0"       -- the craft reports it
+  widget.update()
+  T.eq(widget.elements.subtitle:getText(), "1 of 4 set", "NOW it counts")
+  T.isFalse(widget.elements.footer:getText():find("waiting") ~= nil, "and stops waiting")
+end)
+
+T.it("shows a refusal instead of silently doing nothing", function()
+  local widget = slotsRig(LIFT)
+  widget.update()
+  slotAck = { ack = false, cmd = "setSlot", detail = {} }
+  widget.update()
+  T.isTrue(widget.elements.footer:getText():find("REFUSED") ~= nil,
+    "footer: " .. widget.elements.footer:getText())
+end)
+
+T.it("says so when the craft can see no candidates at all", function()
+  local widget = slotsRig({ title = "LIFT", slots = ConfigPanel.SECTION_SLOTS.lift.slots,
+                            candidates = {} })
+  widget.update()
+  click(rowLabelled(widget, "FL"))
+  T.isTrue(widget.elements.footer:getText():find("none on network") ~= nil,
+    "footer: " .. widget.elements.footer:getText())
+end)
+
+T.it("pages a long candidate list rather than hiding the tail", function()
+  local many = {}
+  for i = 1, 30 do many[i] = "vector_thruster_" .. i end
+  local widget = slotsRig({ title = "LIFT", slots = ConfigPanel.SECTION_SLOTS.lift.slots,
+                            candidates = many }, 15, 12)
+  widget.update()
+  click(rowLabelled(widget, "FL"))
+  T.isTrue(widget.elements.next:getVisible(), "paging offered")
+  T.isTrue(widget.elements.footer:getText():find("pg 1/") ~= nil,
+    "page indicator: " .. widget.elements.footer:getText())
+end)
+
+T.it("the lateral page names which pair steers and which is precision-only", function()
+  local slots = ConfigPanel.SECTION_SLOTS.lateral.slots
+  local byKey = {}
+  for _, slot in ipairs(slots) do byKey[slot.key] = slot end
+  T.eq(byKey.fl.hint, "steers", "the front pair steers")
+  T.eq(byKey.rr.hint, "precision", "the rear pair is precision-only")
+end)
+
+T.it("the down-facing laser lives with ALTITUDE, not with the proximity rays", function()
+  -- It is the radar altimeter. Grouping it with the forward/back/left/right rays would put it
+  -- on the page about obstacles rather than the page about height.
+  local attitude = ConfigPanel.SECTION_SLOTS.attitude.slots
+  local found = false
+  for _, slot in ipairs(attitude) do
+    if slot.kind == "optical" and slot.key == "down" then found = true end
+  end
+  T.isTrue(found, "the radar is on the altitude page")
+  for _, slot in ipairs(ConfigPanel.SECTION_SLOTS.optical.slots) do
+    T.isFalse(slot.key == "down", "and not on the optical page")
+  end
+end)
+
+-- ------------------------------------------------ config panel slot sections
+
+T.suite("config panel hardware pages")
+
+T.it("every hardware section is wired to the craft's candidate lists", function()
+  local panel = configRig()
+  panel.update(model())
+  for _, name in ipairs({ "lift", "accel", "lateral", "velocity", "attitude", "optical",
+                          "engine", "tank" }) do
+    T.notNil(panel.sections[name], "section " .. name .. " exists")
+  end
+end)
+
+T.it("a thruster page offers the thrusters the craft reported", function()
+  local panel, commands = configRig()
+  local m = model()
+  m.telemetry.candidates.thrusters = { "vector_thruster_0", "vector_thruster_1" }
+  panel.update(m)
+  local section = panel.sections.lift
+  click(section.rows[1].button)                   -- FL
+  local names = {}
+  for _, row in ipairs(section.rows) do
+    if row.button:getVisible() then names[#names + 1] = row.name end
+  end
+  T.isTrue(#names >= 3, "(none) plus both thrusters, got " .. #names)
+  click(section.rows[2].button)                   -- the first real candidate
+  T.eq(commands[1].cmd, "setSlot", "sends setSlot")
+  T.eq(commands[1].kind, "lift", "for a lift thruster")
+end)
+
+T.it("the engine page assigns the relay and the vault with their own commands", function()
+  local panel, commands = configRig()
+  panel.update(model())
+  local section = panel.sections.engine
+  click(section.rows[1].button)                   -- RLY
+  click(section.rows[2].button)                   -- first candidate
+  T.eq(commands[1].cmd, "setEngineRelay", "the relay has its own command")
+
+  section.showSlots()
+  click(section.rows[2].button)                   -- VLT
+  click(section.rows[2].button)                   -- first candidate
+  T.eq(commands[2].cmd, "setVault", "and so does the vault")
+end)
+
+T.it("the tank page assigns the tank and edits its scale", function()
+  local panel, commands = configRig()
+  panel.update(model())
+  T.eq(panel.elements.capacity:getText(), "max auto", "0 means trust the tank")
+  click(panel.elements.capacityPlus)
+  T.eq(commands[1].cmd, "configSet", "a nudge sends configSet")
+  T.eq(commands[1].path, "hardware.tanks.1.capacityMb", "for the tank scale")
+end)
+
+T.it("the tank scale says SET A TANK rather than showing dead buttons", function()
+  local panel, commands = configRig()
+  local m = model()
+  m.telemetry.config.tankCapacityMb = nil
+  panel.update(m)
+  T.isTrue(panel.elements.capacity:getText():find("set a tank") ~= nil,
+    "says what is missing: " .. panel.elements.capacity:getText())
+  click(panel.elements.capacityPlus)
+  T.eq(#commands, 0, "and the buttons genuinely have nothing to send")
+end)
+
+-- ------------------------------------------------------------ terminal panel
+
+T.suite("terminal monitor assignment")
+
+local function terminalRig(width, height)
+  mock.reset()
+  _G.peripheral = mock.install()
+  local cfg = UiConfig.withDefaults({})
+  local monitor = mock.monitor(width or 51, height or 19)
+  local frame = basalt.createFrame()
+  frame:setTerm(monitor)
+  local monitors = Monitors.new(cfg, quietLog(), basalt)
+  local saved = { count = 0 }
+  local panel = Terminal.build(frame, {
+    cfg = cfg, monitors = monitors, log = quietLog(),
+    savePanels = function() saved.count = saved.count + 1 end,
+  })
+  return panel, cfg, saved
+end
+
+T.it("lists every monitor on the network with its size and assignment", function()
+  local panel, cfg = terminalRig()
+  UiConfig.assign(cfg, "overhead", "monitor_0")
+  panel.refresh()
+  T.isTrue(panel.rows[1].label:getText():find("monitor_0") ~= nil,
+    "name: " .. panel.rows[1].label:getText())
+  T.isTrue(panel.rows[1].label:getText():find("15x20") ~= nil, "size shown")
+  T.eq(panel.rows[1].button:getText(), "overhead", "assignment shown")
+  T.eq(panel.rows[2].button:getText(), "none", "unassigned shown as none")
+end)
+
+T.it("tapping cycles the assignment, saves at once, and redraws on the tap", function()
+  local panel, cfg, saved = terminalRig()
+  panel.refresh()
+  local button = panel.rows[1].button
+  T.eq(button:getText(), "none", "starts unassigned")
+  click(button)
+  T.eq(UiConfig.panelFor(cfg, "monitor_0"), "overhead", "first tap assigns the overhead panel")
+  T.eq(saved.count, 1, "saved at once, so a reboot cannot lose it")
+  T.eq(button:getText(), "overhead", "and the label changed under the finger")
+  click(button)
+  T.eq(UiConfig.panelFor(cfg, "monitor_0"), "config", "second tap moves it on")
+end)
+
+T.it("cycling past the last panel unassigns", function()
+  local panel, cfg = terminalRig()
+  panel.refresh()
+  for _ = 1, #UiConfig.PANEL_ORDER + 1 do click(panel.rows[1].button) end
+  T.isNil(UiConfig.panelFor(cfg, "monitor_0"), "back to unassigned")
+end)
+
+-- ---------------------------------------------------- overhead, config gone
+
+T.suite("overhead panel")
+
+T.it("with no relay the engine button says CONFIG and sends nothing", function()
   local panel, commands = overheadRig()
   local m = model()
   m.telemetry.engine = { available = false, master = false }
   panel.update(m)
   T.eq(panel.elements.engineState:getText(), "NO RELAY", "state")
-  T.eq(panel.elements.engineButton:getText(), "SET UP", "the button says what to do")
+  T.eq(panel.elements.engineButton:getText(), "CONFIG", "the button says where to go")
   click(panel.elements.engineButton)
   T.eq(#commands, 0, "no pointless command sent")
-  T.isTrue(panel.settings:getVisible(), "it opened the config page instead")
 end)
 
 T.it("the manual feed button is labelled for what it does", function()
@@ -556,293 +889,13 @@ T.it("an unconfigured tank and vault point at the fix", function()
     "vault: " .. panel.elements.vault:getText())
 end)
 
-T.it("tank max shows auto when there is no configured capacity", function()
+T.it("HAS NO CONFIG PAGE -- every setting moved to the config monitor", function()
   local panel = overheadRig()
-  panel.update(model())
-  T.eq(panel.elements.capacity.display:getText(), "auto",
-    "0 means trust the tank own reading")
+  T.isNil(panel.settings, "no settings frame")
+  T.isNil(panel.hardware, "no hardware picker")
+  T.isNil(panel.elements.pulse, "no timing rows")
+  T.isNil(panel.elements.capacity, "no tank scale row")
 end)
-
-T.it("tank max says SET TANK rather than showing -- over two dead buttons", function()
-  -- With no tank assigned there is no capacity to edit, and -/+ silently refuse. A row that
-  -- just reads "--" is indistinguishable from a broken button, which is how it was reported.
-  local panel, commands = overheadRig()
-  local m = model()
-  m.telemetry.config.tankCapacityMb = nil
-  panel.update(m)
-  T.eq(panel.elements.capacity.display:getText(), "set tank", "says what is missing")
-  click(panel.elements.capacity.plus)
-  T.eq(#commands, 0, "and the buttons genuinely have nothing to send")
-end)
-
--- ------------------------------------------------------------------ hardware
-
-T.suite("hardware assignment")
-
-local hardwareAck = nil
-
-local function hardwareRig(width, height)
-  mock.reset()
-  _G.peripheral = mock.install()
-  hardwareAck = nil
-  -- A REGISTERED monitor, not a bare window: the rapid-tap test dispatches monitor_touch on
-  -- the frame, and BaseFrame only routes it if peripheral.getName(monitor) matched.
-  local monitor = peripheral.wrap("monitor_0")
-  if width or height then monitor = mock.monitor(width or 15, height or 12) end
-  local frame = basalt.createFrame()
-  frame:setTerm(monitor)
-  local commands, actions = sent()
-  local widget = Hardware.build(frame, 1, 1, frame:getWidth(), frame:getHeight(),
-    { actions = actions, log = quietLog(), lastAck = function() return hardwareAck end })
-  return widget, commands, frame
-end
-
---- The candidate rows currently drawn, as text. `(none)` is always first.
-local function rowTexts(widget)
-  local out = {}
-  for _, entry in ipairs(widget.elements.rows) do
-    if entry.button:getVisible() then out[#out + 1] = entry.button:getText() end
-  end
-  return out
-end
-
---- Find the drawn row offering `name`, so a test taps what the pilot would tap.
-local function rowFor(widget, name)
-  for _, entry in ipairs(widget.elements.rows) do
-    if entry.button:getVisible() and entry.name == name then return entry.button end
-  end
-  return nil
-end
-
-T.it("shows the engine relay first, and that nothing is set yet", function()
-  local widget = hardwareRig()
-  widget.update(model())
-  T.eq(widget.elements.title:getText(), "ENGINE RELAY", "first item")
-  T.isTrue(widget.elements.value:getText():find("not set") ~= nil,
-    "value: " .. widget.elements.value:getText())
-  T.isTrue(widget.elements.count:getText():find("2 found") ~= nil,
-    "offers the relays the craft reported: " .. widget.elements.count:getText())
-end)
-
-T.it("LISTS every candidate as its own row, so you can see what you are choosing", function()
-  local widget = hardwareRig()
-  widget.update(model())
-  local rows = rowTexts(widget)
-  T.eq(#rows, 3, "(none) plus two relays, got: " .. table.concat(rows, " | "))
-  T.isTrue(rows[1]:find("none") ~= nil, "first row unassigns: " .. rows[1])
-  T.notNil(rowFor(widget, "redstone_relay_0"), "relay 0 offered")
-  T.notNil(rowFor(widget, "redstone_relay_1"), "relay 1 offered")
-end)
-
-T.it("tapping a candidate row assigns THAT one, not the next in a cycle", function()
-  local widget, commands = hardwareRig()
-  widget.update(model())
-  click(rowFor(widget, "redstone_relay_1"))
-  T.eq(#commands, 1, "one command")
-  T.eq(commands[1].cmd, "setEngineRelay", "the right command")
-  T.eq(commands[1].peripheral, "redstone_relay_1", "the row that was tapped")
-  T.eq(commands[1].side, "top", "with a side")
-end)
-
-T.it("tapping (none) unassigns, so a wrong pick is always undoable", function()
-  local widget, commands = hardwareRig()
-  local m = model()
-  m.telemetry.config.engineRelay = "redstone_relay_0"
-  widget.update(m)
-  click(rowFor(widget, ""))
-  T.eq(commands[1].peripheral, "", "cleared")
-end)
-
-T.it("marks the row that is currently assigned", function()
-  local widget = hardwareRig()
-  local m = model()
-  m.telemetry.config.engineRelay = "redstone_relay_1"
-  widget.update(m)
-  T.eq(rowFor(widget, "redstone_relay_1"):getBackground(), Theme.ok, "the assigned row stands out")
-  T.eq(rowFor(widget, "redstone_relay_0"):getBackground(), Theme.buttonBg, "the others do not")
-end)
-
-T.it("NEVER shows an assignment the craft has not confirmed", function()
-  -- No optimistic feedback anywhere in this cockpit: a panel that draws what it ASKED for is
-  -- lying whenever the request is refused, dropped, or the link is down -- and a pilot cannot
-  -- tell the difference. The gauge reads the craft, never the request.
-  local widget, commands = hardwareRig(30, 12)
-  widget.update(model())
-  click(rowFor(widget, "redstone_relay_0"))
-  T.eq(#commands, 1, "the command went out")
-  T.isTrue(widget.elements.value:getText():find("not set") ~= nil,
-    "but the value line still reports the craft's state: " .. widget.elements.value:getText())
-  T.eq(rowFor(widget, "redstone_relay_0"):getBackground(), Theme.buttonBg,
-    "and no row is marked as assigned yet")
-end)
-
-T.it("says it is WAITING, which is a fact about us rather than about the craft", function()
-  local widget = hardwareRig(30, 12)
-  widget.update(model())
-  click(rowFor(widget, "redstone_relay_0"))
-  T.isTrue(widget.elements.count:getText():find("waiting") ~= nil,
-    "tap acknowledged: " .. widget.elements.count:getText())
-
-  -- ...and it clears only when the craft actually reports the new assignment.
-  local m = model()
-  m.telemetry.config.engineRelay = "redstone_relay_0"
-  widget.update(m)
-  T.isFalse(widget.elements.count:getText():find("waiting") ~= nil, "cleared on confirmation")
-  T.eq(widget.elements.value:getText(), "redstone_relay_0", "and NOW the value line moves")
-end)
-
-T.it("keeps waiting when the craft never confirms", function()
-  local widget = hardwareRig(30, 12)
-  widget.update(model())
-  click(rowFor(widget, "redstone_relay_0"))
-  for _ = 1, 5 do widget.update(model()) end          -- frames that never carry the change
-  T.isTrue(widget.elements.count:getText():find("waiting") ~= nil,
-    "still waiting, not quietly pretending it worked")
-  T.isTrue(widget.elements.value:getText():find("not set") ~= nil, "value unchanged")
-end)
-
-T.it("SIDE cycles the relay side", function()
-  local widget, commands = hardwareRig()
-  local m = model()
-  m.telemetry.config.engineRelay = "redstone_relay_0"
-  m.telemetry.config.engineSide = "top"
-  widget.update(m)
-  click(widget.elements.side)
-  T.eq(commands[1].cmd, "setEngineRelay", "re-sends with the new side")
-  T.isFalse(commands[1].side == "top", "side changed to " .. tostring(commands[1].side))
-end)
-
-T.it("the tabs switch item, and each one lists its own hardware", function()
-  local widget, commands = hardwareRig()
-  widget.update(model())
-
-  click(widget.elements.tabs[2])
-  T.eq(widget.elements.title:getText(), "FUEL TANK", "second item")
-  click(rowFor(widget, "create:fluid_tank_0"))
-  T.eq(commands[1].cmd, "setTank", "assigns a tank")
-  T.eq(commands[1].peripheral, "create:fluid_tank_0", "the candidate the craft reported")
-
-  click(widget.elements.tabs[3])
-  T.eq(widget.elements.title:getText(), "ENGINE VAULT", "third item")
-  click(rowFor(widget, "create:item_vault_0"))
-  T.eq(commands[2].cmd, "setVault", "assigns a vault")
-end)
-
-T.it("RAPID CONSECUTIVE TAPS all register -- the bug that made PICK look dead", function()
-  -- Regression guard. Basalt turns a second click on the same element within 0.4 s into
-  -- mouse_double_click, so an onClick-only button silently ate it. This drives the REAL
-  -- monitor_touch path with no delay at all: every tap must produce its command.
-  local widget, commands, frame = hardwareRig()
-  widget.update(model())
-
-  tap(frame, widget.elements.tabs[2])
-  T.eq(widget.elements.title:getText(), "FUEL TANK", "tab tap 1 landed")
-  tap(frame, widget.elements.tabs[3])
-  T.eq(widget.elements.title:getText(), "ENGINE VAULT", "tab tap 2 landed, back to back")
-  tap(frame, widget.elements.tabs[2])
-  T.eq(widget.elements.title:getText(), "FUEL TANK", "tab tap 3 landed")
-
-  local target = rowFor(widget, "create:fluid_tank_0")
-  tap(frame, target)
-  tap(frame, target)
-  tap(frame, target)
-  T.eq(#commands, 3, "three taps, three commands -- none swallowed")
-  T.eq(commands[3].cmd, "setTank", "and the last one is still the right command")
-end)
-
-T.it("the SIDE button only appears for the relay", function()
-  local widget = hardwareRig()
-  widget.update(model())
-  T.isTrue(widget.elements.side:getVisible(), "shown for the relay")
-  widget.select(2)
-  T.isFalse(widget.elements.side:getVisible(), "hidden for the tank")
-end)
-
-T.it("says so when the craft reports no candidates", function()
-  local widget = hardwareRig()
-  local m = model()
-  m.telemetry.candidates = { relays = {}, tanks = {}, vaults = {} }
-  widget.update(m)
-  T.isTrue(widget.elements.count:getText():find("none on network") ~= nil,
-    "count line: " .. widget.elements.count:getText())
-  local rows = rowTexts(widget)
-  T.eq(#rows, 1, "only the (none) row is offered")
-end)
-
-T.it("pages when there are more candidates than rows", function()
-  local widget = hardwareRig(15, 8)          -- 2 list rows: 3 entries need 2 pages
-  widget.update(model())
-  T.isTrue(widget.elements.count:getText():find("pg 1/2") ~= nil,
-    "page indicator: " .. widget.elements.count:getText())
-  T.isTrue(widget.elements.down:getVisible(), "paging offered")
-  click(widget.elements.down)
-  T.eq(widget.page(), 2, "moved on")
-  T.notNil(rowFor(widget, "redstone_relay_1"), "the last candidate is reachable")
-end)
-
-T.it("does not offer paging when everything fits", function()
-  local widget = hardwareRig()
-  widget.update(model())
-  T.isFalse(widget.elements.down:getVisible(), "no paging buttons cluttering the screen")
-end)
-
-T.it("shows when the craft REFUSED an assignment", function()
-  -- Otherwise a rejected command is invisible: the value reverts on the next frame and the
-  -- pilot has no idea whether the tap even arrived.
-  local widget = hardwareRig()
-  widget.update(model())
-  hardwareAck = { ack = false, cmd = "setEngineRelay", detail = {} }
-  widget.update(model())
-  T.isTrue(widget.elements.count:getText():find("REFUSED") ~= nil,
-    "count line: " .. widget.elements.count:getText())
-  hardwareAck = { ack = true, cmd = "setEngineRelay" }
-  widget.update(model())
-  T.isFalse(widget.elements.count:getText():find("REFUSED") ~= nil, "and it clears")
-end)
-
-T.it("shows what is already assigned", function()
-  local widget = hardwareRig(30, 12)
-  local m = model()
-  m.telemetry.config.engineRelay = "redstone_relay_1"
-  m.telemetry.config.engineSide = "back"
-  widget.update(m)
-  T.eq(widget.elements.value:getText(), "redstone_relay_1", "current assignment in full")
-  T.isTrue(widget.elements.side:getText():find("back") ~= nil,
-    "and its side is on the button: " .. widget.elements.side:getText())
-end)
-
-T.it("a name too long for the screen keeps its TAIL, not its head", function()
-  -- 15 columns cannot hold "redstone_relay_1". Chopping the end would render relay_0 and
-  -- relay_1 identically, which is the one thing the display must not do.
-  local widget = hardwareRig(15, 12)
-  local m = model()
-  m.telemetry.config.engineRelay = "redstone_relay_1"
-  widget.update(m)
-  local shown = widget.elements.value:getText()
-  T.isTrue(shown:sub(-1) == "1", "the disambiguating character survived: " .. shown)
-  T.isTrue(#shown <= 15, "and it fits")
-end)
-
-T.it("the config panel hosts the same widget", function()
-  local panel = configRig()
-  T.notNil(panel.hardware, "hardware page present")
-  panel.update(model())
-  T.eq(panel.hardware.elements.title:getText(), "ENGINE RELAY", "and it is live")
-end)
-
-T.it("the overhead panel hosts it too, on the real 1x2 screen", function()
-  -- The overhead monitor is where the pilot starts the engine, so "which relay" has to be
-  -- answerable there. If the picker does not fit, that page silently sends you elsewhere.
-  local panel = overheadRig(15, 20)
-  panel.update(model())
-  T.notNil(panel.hardware, "the picker fits the overhead monitor")
-  local rows = 0
-  for _, entry in ipairs(panel.hardware.elements.rows) do
-    if entry.button:getVisible() then rows = rows + 1 end
-  end
-  T.isTrue(rows >= 3, "and it lists (none) plus both relays, got " .. rows)
-end)
-
 -- ------------------------------------------------------- incremental sync
 
 T.suite("monitor sync")

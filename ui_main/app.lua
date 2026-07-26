@@ -17,6 +17,7 @@ local Link = require("lib.link")
 local Monitors = require("lib.monitors")
 local Overhead = require("ui.overhead")
 local ConfigPanel = require("ui.config_panel")
+local Terminal = require("ui.terminal")
 local Log = require("shared.log")
 
 local basalt = require("basalt")
@@ -71,6 +72,9 @@ function App:buildActions()
     end,
     setTank = function(peripheral) link:send({ cmd = "setTank", peripheral = peripheral or "" }) end,
     setVault = function(peripheral) link:send({ cmd = "setVault", peripheral = peripheral or "" }) end,
+    setSlot = function(kind, key, peripheral)
+      link:send({ cmd = "setSlot", kind = kind, key = key, peripheral = peripheral or "" })
+    end,
     configSave = function() link:send({ cmd = "configSave" }) end,
     diskSave = function() link:send({ cmd = "diskSave" }) end,
     diskLoad = function() link:send({ cmd = "diskLoad" }) end,
@@ -110,32 +114,23 @@ end
 function App:syncPanels()
   local changed = self.monitors:sync(self:builders())
 
-  -- The bootstrap case: with no monitor assigned to the config panel there would be no way to
-  -- assign one. So the config panel is also built on this computer's own terminal, which is
-  -- always available. Re-evaluated on every sync, because assigning (or unassigning) the config
-  -- panel is exactly when this changes.
-  local wantTerminal = (self.monitors:count("config") == 0)
-  if wantTerminal and not self.terminalPanel then
+  -- This computer's own terminal ALWAYS runs the monitor-assignment screen. Which panel shows
+  -- on which monitor is a property of this computer rather than of the craft, and the terminal
+  -- is the one screen that exists before anything has been assigned -- so it is both the right
+  -- home for that setting and the only possible bootstrap.
+  if not self.terminalPanel then
     local frame = basalt.createFrame()
     frame:setTerm(term.current())
-    local ok, instance = pcall(ConfigPanel.build, frame, self:panelOptions())
+    local ok, instance = pcall(Terminal.build, frame, self:panelOptions())
     if ok then
       self.terminalFrame = frame
       self.terminalPanel = instance
-      self.log:warn("no monitor assigned to the config panel: showing it on the terminal")
     else
-      self.log:error("terminal config panel failed to build: %s", tostring(instance))
+      self.log:error("terminal panel failed to build: %s", tostring(instance))
     end
-  elseif not wantTerminal and self.terminalPanel then
-    -- A monitor now owns the config panel, so give the terminal back.
-    pcall(function() basalt.setActiveFrame(self.terminalFrame, false) end)
-    self.terminalFrame, self.terminalPanel = nil, nil
-    pcall(function()
-      term.setBackgroundColour(colours.black)
-      term.clear()
-      term.setCursorPos(1, 1)
-      print("EasyHover ui_main -- config panel is on a monitor")
-    end)
+  elseif self.terminalPanel.refresh then
+    -- A monitor may have appeared or been reassigned; the list has to follow.
+    pcall(self.terminalPanel.refresh)
   end
 
   self.rebuildPending = false
