@@ -222,6 +222,94 @@
       ["status"] = "released",
       ["title"] = "Flight computer",
     },
+    ["gps_beacon"] = {
+      ["blurb"] = "One of four world-anchored hosts that let the craft locate itself. Answers CC's own gps.locate() pings and reports link status and constellation quality.",
+      ["configs"] = {
+        "/eh_gps_beacon_config.tbl",
+      },
+      ["dirs"] = {
+        "gps_beacon",
+        "shared",
+      },
+      ["entry"] = "gps_beacon/startup.lua",
+      ["files"] = {
+        {
+          ["dst"] = "basalt.lua",
+          ["size"] = 305968,
+          ["src"] = "vendor/basalt-full.lua",
+          ["sum"] = "96ae5255",
+        },
+        {
+          ["dst"] = "gps_beacon/app.lua",
+          ["size"] = 5242,
+          ["src"] = "gps_beacon/app.lua",
+          ["sum"] = "70bd5624",
+        },
+        {
+          ["dst"] = "gps_beacon/lib/config.lua",
+          ["size"] = 4869,
+          ["src"] = "gps_beacon/lib/config.lua",
+          ["sum"] = "b5b06a21",
+        },
+        {
+          ["dst"] = "gps_beacon/lib/geometry.lua",
+          ["size"] = 6270,
+          ["src"] = "gps_beacon/lib/geometry.lua",
+          ["sum"] = "8f285205",
+        },
+        {
+          ["dst"] = "gps_beacon/lib/host.lua",
+          ["size"] = 6449,
+          ["src"] = "gps_beacon/lib/host.lua",
+          ["sum"] = "1fa715f6",
+        },
+        {
+          ["dst"] = "gps_beacon/lib/mesh.lua",
+          ["size"] = 6189,
+          ["src"] = "gps_beacon/lib/mesh.lua",
+          ["sum"] = "c319c501",
+        },
+        {
+          ["dst"] = "gps_beacon/startup.lua",
+          ["size"] = 514,
+          ["src"] = "gps_beacon/startup.lua",
+          ["sum"] = "5c2f94ce",
+        },
+        {
+          ["dst"] = "gps_beacon/ui/panel.lua",
+          ["size"] = 7806,
+          ["src"] = "gps_beacon/ui/panel.lua",
+          ["sum"] = "3b65707c",
+        },
+        {
+          ["dst"] = "gps_beacon/ui/theme.lua",
+          ["size"] = 4183,
+          ["src"] = "gps_beacon/ui/theme.lua",
+          ["sum"] = "97585227",
+        },
+        {
+          ["dst"] = "shared/log.lua",
+          ["size"] = 2735,
+          ["src"] = "shared/log.lua",
+          ["sum"] = "d5d9781f",
+        },
+        {
+          ["dst"] = "shared/util.lua",
+          ["size"] = 2152,
+          ["src"] = "shared/util.lua",
+          ["sum"] = "29c90f91",
+        },
+        {
+          ["dst"] = "startup.lua",
+          ["size"] = 308,
+          ["src"] = "launchers/gps_beacon.lua",
+          ["sum"] = "a173a935",
+        },
+      },
+      ["luaPath"] = "/gps_beacon",
+      ["status"] = "released",
+      ["title"] = "GPS beacon",
+    },
     ["ground"] = {
       ["blurb"] = "Ender-modem telemetry receiver. Advisory only -- it can never command the craft.",
       ["configs"] = {
@@ -420,5 +508,5 @@
     ["size"] = 36872,
     ["sum"] = "305c58ce",
   },
-  ["version"] = "213c011c",
+  ["version"] = "98e0b735",
 }

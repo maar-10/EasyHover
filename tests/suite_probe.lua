@@ -272,6 +272,34 @@ elseif phase == "uimain" then
   check(stateField("version") == versionBefore, "an up-to-date re-run changes nothing",
     tostring(stateField("version")))
 
+elseif phase == "beacon" then
+  -- The third released role, on a BARE computer. A beacon is a standalone box in the world, so
+  -- nothing about the craft's install applies to it.
+  runSuite("gps_beacon")
+  check(stateField("role") == "gps_beacon", "install record names the role",
+    tostring(stateField("role")))
+  check(fs.exists("/startup.lua"), "launcher installed")
+  check(fs.exists("/gps_beacon/app.lua"), "role files installed")
+  check(fs.exists("/gps_beacon/lib/host.lua"), "the GPS host is there")
+  check(fs.exists("/gps_beacon/lib/geometry.lua"), "and the constellation maths")
+  check(fs.exists("/gps_beacon/ui/panel.lua"), "and its screen")
+  check(fs.exists("/shared/log.lua"), "the shared tree landed")
+  check(fs.exists("/basalt.lua"), "Basalt installed for the terminal UI")
+  check(not fs.exists("/flight/app.lua"), "no flight files on a beacon")
+  check(#noStagingLeftBehind() == 0, "no staging files left behind")
+
+  -- It must be RUNNABLE, not merely present: load the entry chain and see it resolve.
+  local ok, err = pcall(function()
+    local env = setmetatable({ require = require, package = package }, { __index = _G })
+    package.path = "/gps_beacon/?.lua;/gps_beacon/?/init.lua;" .. package.path
+    local Config = require("lib.config")
+    local cfg = Config.withDefaults({ position = { x = 1, y = 2, z = 3 } })
+    local Geometry = require("lib.geometry")
+    local a = Geometry.assess({ cfg.position })
+    return a ~= nil
+  end)
+  check(ok, "the installed modules load and run", tostring(err))
+
 else
   fail("unknown phase: " .. tostring(phase))
 end

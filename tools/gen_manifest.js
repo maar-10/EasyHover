@@ -56,6 +56,19 @@ const ROLES = {
     luaPath: "/ui_main",
     configs: ["/eh_ui_main_config.tbl"],
   },
+  gps_beacon: {
+    title: "GPS beacon",
+    blurb: "One of four world-anchored hosts that let the craft locate itself. Answers CC's own"
+      + " gps.locate() pings and reports link status and constellation quality.",
+    status: "released",
+    dirs: ["gps_beacon", "shared"],
+    // Basalt for the beacon's own terminal screen; same pinned build as every other role.
+    extraFiles: [{ src: "vendor/basalt-full.lua", dst: "basalt.lua" }],
+    launcher: { src: "launchers/gps_beacon.lua", dst: "startup.lua" },
+    entry: "gps_beacon/startup.lua",
+    luaPath: "/gps_beacon",
+    configs: ["/eh_gps_beacon_config.tbl"],
+  },
   nav: {
     title: "Navigation computer",
     blurb: "Waypoints, routes, map UI, position fixing (GPS / radar). Feeds the flight computer.",

@@ -448,4 +448,159 @@ T.it("counts what each source has done, for the diagnostics page", function()
   T.eq(stats.sources[2].ok, 1, "the one that worked is counted too")
 end)
 
+
+-- ------------------------------------------------------------------ sources
+
+T.suite("position sources")
+
+local Sources = require("lib.sources")
+
+T.it("the GPS source wraps gps.locate and survives it failing", function()
+  local good = Sources.gps({ locate = function() return 10, 70, -20 end })
+  local x, y, z = good.locate()
+  T.eq(x, 10); T.eq(y, 70); T.eq(z, -20)
+
+  local absent = Sources.gps({ locate = function() return nil end })
+  T.isNil(absent.locate(), "no constellation, no fix")
+
+  local broken = Sources.gps({ locate = function() error("no modem") end })
+  T.isNil(broken.locate(), "an exploding locate is just a missing fix")
+end)
+
+T.it("GPS declares its cost honestly, because it BLOCKS", function()
+  -- The reason nav gets its own computer. A two-second block inside the flight loop would
+  -- wreck the dt discipline the whole control design rests on.
+  local spec = Sources.gps({})
+  T.isTrue(spec.costMs >= 1000, "declared as expensive: " .. spec.costMs)
+  T.isTrue(spec.backoffMs >= spec.costMs, "and backed off for at least as long")
+end)
+
+T.it("the radar source accepts a keyed OR a list position", function()
+  local keyed = Sources.radar({ find = function()
+    return { getPosition = function() return { x = 1, y = 2, z = 3 } end }
+  end })
+  local x, y, z = keyed.locate()
+  T.eq(x, 1); T.eq(z, 3)
+
+  local list = Sources.radar({ find = function()
+    return { getPosition = function() return { 4, 5, 6 } end }
+  end })
+  local lx, _, lz = list.locate()
+  T.eq(lx, 4, "a list answer works too -- the mod's shape is not documented")
+  T.eq(lz, 6)
+end)
+
+T.it("the radar source is a BACKUP: lower priority than GPS by default", function()
+  T.isTrue(Sources.radar({}).priority > Sources.gps({}).priority,
+    "GPS is tried first")
+end)
+
+T.it("no radar means no fix, not an error", function()
+  local none = Sources.radar({ find = function() return nil end })
+  T.isNil(none.locate())
+  local noMethod = Sources.radar({ find = function() return {} end })
+  T.isNil(noMethod.locate(), "a radar without getPosition is just absent")
+end)
+
+T.it("builds sources in the ORDER the config lists them", function()
+  local built = Sources.build({ positionSources = { "radar", "gps" } }, quietLog(),
+    { gps = function() return 1, 2, 3 end })
+  T.eq(#built, 2)
+  T.eq(built[1].name, "radar", "config order wins over the defaults")
+  T.isTrue(built[1].priority < built[2].priority, "and becomes the priority")
+end)
+
+T.it("REPORTS a typo'd source name rather than silently having none", function()
+  local built, problems = Sources.build({ positionSources = { "gsp" } }, quietLog())
+  T.eq(#built, 0)
+  T.isTrue(table.concat(problems, " "):find("unknown position source") ~= nil,
+    "named: " .. table.concat(problems, " "))
+  T.isTrue(table.concat(problems, " "):find("cannot fix") ~= nil,
+    "and says what it means")
+end)
+
+T.it("an empty source list is reported too", function()
+  local _, problems = Sources.build({ positionSources = {} }, quietLog())
+  T.isTrue(#problems > 0, "not silent")
+end)
+
+-- ------------------------------------------------------------------- relay
+
+T.suite("nav fix relay")
+
+local Relay = require("lib.relay")
+
+local function relayRig()
+  local cfg = { wiredModem = "", enderModem = "", navFixProtocol = "eh_navfix" }
+  return Relay.new(cfg, quietLog()), cfg
+end
+
+T.it("refuses to publish with no wired modem", function()
+  local relay = relayRig()
+  local ok, err = relay:publish({ x = 1, y = 2, z = 3 })
+  T.isFalse(ok)
+  T.isTrue(tostring(err):find("wired") ~= nil, err)
+end)
+
+T.it("THE PAYLOAD CARRIES AGE, SOURCE AND QUALITY, not just coordinates", function()
+  -- A bare x/y/z forces every reader to trust it, and the one thing we know about a position is
+  -- that sometimes it is stale.
+  local relay = relayRig()
+  relay.wired = "modem_0"
+  local sent = {}
+  local realBroadcast = rednet.broadcast
+  rednet.broadcast = function(payload, protocol) sent[#sent + 1] = { payload, protocol } end
+
+  relay:publish({ x = 10, y = 70, z = -20, source = "gps", quality = 1,
+                  ageMs = 120, dead = false })
+  rednet.broadcast = realBroadcast
+
+  T.eq(#sent, 1, "published")
+  local payload = sent[1][1]
+  T.eq(sent[1][2], "eh_navfix", "on the protocol the flight computer already listens for")
+  T.eq(payload.proto, "ehnav1", "tagged, so a foreign message can be rejected")
+  T.eq(payload.position.x, 10)
+  T.eq(payload.position.source, "gps")
+  T.eq(payload.position.ageMs, 120)
+  T.isFalse(payload.position.dead)
+  T.eq(payload.seq, 1, "and sequenced")
+end)
+
+T.it("a dead-reckoned position is published AS SUCH", function()
+  local relay = relayRig()
+  relay.wired = "modem_0"
+  local captured
+  local realBroadcast = rednet.broadcast
+  rednet.broadcast = function(payload) captured = payload end
+  relay:publish({ x = 1, y = 2, z = 3, source = "estimate", quality = 0.4,
+                  ageMs = 4000, dead = true })
+  rednet.broadcast = realBroadcast
+  T.isTrue(captured.position.dead, "flagged, so guidance can refuse it")
+  T.eq(captured.position.source, "estimate")
+end)
+
+T.it("extra fields ride along without overwriting the payload's own", function()
+  local relay = relayRig()
+  relay.wired = "modem_0"
+  local captured
+  local realBroadcast = rednet.broadcast
+  rednet.broadcast = function(payload) captured = payload end
+  relay:publish({ x = 1, y = 2, z = 3 }, { heading = 42, proto = "hijack" })
+  rednet.broadcast = realBroadcast
+  T.eq(captured.heading, 42, "extras carried")
+  T.eq(captured.proto, "ehnav1", "but the protocol tag cannot be overwritten")
+end)
+
+T.it("counts what it published, for the diagnostics page", function()
+  local relay = relayRig()
+  relay.wired = "modem_0"
+  local realBroadcast = rednet.broadcast
+  rednet.broadcast = function() end
+  relay:publish({ x = 1, y = 2, z = 3 })
+  relay:publish({ x = 1, y = 2, z = 3 })
+  rednet.broadcast = realBroadcast
+  T.eq(relay:status().published, 2)
+  T.eq(relay:status().seq, 2, "sequence advances")
+end)
+
 return true

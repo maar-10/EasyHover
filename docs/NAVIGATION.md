@@ -19,8 +19,10 @@ system rests on.
 | **`navigation_table.getRelativeAngle()`** | bearing to its item-configured target | nav table + a target item (lodestone/compass/magnet) | free, not `mainThread` | Emergency homing. One target at a time, configured physically, no range. |
 | **`directional_link.getClosestAngle()` + `modulating_link.getClosestDistance()`** | bearing **and** range to the nearest Redstone Link on a frequency | a Redstone Link beacon at the waypoint | free, not `mainThread` | **Beacon navigation — a VOR/DME analogue.** If the usable range is decent this is the best precision-approach aid we have. Probe measures it. |
 
-**Recommendation: GPS as primary, Radar as backup, dead reckoning to smooth and fill gaps,
-beacons optional for precision approach.** Every fix carries `{x, y, z, age, quality, source}` so
+**DECIDED: GPS as primary**, over an ender modem, served by four `gps_beacon` computers --
+see [GPS.md](GPS.md) for what CC's GPS actually requires and how the beacons are built. Radar
+remains available as a backup source; dead reckoning smooths and fills gaps and is always
+marked as an estimate. Every fix carries `{x, y, z, age, quality, source}` so
 guidance can refuse to act on a stale one.
 
 ### Heading is the open question
