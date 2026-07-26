@@ -8,7 +8,7 @@ accurate control?" — with the reasoning, so the decision can be re-checked lat
 ## Decision
 
 **One dedicated flight computer. Every thruster, every sensor and every pilot input on a
-single wired-modem network with it. No UI, no music, no aux redstone on that computer.
+single wired-modem network with it. No UI, no music, no HTTP on that computer.
 Everything else lives on its own computer and talks to the flight computer over wired rednet.**
 
 ---
@@ -29,7 +29,7 @@ Everything else lives on its own computer and talks to the flight computer over 
    scarce resource — and the global budget is *shared*, so spreading thrusters over more
    computers does not enlarge it.
 4. **Redstone can't vector.** The redstone path gives 16 thrust steps and no nozzle control at
-   all. It has exactly one job here: the persistent failsafe level (below).
+   all. Its jobs here are the engine master and the aux outputs (below).
 
 ### Budget math
 
@@ -52,7 +52,7 @@ Steady hover should therefore cost a handful of calls per cycle, not 16.
 | **Group PCs (e.g. 4 thrusters each) → main PC** | Same defect, smaller. Only justified if one PC's mainThread budget is *measured* to be insufficient — and then the hop must be placed on a cascade boundary (the group PC would have to run its own inner loop), which is a much larger redesign. Not now. |
 | **Ender modems in the control path** | **No.** Unbounded latency, no ordering guarantee, cross-dimension delivery. Telemetry only. |
 | **Wireless modems in the control path** | No. They *do* work across sub-levels (Sable patches CC's distance check), but the jitter argument is unchanged. |
-| **Redstone relays driving thrust** | Loses vectoring entirely and quantises to 16 steps. Failsafe only. |
+| **Redstone relays driving thrust** | Loses vectoring entirely and quantises to 16 steps. Never for thrust; the relays here drive the engine master and aux outputs only. |
 | **All thrusters on one PC that also runs the UI** | No. CC computers are single-threaded coroutines; a Basalt redraw competes directly with the control loop. This is the DriveByWire pattern (`parallel.waitForAny(basalt.run, mainLoop)`) and it is fine for a car — not for a hover PID. |
 
 ---
@@ -63,7 +63,7 @@ All on the ship's single wired network. Rednet over wired modems for coordinatio
 
 | Role | Owns | Notes |
 |---|---|---|
-| **`flight`** | 8 vector thrusters, all sensors, typewriter + tweaked controller, failsafe relay, telemetry broadcast | **No UI, no speaker, no HTTP.** One loop, one clock. |
+| **`flight`** | 8 vector thrusters, all sensors, typewriter + tweaked controller, engine + aux relays, telemetry broadcast | **No UI, no speaker, no HTTP.** One loop, one clock. |
 | **`ui_main`** | Main display monitor + config screens + annunciator speaker | Config edits are sent to `flight`, which validates and live-applies. |
 | **`ui_pfd`** | PFD / flight-path-indicator monitor only | Its own computer so a high refresh rate can't starve anything else. |
 | **`ui_prox`** | Proximity monitor | Separate role; may share hardware with `ui_main` if perf allows — a config choice, not a code change. |
@@ -85,37 +85,95 @@ All on the ship's single wired network. Rednet over wired modems for coordinatio
 - **Fuel:** each thruster needs its own supply; the fuel/inventory sensing reads the supply
   containers via the generic `inventory` / `tanks()` methods.
 
-## Failsafe wiring (build this from day one)
+## The hardware failsafe: SCRAPPED, deliberately
 
 Attaching a computer puts a thruster in `ControlMode.PERIPHERAL` and **adjacent redstone stops
 driving thrust**. On detach — computer broken, unloaded, or rebooting — the block reverts to
 `ControlMode.NORMAL` and reads `getBestNeighborSignal()`.
 
-So: put a **redstone relay next to each lift thruster** and have the flight computer set its
-analog output to the configured hover level **once at boot**. Relay outputs persist when the
-owning computer dies, so the level is already sitting there the moment authority reverts. The
-craft settles instead of dropping.
+The original design put a **redstone relay beside each lift thruster**, holding a hover-thrust
+level written once at boot. Relay outputs persist when their computer dies, so the level would
+already be standing by the moment authority reverted, and the craft would settle rather than drop.
 
-### Two different "failsafe hover" settings — don't confuse them
+**Scrapped 2026-07-26 at the pilot's decision.** A relay, cabling and a modem per thruster cost
+too much space and weight on a small craft for something that, with wired-only controls, should
+never fire.
 
-The relay carries a **thrust level, not an altitude**. It is open loop: there is no sensor and no
-computer in that path, so it physically cannot *hold* an altitude. Depending on mass and remaining
-fuel the craft will still drift slowly up or down. What it buys is a gentle settle instead of a
-fall. Both of these are configurable, and they are different things:
+### The accepted consequence — stated plainly, because it is real
+
+> **If the flight computer is destroyed, unloaded, or rebooted while airborne, the thrusters
+> revert to redstone control, see no signal, and the craft falls.**
+
+The reasoning for accepting it: control is wired end to end, so there is no link to drop; and the
+loop's own failure modes are already handled in software — a Lua error in a cycle is caught and
+leaves thrust commanded while neutralising the nozzles, and the DAMPED and FAILSAFE states hold
+thrust rather than cutting it. What is *not* covered is the computer itself ceasing to exist.
+
+Habits that follow from that:
+
+- **Land before stopping the program.** Ctrl+T, `os.shutdown`, or breaking the computer while
+  airborne all end the same way.
+- **Keep the flight computer inside the hull**, where nothing can shoot or clip it.
+- Do not reintroduce a half-version of this. Either the relays are wired or they are not — a
+  partially wired failsafe is worse than none, because it looks like protection.
+
+### What remains
 
 | Config key | What it is | Default |
 |---|---|---|
-| `failsafe.redstoneLevel` | The analog level (0–15) written to the relays at boot. **Hardware failsafe** — the only thing that works when the computer is gone. | Derived from the **learned hover trim** (see [CONTROL_LAWS.md](CONTROL_LAWS.md) §4), rounded to the nearest step, with a configurable `failsafe.bias` in steps so you can choose to err slightly upward. Before trim has ever been learned, a conservative configured constant. |
-| `failsafe.holdAltitude` | The altitude the **software** degraded-hold reverts to when the loop is alive but inputs or nav are lost. | **The first altitude the system reads at boot**, then continuously updated to the last commanded hover altitude. Overridable in config and from the UI. |
+| `failsafe.holdAltitude` | The **software** degraded-hold reference: where the loop holds when it is alive but has lost inputs or nav. | **The first altitude the system reads at boot**, then the last commanded hover altitude. |
 
-Both are editable in the config UI, and `failsafe.redstoneLevel` gets a **Test** button that
-writes the level and reports the resulting `getCurrentThrustKN` against the learned hover
-requirement — so the number can be validated on the ground instead of discovered in the air.
-Getting `redstoneLevel` right is the single most important number before the first crewed flight.
+## Engine master wiring (the vehicle's on/off switch)
+
+The portable engine drives the fuel pumps, and a funnel above it feeds it items. **The funnel
+passes items only while UNPOWERED**, so the control signal is inverted by nature:
+
+| Master | Signal | Effect |
+|---|---|---|
+| **OFF** | held **HIGH** continuously | funnel blocked, engine starves, vehicle off |
+| **ON** | HIGH, dropped for `pulseMs` every `intervalMs` | one item per interrupt keeps the engine running |
+
+Turning the master on drops the signal once immediately — the **kickstart** — then settles into
+the periodic interrupt.
+
+Wire **one relay** to the funnel and name it in `hardware.engine = { relay, side }`; the timings
+live in `engine = { pulseMs, intervalMs, kickstart, invert }`.
+
+- `pulseMs` must be long enough for exactly one item to pass and short enough that a second
+  cannot follow.
+- `intervalMs` must be shorter than the engine's burn time.
+- Config validation **rejects a pulse longer than the interval**, since that would leave the
+  funnel never blocked.
+- `engine.invert = true` flips the polarity for a build wired the other way round.
+
+The output is asserted **blocked at boot** and re-asserted every cycle, so a relay that reboots
+cannot quietly drain the vault into a cold engine. Default keybind: **Z** (or controller button 7).
+
+## Aux relays
+
+`hardware.relays` entries with `purpose = "aux"` and a `label` drive lights, doors and landing
+gear. **G** toggles `gear` and **L** toggles `lights` by default.
+
+## Gauges
+
+| Config | Reads | Shows |
+|---|---|---|
+| `hardware.tanks` | generic `fluid_storage.tanks()` | the craft's fuel supply |
+| `hardware.vaults` | generic `inventory.list()` | engine fuel left in the vault |
+
+Create's fluid tanks usually report a capacity; when yours does not, set `capacityMb` so the
+gauge has a scale. Without either we show the raw amount and **no** fraction rather than
+inventing a maximum. A vault `item` filter counts one id only; blank counts everything.
+
+## Config disk
+
+Any networked **disk drive** lets you save and load every `/eh_*.tbl` on the computer. Run
+`diskmenu` on the flight computer. Writes are verified by readback, loads back up whatever they
+overwrite, and a config that does not parse is **refused** rather than installed.
 
 ## Identify feature
 
 Because peripheral names are attach-ordered, the config UI gets an **Identify** button per
-thruster slot: it sweeps that thruster's *nozzle only* (`setVector`) at **zero thrust** so the
-user can see which physical unit is which. Nozzle-only, zero-thrust, and hard-gated to the
-`GROUND` flight state — an identify sweep must never be possible in the air.
+thruster slot: it sweeps that thruster's *nozzle only* (`setVector`) at **zero thrust** so you
+can see which physical unit is which. Nozzle-only, zero-thrust, and hard-gated to the `GROUND`
+flight state — an identify sweep must never be possible in the air.

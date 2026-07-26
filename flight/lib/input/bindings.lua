@@ -25,7 +25,9 @@ Bindings.AXES = {
 Bindings.HELD = { "brake" }
 
 --- Edge-triggered actions (fire once per press).
-Bindings.EDGES = { "cycleFeel", "toggleLateral", "toggleAssist", "gear", "lights" }
+Bindings.EDGES = {
+  "cycleFeel", "toggleLateral", "toggleAssist", "gear", "lights", "engineMaster",
+}
 
 function Bindings.new(cfg, log)
   local self = setmetatable({}, Bindings)

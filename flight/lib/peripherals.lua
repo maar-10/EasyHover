@@ -178,6 +178,48 @@ function Peripherals:scan()
   self.inputs.controller = self:resolve(hi.controller, "tweaked_controller", "controller")
   self.inputs.typewriter = self:resolve(hi.typewriter, "linked_typewriter", "typewriter")
 
+  -- gauges: fluid tanks and item vaults
+  self.tanks = {}
+  for i, tank in ipairs(cfg.hardware.tanks or {}) do
+    local dev = safeWrap(tank.peripheral)
+    if dev then
+      self.tanks[#self.tanks + 1] = { spec = tank, dev = dev, name = tank.peripheral }
+    else
+      self.missing[#self.missing + 1] =
+        ("tank %s (%s)"):format(tank.label ~= "" and tank.label or tostring(i), tostring(tank.peripheral))
+    end
+  end
+
+  self.vaults = {}
+  for i, vault in ipairs(cfg.hardware.vaults or {}) do
+    local dev = safeWrap(vault.peripheral)
+    if dev then
+      self.vaults[#self.vaults + 1] = { spec = vault, dev = dev, name = vault.peripheral }
+    else
+      self.missing[#self.missing + 1] =
+        ("vault %s (%s)"):format(vault.label ~= "" and vault.label or tostring(i), tostring(vault.peripheral))
+    end
+  end
+
+  -- the engine relay: gates the funnel above the portable engine
+  self.engine = nil
+  local engineSpec = cfg.hardware.engine or {}
+  if engineSpec.relay and engineSpec.relay ~= "" then
+    local dev = safeWrap(engineSpec.relay)
+    if dev then
+      self.engine = { dev = dev, name = engineSpec.relay, side = engineSpec.side or "top" }
+    else
+      self.missing[#self.missing + 1] = ("engine relay (%s: not present)"):format(engineSpec.relay)
+    end
+  end
+
+  -- disk drives, for saving and loading configs
+  self.drives = {}
+  for _, name in ipairs(Peripherals.findByType("drive")) do
+    local dev = safeWrap(name)
+    if dev then self.drives[#self.drives + 1] = { name = name, dev = dev } end
+  end
+
   -- relays
   for _, spec in ipairs(cfg.hardware.relays or {}) do
     local dev = safeWrap(spec.peripheral)
@@ -240,6 +282,10 @@ function Peripherals:summary()
     lateral = lateral,
     optical = #(self.sensors.optical or {}),
     relays = #self.relays,
+    tanks = #(self.tanks or {}),
+    vaults = #(self.vaults or {}),
+    drives = #(self.drives or {}),
+    engine = self.engine ~= nil,
     missing = Util.deepCopy(self.missing),
     complete = #self.missing == 0,
     scans = self.scanCount,

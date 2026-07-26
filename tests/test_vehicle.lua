@@ -1,0 +1,446 @@
+--[[ Vehicle systems: the portable-engine master, disk config transfer, and the gauges. ]]
+
+local T = require("tests.util")
+local Config = require("lib.config")
+local State = require("lib.state")
+local Log = require("lib.log")
+local Peripherals = require("lib.peripherals")
+local Engine = require("lib.io.engine")
+local Disk = require("lib.io.disk")
+local Fuel = require("lib.io.fuel")
+
+local mock = dofile("/tests/mocks/peripherals.lua")
+
+local function quietLog() return Log.new({ level = "error", capacity = 50 }) end
+
+local function vehicleCfg(overrides)
+  local cfg = Config.withDefaults({
+    hardware = {
+      thrusters = {
+        { id = "lift_fl", peripheral = "vector_thruster_0", group = "lift" },
+      },
+      engine = { relay = "redstone_relay_0", side = "top" },
+      tanks = { { peripheral = "fluid_tank_0", label = "Main fuel", capacityMb = 0 } },
+      vaults = { { peripheral = "item_vault_0", label = "Engine fuel", item = "" } },
+    },
+    engine = { enabled = true, pulseMs = 400, intervalMs = 8000 },
+  })
+  if overrides then cfg = require("lib.util").deepMerge(cfg, overrides) end
+  return cfg
+end
+
+local function rig(cfg)
+  cfg = cfg or vehicleCfg()
+  local log = quietLog()
+  local state = State.new({})
+  local per = Peripherals.new(cfg, log):scan()
+  return { cfg = cfg, log = log, state = state, per = per }
+end
+
+--- What the engine relay's output actually is right now.
+local function relaySignal(side)
+  local dev = peripheral.wrap("redstone_relay_0")
+  return dev.getOutput(side or "top")
+end
+
+-- ---------------------------------------------------------------- engine
+
+T.suite("engine master")
+
+T.it("boots with the funnel BLOCKED, and the master off", function()
+  mock.reset()
+  _G.peripheral = mock.install()
+  local r = rig()
+  local engine = Engine.new(r.per, r.cfg, r.log, r.state)
+  T.isTrue(engine:available(), "engine relay resolved")
+  T.isFalse(engine.master, "master off at boot")
+  engine:blockNow()
+  -- the funnel passes items while UNPOWERED, so blocked means signal HIGH
+  T.isTrue(relaySignal(), "signal HIGH: funnel blocked, nothing feeds a cold engine")
+end)
+
+T.it("turning the master ON pulses once immediately to kickstart", function()
+  mock.reset()
+  _G.peripheral = mock.install()
+  local r = rig()
+  local engine = Engine.new(r.per, r.cfg, r.log, r.state)
+  engine:blockNow()
+  local now = 100000
+  engine:setMaster(true, now)
+  T.isFalse(relaySignal(), "signal dropped: one item passes")
+  T.isTrue(engine.feeding, "reported as feeding")
+  T.eq(engine.pulses, 1, "exactly one pulse so far")
+end)
+
+T.it("the kickstart pulse ends after pulseMs and re-blocks", function()
+  mock.reset()
+  _G.peripheral = mock.install()
+  local r = rig()
+  local engine = Engine.new(r.per, r.cfg, r.log, r.state)
+  local now = 100000
+  engine:setMaster(true, now)
+  engine:tick(now + 100)
+  T.isFalse(relaySignal(), "still feeding part way through the pulse")
+  engine:tick(now + r.cfg.engine.pulseMs + 1)
+  T.isTrue(relaySignal(), "blocked again once the pulse is over")
+  T.isFalse(engine.feeding, "no longer feeding")
+end)
+
+T.it("while running it re-feeds one item every intervalMs", function()
+  mock.reset()
+  _G.peripheral = mock.install()
+  local r = rig()
+  local engine = Engine.new(r.per, r.cfg, r.log, r.state)
+  local now = 100000
+  engine:setMaster(true, now)
+  engine:tick(now + r.cfg.engine.pulseMs + 1)          -- end the kickstart
+  T.eq(engine.pulses, 1, "one pulse so far")
+
+  -- nothing happens until the interval elapses
+  engine:tick(now + 2000)
+  T.isTrue(relaySignal(), "still blocked mid-interval")
+  T.eq(engine.pulses, 1, "no extra pulse")
+
+  local due = now + r.cfg.engine.pulseMs + 1 + r.cfg.engine.intervalMs
+  engine:tick(due + 1)
+  T.isFalse(relaySignal(), "interval elapsed: feeding again")
+  T.eq(engine.pulses, 2, "second pulse")
+end)
+
+T.it("turning the master OFF blocks immediately and cancels a pulse in flight", function()
+  mock.reset()
+  _G.peripheral = mock.install()
+  local r = rig()
+  local engine = Engine.new(r.per, r.cfg, r.log, r.state)
+  local now = 100000
+  engine:setMaster(true, now)
+  T.isFalse(relaySignal(), "mid-kickstart")
+  engine:setMaster(false, now + 50)
+  T.isTrue(relaySignal(), "blocked at once, without waiting for the pulse to finish")
+  T.isNil(engine.pulseEndsAt, "pulse cancelled")
+  T.isNil(engine.nextPulseAt, "no feed scheduled")
+end)
+
+T.it("with the master off it keeps re-asserting the block", function()
+  mock.reset()
+  _G.peripheral = mock.install()
+  local r = rig()
+  local engine = Engine.new(r.per, r.cfg, r.log, r.state)
+  engine:blockNow()
+  -- something else moved the output; a rescan or a relay reboot would look like this
+  peripheral.wrap("redstone_relay_0").setOutput("top", false)
+  engine:invalidate()
+  engine:tick(100000)
+  T.isTrue(relaySignal(), "re-asserted, so a stray unblock cannot drain the vault")
+end)
+
+T.it("invert flips the polarity for a build wired the other way", function()
+  mock.reset()
+  _G.peripheral = mock.install()
+  local r = rig(vehicleCfg({ engine = { invert = true } }))
+  local engine = Engine.new(r.per, r.cfg, r.log, r.state)
+  engine:blockNow()
+  T.isFalse(relaySignal(), "blocked is now signal LOW")
+  engine:setMaster(true, 100000)
+  T.isTrue(relaySignal(), "and feeding is signal HIGH")
+end)
+
+T.it("kickstart can be turned off, deferring the first feed", function()
+  mock.reset()
+  _G.peripheral = mock.install()
+  local r = rig(vehicleCfg({ engine = { kickstart = false } }))
+  local engine = Engine.new(r.per, r.cfg, r.log, r.state)
+  local now = 100000
+  engine:setMaster(true, now)
+  T.isTrue(relaySignal(), "no immediate pulse")
+  T.eq(engine.pulses, 0, "nothing fed yet")
+  engine:tick(now + r.cfg.engine.intervalMs + 1)
+  T.isFalse(relaySignal(), "first feed once the interval elapses")
+end)
+
+T.it("feedNow primes on demand, but only while the master is on", function()
+  mock.reset()
+  _G.peripheral = mock.install()
+  local r = rig()
+  local engine = Engine.new(r.per, r.cfg, r.log, r.state)
+  local ok, err = engine:feedNow(100000)
+  T.isFalse(ok, "refused with the master off")
+  T.isTrue(tostring(err):find("master is off") ~= nil, "and says why")
+  engine:setMaster(true, 100000)
+  engine:tick(100000 + 500)
+  T.isTrue(engine:feedNow(100100), "allowed while running")
+end)
+
+T.it("with no relay configured it is unavailable and harmless", function()
+  mock.reset()
+  _G.peripheral = mock.install()
+  local cfg = vehicleCfg()
+  cfg.hardware.engine.relay = ""
+  cfg.engine.enabled = false
+  local r = rig(cfg)
+  local engine = Engine.new(r.per, r.cfg, r.log, r.state)
+  T.isFalse(engine:available(), "unavailable")
+  engine:tick(100000)          -- must not throw
+  engine:setMaster(true, 100000)
+  T.isTrue(engine.master, "the switch still tracks intent for the UI")
+end)
+
+T.it("status reports what the cockpit needs", function()
+  mock.reset()
+  _G.peripheral = mock.install()
+  local r = rig()
+  local engine = Engine.new(r.per, r.cfg, r.log, r.state)
+  local now = 100000
+  engine:setMaster(true, now)
+  engine:tick(now + r.cfg.engine.pulseMs + 1)
+  local status = engine:status(now + r.cfg.engine.pulseMs + 1)
+  T.isTrue(status.master, "master")
+  T.isTrue(status.available, "available")
+  T.notNil(status.nextFeedInMs, "countdown to the next feed")
+  T.eq(status.relay, "redstone_relay_0", "relay named")
+  engine:publish(now)
+  T.isTrue(r.state:get("engine.master"), "published to state")
+end)
+
+T.it("config rejects a pulse longer than the interval", function()
+  local cfg = vehicleCfg({ engine = { pulseMs = 9000, intervalMs = 8000 } })
+  local ok, errors = Config.validate(cfg)
+  T.isFalse(ok, "rejected")
+  T.containsMatch(errors, "never be blocked", "explains the consequence")
+end)
+
+T.it("config rejects enabling the engine with no relay named", function()
+  local cfg = vehicleCfg()
+  cfg.hardware.engine.relay = ""
+  local ok, errors = Config.validate(cfg)
+  T.isFalse(ok, "rejected")
+  T.containsMatch(errors, "names no peripheral", "error")
+end)
+
+-- ---------------------------------------------------------------- gauges
+
+T.suite("gauges")
+
+T.it("a fluid tank reports amount, capacity and fraction", function()
+  mock.reset()
+  _G.peripheral = mock.install()
+  local r = rig()
+  local fuel = Fuel.new(r.per, r.cfg, r.log, r.state)
+  local tanks = fuel:readTanks()
+  T.eq(#tanks, 1, "one tank")
+  T.eq(tanks[1].label, "Main fuel", "label")
+  T.eq(tanks[1].amount, 6000, "amount from tanks()")
+  T.eq(tanks[1].capacity, 16000, "capacity reported by the mod")
+  T.near(tanks[1].fraction, 0.375, 1e-9, "fraction")
+  T.eq(tanks[1].fluid, "create:diesel", "fluid name")
+end)
+
+T.it("a tank that reports no capacity falls back to the configured size", function()
+  mock.reset()
+  _G.peripheral = mock.install({ devices = {
+    fluid_tank_0 = { type = "fluid_storage", dev = {
+      tanks = function() return { { name = "create:diesel", amount = 2500 } } end,
+    } },
+  } })
+  local cfg = vehicleCfg()
+  cfg.hardware.tanks[1].capacityMb = 10000
+  local r = rig(cfg)
+  local fuel = Fuel.new(r.per, r.cfg, r.log, r.state)
+  local tanks = fuel:readTanks()
+  T.eq(tanks[1].capacity, 10000, "configured capacity used")
+  T.near(tanks[1].fraction, 0.25, 1e-9, "fraction from it")
+end)
+
+T.it("with neither capacity we report the amount and NO invented fraction", function()
+  mock.reset()
+  _G.peripheral = mock.install({ devices = {
+    fluid_tank_0 = { type = "fluid_storage", dev = {
+      tanks = function() return { { name = "create:diesel", amount = 2500 } } end,
+    } },
+  } })
+  local r = rig()          -- capacityMb stays 0
+  local fuel = Fuel.new(r.per, r.cfg, r.log, r.state)
+  local tanks = fuel:readTanks()
+  T.eq(tanks[1].amount, 2500, "amount still shown")
+  T.isNil(tanks[1].fraction, "no made-up scale")
+end)
+
+T.it("the engine vault reports its item count", function()
+  mock.reset()
+  _G.peripheral = mock.install()
+  local r = rig()
+  local fuel = Fuel.new(r.per, r.cfg, r.log, r.state)
+  local vaults = fuel:readVaults()
+  T.eq(#vaults, 1, "one vault")
+  T.eq(vaults[1].count, 96, "counted every stack")
+  T.isFalse(vaults[1].empty, "not empty")
+end)
+
+T.it("a vault filter counts only the configured item", function()
+  mock.reset()
+  _G.peripheral = mock.install()
+  local cfg = vehicleCfg()
+  cfg.hardware.vaults[1].item = "minecraft:coal"
+  local r = rig(cfg)
+  local fuel = Fuel.new(r.per, r.cfg, r.log, r.state)
+  local vaults = fuel:readVaults()
+  T.eq(vaults[1].count, 64, "only the coal")
+  T.eq(vaults[1].filter, "minecraft:coal", "filter reported")
+end)
+
+T.it("readAll aggregates the worst tank and an empty vault", function()
+  mock.reset()
+  _G.peripheral = mock.install({ devices = {
+    item_vault_0 = { type = "inventory", dev = { list = function() return {} end } },
+  } })
+  local r = rig()
+  local fuel = Fuel.new(r.per, r.cfg, r.log, r.state)
+  local _, aggregate = fuel:readAll()
+  T.near(aggregate.worstTank, 0.375, 1e-9, "worst tank fraction")
+  T.eq(aggregate.worstTankLabel, "Main fuel", "and which one")
+  T.isTrue(aggregate.vaultEmpty, "empty vault flagged")
+  T.isTrue(r.state:get("fuel.vaultEmpty"), "published")
+end)
+
+-- ---------------------------------------------------------------- disk
+
+T.suite("config disk")
+
+local function diskRig()
+  mock.reset()
+  _G.peripheral = mock.install()
+  local r = rig()
+  return r, Disk.new(r.per, r.cfg, r.log, r.state)
+end
+
+local function cleanConfigs()
+  for _, name in ipairs(fs.list("/")) do
+    if name:match("^eh_.*%.tbl$") then fs.delete("/" .. name) end
+  end
+  if fs.exists("/mockdisk") then fs.delete("/mockdisk") end
+  if fs.exists("/easyhover_backup") then fs.delete("/easyhover_backup") end
+end
+
+T.it("finds the drive and reports an empty one", function()
+  cleanConfigs()
+  local r, disk = diskRig()
+  local drives = disk:drives()
+  T.eq(#drives, 1, "one drive on the network")
+  T.eq(drives[1].name, "drive_0", "named")
+  T.isTrue(drives[1].present, "the mock has a disk in it")
+  T.eq(drives[1].count, 0, "no configs on it yet")
+end)
+
+T.it("saves every eh_*.tbl and verifies the readback", function()
+  cleanConfigs()
+  local r, disk = diskRig()
+  local f = fs.open("/eh_flight_config.tbl", "w")
+  f.write(textutils.serialise({ tuning = { attitudeHz = 13 } }))
+  f.close()
+  local f2 = fs.open("/eh_nav_config.tbl", "w")
+  f2.write(textutils.serialise({ nav = { fixStaleMs = 999 } }))
+  f2.close()
+
+  local ok, report = disk:saveAll()
+  T.isTrue(ok, "saved: " .. tostring(report.reason))
+  T.eq(#report.saved, 2, "both configs, not just this role's")
+  T.eq(#report.failed, 0, "none failed")
+  T.eq(#Disk.diskConfigs(report.mount), 2, "present on the disk")
+  cleanConfigs()
+end)
+
+T.it("refuses to save when the computer has no configs", function()
+  cleanConfigs()
+  local r, disk = diskRig()
+  local ok, report = disk:saveAll()
+  T.isFalse(ok, "refused")
+  T.isTrue(tostring(report.reason):find("no config files") ~= nil, "and says why")
+end)
+
+T.it("loading backs up what it overwrites", function()
+  cleanConfigs()
+  local r, disk = diskRig()
+  local f = fs.open("/eh_flight_config.tbl", "w")
+  f.write(textutils.serialise({ tuning = { attitudeHz = 13 } }))
+  f.close()
+  disk:saveAll()
+
+  -- change the live config, then load the disk copy back over it
+  local f2 = fs.open("/eh_flight_config.tbl", "w")
+  f2.write(textutils.serialise({ tuning = { attitudeHz = 99 } }))
+  f2.close()
+
+  local ok, report = disk:loadAll()
+  T.isTrue(ok, "loaded")
+  T.eq(#report.loaded, 1, "one config")
+  T.eq(#report.backedUp, 1, "the version it replaced was backed up")
+  T.notNil(report.backupDir, "backup directory reported")
+
+  local body = fs.open("/eh_flight_config.tbl", "r")
+  local restored = textutils.unserialise(body.readAll())
+  body.close()
+  T.eq(restored.tuning.attitudeHz, 13, "the disk version is now live")
+
+  local kept = fs.open(report.backupDir .. "/eh_flight_config.tbl", "r")
+  local backedUp = textutils.unserialise(kept.readAll())
+  kept.close()
+  T.eq(backedUp.tuning.attitudeHz, 99, "and the overwritten one is recoverable")
+  cleanConfigs()
+end)
+
+T.it("REFUSES a config on the disk that does not parse", function()
+  cleanConfigs()
+  local r, disk = diskRig()
+  local drive = disk:firstReady()
+  local dir = fs.combine(drive.mount, "easyhover")
+  fs.makeDir(dir)
+  local f = fs.open(fs.combine(dir, "eh_flight_config.tbl"), "w")
+  f.write("this is not a table {{{")
+  f.close()
+
+  local ok, report = disk:loadAll()
+  T.isFalse(ok, "refused")
+  T.eq(#report.loaded, 0, "nothing installed")
+  T.eq(report.refused[1].reason, "does not parse", "reason given")
+  T.isFalse(fs.exists("/eh_flight_config.tbl"), "the live config was left alone")
+  cleanConfigs()
+end)
+
+T.it("reports honestly when there is no disk", function()
+  cleanConfigs()
+  mock.reset()
+  _G.peripheral = mock.install({ devices = {
+    drive_0 = { type = "drive", dev = {
+      isDiskPresent = function() return false end,
+      hasData = function() return false end,
+      getDiskLabel = function() return nil end,
+      getMountPath = function() return nil end,
+    } },
+  } })
+  local r = rig()
+  local disk = Disk.new(r.per, r.cfg, r.log, r.state)
+  T.isNil(disk:firstReady(), "no ready drive")
+  local ok, report = disk:saveAll()
+  T.isFalse(ok, "save refused")
+  T.isTrue(tostring(report.reason):find("no disk") ~= nil, "reason")
+  local status = disk:status()
+  T.eq(status.driveCount, 1, "the drive is still seen")
+  T.isFalse(status.diskPresent, "but no disk in it")
+end)
+
+T.it("status summarises for the UI", function()
+  cleanConfigs()
+  local r, disk = diskRig()
+  local f = fs.open("/eh_flight_config.tbl", "w")
+  f.write(textutils.serialise({ tuning = { attitudeHz = 13 } }))
+  f.close()
+  disk:saveAll()
+  local status = disk:status()
+  T.isTrue(status.diskPresent, "disk present")
+  T.eq(status.onDisk, 1, "one config on the disk")
+  T.eq(status.localConfigs, 1, "one config here")
+  T.isTrue(r.state:get("disk.diskPresent"), "published to state")
+  cleanConfigs()
+end)
+
+return true

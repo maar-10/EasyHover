@@ -45,7 +45,9 @@ lib/
     sensors.lua          altitude, gimbal, velocity, optical, nav table -> normalised units
     thrusters.lua        write-on-change, quantiser-aware, obstruction + fuel readback
     fuel.lua             tanks() / inventory sensing per thruster group
-    relays.lua           failsafe level at boot; aux passthrough
+    relays.lua           aux outputs (lights / doors / gear)
+    engine.lua           portable-engine master: inverted kickstart + keep-alive pulses
+    disk.lua             save/load every config to a floppy
   control/
     filter.lua           first-order LPF, median, rate limiter, hysteresis/Schmitt
     pid.lua              dt-disciplined PID: D-on-measurement, conditional I, clamps
@@ -111,7 +113,7 @@ control bug when both are new. Phases 13–15 do not start until phase 3's gains
 |---|---|---|---|
 | **0** | **Probe** | *user* | `tools/probe.lua` on the assembled craft. Unblocks tuning **and** answers the heading question nav depends on. Not a blocker for 1–5. |
 | 1 | Core scaffolding | — | config, peripherals, state, log, test harness. |
-| 2 | IO layer | 1 | sensors, thrusters (write-on-change), fuel, failsafe relay, identify. |
+| 2 | IO layer | 1 | sensors, thrusters (write-on-change), fuel, gauges, engine master, disk, identify. |
 | 3 | **Control + `tests/sim.lua`** | 1, 2 | pid/filter/mixer/attitude/altitude/envelope/oscillation, verified against the plant sim. Real gains wait for phase 0. |
 | 4 | Inputs | 1 | typewriter (poll) + controller, fully remappable bindings. |
 | 5 | Telemetry + link | 1 | wired rednet first; ender link after. |

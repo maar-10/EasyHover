@@ -27,15 +27,21 @@
       ["files"] = {
         {
           ["dst"] = "flight/app.lua",
-          ["size"] = 14657,
+          ["size"] = 17890,
           ["src"] = "flight/app.lua",
-          ["sum"] = "7bf0f924",
+          ["sum"] = "2e8e8051",
+        },
+        {
+          ["dst"] = "flight/diskmenu.lua",
+          ["size"] = 5705,
+          ["src"] = "flight/diskmenu.lua",
+          ["sum"] = "62f6ed5a",
         },
         {
           ["dst"] = "flight/lib/config.lua",
-          ["size"] = 30274,
+          ["size"] = 32793,
           ["src"] = "flight/lib/config.lua",
-          ["sum"] = "7568daf8",
+          ["sum"] = "1429c003",
         },
         {
           ["dst"] = "flight/lib/control/altitude.lua",
@@ -93,9 +99,9 @@
         },
         {
           ["dst"] = "flight/lib/input/bindings.lua",
-          ["size"] = 3698,
+          ["size"] = 3717,
           ["src"] = "flight/lib/input/bindings.lua",
-          ["sum"] = "6008c051",
+          ["sum"] = "54b0fa71",
         },
         {
           ["dst"] = "flight/lib/input/controller.lua",
@@ -116,16 +122,28 @@
           ["sum"] = "0664ffc8",
         },
         {
+          ["dst"] = "flight/lib/io/disk.lua",
+          ["size"] = 9573,
+          ["src"] = "flight/lib/io/disk.lua",
+          ["sum"] = "54a2d72d",
+        },
+        {
+          ["dst"] = "flight/lib/io/engine.lua",
+          ["size"] = 6445,
+          ["src"] = "flight/lib/io/engine.lua",
+          ["sum"] = "f678ee3c",
+        },
+        {
           ["dst"] = "flight/lib/io/fuel.lua",
-          ["size"] = 4201,
+          ["size"] = 7899,
           ["src"] = "flight/lib/io/fuel.lua",
-          ["sum"] = "e4a34bf0",
+          ["sum"] = "b44be91a",
         },
         {
           ["dst"] = "flight/lib/io/relays.lua",
-          ["size"] = 6378,
+          ["size"] = 3924,
           ["src"] = "flight/lib/io/relays.lua",
-          ["sum"] = "685ee93d",
+          ["sum"] = "3475cc3b",
         },
         {
           ["dst"] = "flight/lib/io/sensors.lua",
@@ -153,9 +171,9 @@
         },
         {
           ["dst"] = "flight/lib/peripherals.lua",
-          ["size"] = 8618,
+          ["size"] = 10288,
           ["src"] = "flight/lib/peripherals.lua",
-          ["sum"] = "2bdf0c9e",
+          ["sum"] = "51f27f81",
         },
         {
           ["dst"] = "flight/lib/state.lua",
@@ -292,5 +310,5 @@
     ["size"] = 29343,
     ["sum"] = "393f2bf2",
   },
-  ["version"] = "cafa3fb9",
+  ["version"] = "462d5e7b",
 }

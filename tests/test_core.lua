@@ -66,7 +66,7 @@ local function goodConfig()
           pos = { x = 1, y = 0, z = -1 } },
       },
       relays = {
-        { peripheral = "redstone_relay_0", side = "top", level = 8, purpose = "failsafe" },
+        { peripheral = "redstone_relay_0", side = "top", purpose = "aux", label = "lights" },
       },
     },
   })
@@ -105,18 +105,6 @@ T.it("cascade rate separation is enforced", function()
   T.containsMatch(errors, "altitudeHz", "rate separation error")
 end)
 
-T.it("failsafe level must be an integer 0..15", function()
-  local cfg = goodConfig()
-  cfg.failsafe.redstoneLevel = 16
-  local ok, errors = Config.validate(cfg)
-  T.isFalse(ok, "16 rejected")
-  T.containsMatch(errors, "redstoneLevel", "level error")
-
-  cfg.failsafe.redstoneLevel = 7.5
-  local ok2, errors2 = Config.validate(cfg)
-  T.isFalse(ok2, "fractional rejected")
-  T.containsMatch(errors2, "redstoneLevel", "fractional error")
-end)
 
 T.it("duplicate thruster ids are rejected", function()
   local cfg = goodConfig()
@@ -150,30 +138,20 @@ T.it("a missing yaw index warns rather than blocks", function()
   T.containsMatch(warnings, "heading fallback", "yaw warning")
 end)
 
-T.it("a craft with no failsafe relay warns loudly", function()
-  local cfg = goodConfig()
-  cfg.hardware.relays = {}
-  local ok, _, warnings = Config.validate(cfg)
-  T.isTrue(ok, "legal but unwise")
-  T.containsMatch(warnings, "drop the craft", "failsafe warning")
-end)
 
-T.it("failsafe level derives from learned hover trim plus bias", function()
-  local cfg = goodConfig()
-  cfg.control.altitude.hoverTrim = 0.5      -- 0.5 * 15 = 7.5 -> 8, +1 bias
-  cfg.failsafe.biasSteps = 1
-  local level, derived = Config.deriveFailsafeLevel(cfg)
-  T.isTrue(derived, "derived")
-  T.eq(level, 9, "level")
-end)
 
-T.it("failsafe level falls back to config when trim is unlearned", function()
+
+T.it("the scrapped hardware failsafe is gone, and the software one remains", function()
   local cfg = goodConfig()
-  cfg.control.altitude.hoverTrim = 0
-  cfg.failsafe.redstoneLevel = 6
-  local level, derived = Config.deriveFailsafeLevel(cfg)
-  T.isFalse(derived, "not derived")
-  T.eq(level, 6, "configured level")
+  T.isNil(cfg.failsafe.redstoneLevel, "no redstone level: the hardware failsafe was scrapped")
+  T.isNil(Config.deriveFailsafeLevel, "and its derivation helper is gone with it")
+  -- the software degraded-hold reference is a different thing and still exists
+  cfg.failsafe.holdAltitude = 82.5
+  local ok, errors = Config.validate(cfg)
+  T.isTrue(ok, "holdAltitude validates: " .. table.concat(errors, "; "))
+  cfg.failsafe.holdAltitude = "high"
+  local bad = Config.validate(cfg)
+  T.isFalse(bad, "and is type-checked")
 end)
 
 T.it("save then load round-trips, and load verifies", function()

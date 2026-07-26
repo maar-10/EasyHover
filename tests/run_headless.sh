@@ -23,7 +23,7 @@ for f in "$ROOT"/tests/test_*.lua; do cp "$f" "$C0/tests/"; done
 cat > "$C0/startup.lua" <<'LUA'
 package.path = "/flight/?.lua;/flight/?/init.lua;/?.lua;/?/init.lua;" .. package.path
 
-local SUITES = { "/tests/test_core.lua", "/tests/test_io.lua", "/tests/test_control.lua", "/tests/test_loops.lua", "/tests/test_modes.lua", "/tests/test_input.lua", "/tests/test_suite.lua" }
+local SUITES = { "/tests/test_core.lua", "/tests/test_io.lua", "/tests/test_control.lua", "/tests/test_loops.lua", "/tests/test_modes.lua", "/tests/test_input.lua", "/tests/test_suite.lua", "/tests/test_vehicle.lua" }
 
 local out = {}
 local function w(line) out[#out + 1] = line end

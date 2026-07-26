@@ -127,8 +127,10 @@ runtime surprise.
 The craft's mass is unknown to us. Rather than hand-tune a feed-forward, the altitude loop
 learns the hover thrust: a very slow integral of the thrust needed to hold a stable hover,
 persisted to config. On the next boot it is the starting point, so the loop begins near
-equilibrium instead of hunting for it. The learned value is also the sanity check for the
-**failsafe redstone level** in [WIRING.md](WIRING.md).
+equilibrium instead of hunting for it.
+
+(It used to also seed the hardware failsafe's redstone level. That failsafe was scrapped --
+see [WIRING.md](WIRING.md) -- so the trim now serves only the loop itself.)
 
 ## 4a. Two things the simulator taught us the hard way
 

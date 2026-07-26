@@ -149,7 +149,10 @@ function M.relay(opts)
       local v = analog[side] or 0
       return v + (opts.lie or 0)
     end,
-    setOutput = function(side, on) digital[side] = on and true or false end,
+    setOutput = function(side, on)
+      if opts.failWrites then error("relay offline", 0) end
+      digital[side] = on and true or false
+    end,
     getOutput = function(side) return digital[side] or false end,
     _analog = analog,
     _digital = digital,
@@ -205,6 +208,34 @@ local function defaultDevices()
   } }
 
   d["redstone_relay_0"] = { type = "redstone_relay", dev = M.relay() }
+
+  -- vehicle systems: the fuel tank, the engine-fuel vault, and a disk drive
+  d["fluid_tank_0"] = { type = "fluid_storage", dev = {
+    tanks = function()
+      return { { name = "create:diesel", amount = 6000, capacity = 16000 } }
+    end,
+  } }
+  d["item_vault_0"] = { type = "inventory", dev = {
+    list = function()
+      return {
+        [1] = { name = "minecraft:coal", count = 64 },
+        [5] = { name = "minecraft:charcoal", count = 32 },
+      }
+    end,
+  } }
+  -- The mount path is a real directory in the computer's own filesystem, so disk operations
+  -- genuinely read and write rather than being faked at the API boundary.
+  d["drive_0"] = { type = "drive", dev = {
+    isDiskPresent = function() return true end,
+    hasData = function() return true end,
+    getDiskLabel = function() return "EH configs" end,
+    setDiskLabel = function(_) end,
+    getMountPath = function()
+      if not fs.exists("/mockdisk") then fs.makeDir("/mockdisk") end
+      return "/mockdisk"
+    end,
+    ejectDisk = function() end,
+  } }
 
   -- position source: Create: Radar reports its own world position
   d["plane_radar_0"] = { type = "plane_radar", dev = {

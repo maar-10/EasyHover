@@ -9,7 +9,7 @@ and aux vehicle controls.
 
 ## Status
 
-**The flight control system is complete and testable — `bash tests/run_headless.sh` (201/201).**
+**The flight control system is complete and testable — `bash tests/run_headless.sh` (243/243).**
 
 Everything needed to hover, climb and descend, set an altitude, translate in both lateral
 modes, steer, accelerate forward on the main thrusters, brake, and reverse by pitching up.
@@ -34,25 +34,39 @@ config with newly added defaults without ever replacing it. Full behaviour in
 Nav + autopilot (phases 11–15), the UIs and annunciator (6–10), music (16). Their roles are
 already reserved in the Suite, with directories and config paths ready.
 
-### Known gap before flight
+### Vehicle systems
 
-Drift damping and directional braking need a velocity **vector**. Mount three velocity
-sensors (one per axis) and map them in `hardware.sensors.velocityVector` — until then those
-two features degrade and annunciate rather than guess. [docs/MODES.md](docs/MODES.md) §6.
+- **Engine master** — one switch (default **Z**) starts and keeps the portable engine running,
+  by inverted redstone pulses through the funnel above it. The vehicle boots off, funnel
+  blocked. [docs/WIRING.md](docs/WIRING.md).
+- **Gauges** — fluid tank level and engine-vault item count.
+- **Config disk** — run `diskmenu` to save or load every `/eh_*.tbl` to a floppy. Verified
+  writes, backups on load, and a config that does not parse is refused.
+- **Aux relays** — lights (**L**) and landing gear (**G**).
 
-⚠️ **Open hardware item:** drift damping and the brake law need a velocity *vector*; the
-confirmed sensors only give an unsigned scalar. See [docs/MODES.md](docs/MODES.md) §6 — it
-needs two or three velocity sensors mounted on different axes.
+### Two things to know before flight
 
-`tools/probe.lua` is written and green too (`bash tests/run_probe_headless.sh`, 20/20) —
-**waiting on an in-game run**; it measures the nozzle slew rate that caps attitude-loop
-bandwidth and answers the heading question nav depends on.
+**There is no hardware thrust failsafe.** It was scrapped deliberately (a relay and cabling per
+thruster cost too much space). If the flight computer is destroyed, unloaded or rebooted while
+airborne, **the craft falls**. Land before stopping the program. Reasoning and habits in
+[docs/WIRING.md](docs/WIRING.md).
 
-Next: phase 3 — control laws plus `tests/sim.lua`, the plant simulator that has to prove no
-limit cycle before anything flies.
+**Drift damping and directional braking need a velocity vector.** Mount three velocity sensors
+(one per axis) and map them in `hardware.sensors.velocityVector` — until then those two features
+degrade and annunciate rather than guess. [docs/MODES.md](docs/MODES.md) §6.
+
+### Before the first flight
+
+`tools/probe.lua` is written and green (`bash tests/run_probe_headless.sh`, 20/20) but
+**waiting on an in-game run**. It measures the nozzle slew rate that caps attitude-loop
+bandwidth, whether the gimbal reports yaw, and whether `getVelocity()` is signed — the numbers
+that turn sim-tuned gains into flight-tuned ones.
 
 ```bash
-bash tests/run_headless.sh
+bash tests/run_headless.sh      # 243 logic + control + suite tests
+bash tests/run_suite.sh         # Suite static checks
+bash tests/run_suite_e2e.sh     # real install/update/repair against a localhost mirror
+bash tests/run_probe_headless.sh
 ```
 
 ## Documentation
@@ -62,7 +76,7 @@ bash tests/run_headless.sh
 | [docs/PLAN.md](docs/PLAN.md) | Module map, phases, comms protocols, risks. **Start here.** |
 | [docs/CONTROL_LAWS.md](docs/CONTROL_LAWS.md) | The anti-oscillation contract, cascade design, tuning order. |
 | [docs/MODES.md](docs/MODES.md) | Thruster layout, feel modes, Flight Assistant, braking — **and the velocity-sensor gap**. |
-| [docs/WIRING.md](docs/WIRING.md) | Topology, computer roles, failsafe wiring, and why. |
+| [docs/WIRING.md](docs/WIRING.md) | Topology, computer roles, the engine master, gauges, and the scrapped failsafe. |
 | [docs/NAVIGATION.md](docs/NAVIGATION.md) | Position sources, waypoints, routes, autopilot modes, autoland, interlocks. |
 | [docs/MUSIC.md](docs/MUSIC.md) | Exactly what the music module requires, and why. |
 | [docs/INSTALL.md](docs/INSTALL.md) | The EasyHover Suite: roles, updating, repair, and how configs are handled. |

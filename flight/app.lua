@@ -16,6 +16,8 @@ local Sensors = require("lib.io.sensors")
 local Thrusters = require("lib.io.thrusters")
 local Fuel = require("lib.io.fuel")
 local Relays = require("lib.io.relays")
+local Engine = require("lib.io.engine")
+local Disk = require("lib.io.disk")
 local Mixer = require("lib.control.mixer")
 local Attitude = require("lib.control.attitude")
 local Altitude = require("lib.control.altitude")
@@ -56,6 +58,8 @@ function App.new(opts)
   self.thrusters = Thrusters.new(self.per, cfg, self.log, self.state)
   self.fuel = Fuel.new(self.per, cfg, self.log, self.state)
   self.relays = Relays.new(self.per, cfg, self.log, self.state)
+  self.engine = Engine.new(self.per, cfg, self.log, self.state)
+  self.disk = Disk.new(self.per, cfg, self.log, self.state)
 
   self.envelope = Envelope.new(cfg)
   self.osc = Oscillation.new(cfg, self.log)
@@ -86,15 +90,21 @@ function App:boot()
   self.modes:setFeel(self.cfg.modes.default)
   self.modes:setLateral(self.cfg.modes.lateralDefault)
 
-  -- Hardware failsafe FIRST, before anything can command thrust. A relay holds its output
-  -- when its computer dies, so this level is already standing by if we are ever gone.
-  local ok, report = self.relays:applyDerivedFailsafe(Config)
-  if not ok then
-    self.log:error("FAILSAFE NOT ARMED: %s", tostring(report.reason or "verification failed"))
-    self.state:raise("failsafe", "warning", "failsafe not armed")
-  else
-    self.state:clear("failsafe")
+  -- Engine master FIRST, before anything else touches a relay: assert the funnel BLOCKED.
+  -- The vehicle boots off, and an unblocked funnel with no engine running would quietly drain
+  -- the vault into a cold engine.
+  self.engine:blockNow()
+  self.engine:publish()
+  if self.engine:available() then
+    self.log:info("engine master OFF, funnel blocked (relay %s side %s)",
+      tostring(self.per.engine.name), tostring(self.per.engine.side))
+  elseif self.cfg.engine.enabled then
+    self.log:error("engine.enabled is set but no engine relay is present")
+    self.state:raise("engine", "warning", "engine relay missing")
   end
+
+  -- NOTE: there is no hardware thrust failsafe. It was scrapped deliberately -- see
+  -- docs/WIRING.md. If this computer dies in flight, the craft falls.
 
   -- Adopt the first altitude reading as the software hold reference, as specified.
   self.sensors:read(nil)
@@ -122,6 +132,13 @@ function App:boot()
   if #problems > 0 then
     self.state:raise("keybinds", "caution", ("%d keybind problem(s)"):format(#problems))
   end
+
+  local diskStatus = self.disk:status()
+  self.log:info("disk: %d drive(s), %s, %d config(s) here",
+    diskStatus.driveCount, diskStatus.diskPresent and "disk present" or "no disk",
+    diskStatus.localConfigs)
+
+  self.fuel:readAll()
 
   return self.configValid
 end
@@ -173,7 +190,14 @@ function App:cycle(dt)
   if edges.cycleFeel then self.modes:cycleFeel() end
   if edges.toggleLateral then self.modes:toggleLateral() end
   if edges.toggleAssist then self.modes:toggleAssist() end
+  if edges.engineMaster then self.engine:toggleMaster(now) end
+  if edges.lights then self.relays:toggleAux("lights") end
+  if edges.gear then self.relays:toggleAux("gear") end
   self.attitude:setMode(self.modes:attitudeMode())
+
+  -- The engine pulse machine runs every cycle, in every flight state including DAMPED and
+  -- FAILSAFE: whatever else is wrong, the engine must keep being fed or the pumps stop.
+  self.engine:tick(now)
 
   self.modes:updateBrakeKey(held.brake and true or false, now)
   self.modes:updateThrottle(axes.accel, dt, now)
@@ -321,34 +345,81 @@ function App:publish(measured, capability, dt, overrun)
     self.state:clear("envelope")
   end
 
-  -- fuel and thruster readback are not needed every cycle
+  self.engine:publish()
+
+  -- fuel, gauges and thruster readback are not needed every cycle
   if self.cycles % 10 == 0 then
     self.thrusters:readback()
-    local _, aggregate = self.fuel:read()
-    local level = require("lib.io.fuel").level(aggregate.worstFraction)
+    local _, aggregate = self.fuel:readAll()
+
+    local level = Fuel.level(aggregate.worstFraction)
     if level == "warning" or level == "caution" then
-      self.state:raise("fuel", level, ("lift fuel %.0f%% (%s)")
+      self.state:raise("fuel", level, ("thruster fuel %.0f%% (%s)")
         :format((aggregate.worstFraction or 0) * 100, tostring(aggregate.worstId)))
     else
       self.state:clear("fuel")
     end
+
+    -- The craft's own tank: separate from the per-thruster reading, because a full thruster
+    -- and an empty supply tank are very different situations.
+    local tankLevel = Fuel.level(aggregate.worstTank)
+    if aggregate.worstTank ~= nil and (tankLevel == "warning" or tankLevel == "caution") then
+      self.state:raise("tank", tankLevel, ("%s %.0f%%")
+        :format(tostring(aggregate.worstTankLabel or "tank"), aggregate.worstTank * 100))
+    else
+      self.state:clear("tank")
+    end
+
+    -- An empty engine vault means the pumps are about to stop, whatever the tanks say.
+    if aggregate.vaultEmpty then
+      self.state:raise("vault", "caution", "engine fuel vault is empty")
+    else
+      self.state:clear("vault")
+    end
+
+    -- Airborne with the engine off: the pumps are not running, so the thrusters are living on
+    -- whatever is already in their lines.
+    if self.cfg.engine.warnWhenOffAirborne and self.engine:available()
+      and not self.engine.master and not measured.groundContact then
+      self.state:raise("engineOff", "warning", "engine master OFF while airborne")
+    else
+      self.state:clear("engineOff")
+    end
   end
 
-  -- Persist the learned hover trim occasionally, and re-derive the failsafe level from it.
-  -- This is what closes the loop on the hardware failsafe actually being the right number.
+  if self.cycles % 100 == 0 then self.disk:status() end
+
+  -- Persist the learned hover trim occasionally, so the next boot starts near equilibrium
+  -- instead of hunting for it.
   if self.cycles % 600 == 0 then
     if math.abs(trim - self.trimAtLastSave) > 0.02 then
       self.cfg.control.altitude.hoverTrim = trim
       local saved, err = Config.save(self.configPath, self.cfg)
       if saved then
         self.trimAtLastSave = trim
-        self.log:info("hover trim %.3f persisted; re-deriving failsafe level", trim)
-        self.relays:applyDerivedFailsafe(Config)
+        self.log:info("hover trim %.3f persisted", trim)
       else
         self.log:warn("could not persist hover trim: %s", tostring(err))
       end
     end
   end
+end
+
+-- ---------------------------------------------------------------- disk
+
+--- Save every config on this computer to a floppy. Exposed so the UI and the terminal menu
+--- share one implementation.
+function App:saveConfigsToDisk()
+  return self.disk:saveAll()
+end
+
+function App:loadConfigsFromDisk()
+  local ok, report = self.disk:loadAll()
+  if ok and #report.loaded > 0 then
+    self.log:warn("configs loaded from disk; reboot to apply")
+    self.state:raise("configReload", "caution", "configs loaded from disk -- reboot to apply")
+  end
+  return ok, report
 end
 
 -- ---------------------------------------------------------------- event loop
@@ -361,8 +432,12 @@ function App:onPeripheralChange(event, name)
   self.attitude:reset()
   self.brake:reset()
   self.assist:reset()
-  self.relays:applyDerivedFailsafe(Config)
-  self.log:warn("hardware changed: loops reset and failsafe re-armed")
+  -- A relay that came back may have lost its output, so re-assert the funnel state rather
+  -- than trusting our cached belief about it.
+  self.engine:invalidate()
+  self.engine:tick(os.epoch("utc"))
+  self.disk:status()
+  self.log:warn("hardware changed: loops reset, engine output re-asserted")
   return true
 end
 
@@ -389,15 +464,20 @@ function App:run()
       timer = os.startTimer(period)
     elseif event == "peripheral" or event == "peripheral_detach" then
       self:onPeripheralChange(event, p1)
+    elseif event == "disk" or event == "disk_eject" then
+      self.per:scan()
+      self.disk:status()
     elseif event == "terminate" then
       self.log:warn("terminate received")
       self.running = false
     end
   end
 
-  -- On the way out, leave the craft in the hands of the hardware failsafe.
-  self.log:info("shutting down: nozzles neutral, failsafe holds")
+  -- On the way out: nozzles neutral and the funnel blocked. There is no hardware thrust
+  -- failsafe (docs/WIRING.md), so land before stopping this program.
+  self.log:info("shutting down: nozzles neutral, engine funnel blocked")
   pcall(function() self.thrusters:neutralVectors() end)
+  pcall(function() self.engine:blockNow() end)
 end
 
 function App:stop()

@@ -28,7 +28,7 @@ local function testConfig(overrides)
           pos = { x = 1, y = 0, z = 1 }, invertVectorY = true },
       },
       relays = {
-        { peripheral = "redstone_relay_0", side = "top", level = 8, purpose = "failsafe" },
+        { peripheral = "redstone_relay_0", side = "top", purpose = "aux", label = "lights" },
       },
     },
     sensors = {
@@ -434,89 +434,18 @@ T.it("level classifies against the thresholds", function()
 end)
 
 -- ------------------------------------------------------------ relays
+T.suite("relays (aux only -- the hardware failsafe was scrapped)")
 
-T.suite("relays")
-
-T.it("applyFailsafe writes and verifies the level", function()
+T.it("the failsafe API is gone, deliberately", function()
   mock.reset()
   _G.peripheral = mock.install()
   local r = rig()
   local relays = Relays.new(r.per, r.cfg, r.log, r.state)
-  local ok, report = relays:applyFailsafe(8)
-  T.isTrue(ok, "applied")
-  T.eq(report.count, 1, "one relay")
-  T.eq(report.relays[1].readback, 8, "verified readback")
-  T.isTrue(r.state:get("failsafe.applied"), "state records success")
-end)
-
-T.it("a relay that reports back the wrong level fails verification", function()
-  mock.reset()
-  _G.peripheral = mock.install({ devices = {
-    redstone_relay_0 = { type = "redstone_relay", dev = mock.relay({ lie = 1 }) },
-  } })
-  local r = rig()
-  local relays = Relays.new(r.per, r.cfg, r.log, r.state)
-  local ok, report = relays:applyFailsafe(8)
-  T.isFalse(ok, "verification caught it")
-  T.eq(report.relays[1].readback, 9, "the lie is visible in the report")
-end)
-
-T.it("a write failure is caught rather than thrown", function()
-  mock.reset()
-  _G.peripheral = mock.install({ devices = {
-    redstone_relay_0 = { type = "redstone_relay", dev = mock.relay({ failWrites = true }) },
-  } })
-  local r = rig()
-  local relays = Relays.new(r.per, r.cfg, r.log, r.state)
-  local ok, report = relays:applyFailsafe(8)
-  T.isFalse(ok, "reported as failure")
-  T.isFalse(report.relays[1].ok, "row marked bad")
-end)
-
-T.it("no failsafe relay is a reported failure, not a silent success", function()
-  mock.reset()
-  _G.peripheral = mock.install()
-  local cfg = testConfig()
-  cfg.hardware.relays = {}
-  local r = rig(cfg)
-  local relays = Relays.new(r.per, r.cfg, r.log, r.state)
-  local ok, report = relays:applyFailsafe(8)
-  T.isFalse(ok, "not ok")
-  T.isTrue(tostring(report.reason):find("no failsafe relay") ~= nil, "reason given")
-end)
-
-T.it("levels are clamped to the legal redstone range", function()
-  mock.reset()
-  _G.peripheral = mock.install()
-  local r = rig()
-  local relays = Relays.new(r.per, r.cfg, r.log, r.state)
-  local _, report = relays:applyFailsafe(99)
-  T.eq(report.level, 15, "clamped high")
-  local _, report2 = relays:applyFailsafe(-5)
-  T.eq(report2.level, 0, "clamped low")
-end)
-
-T.it("the derived level comes from the learned hover trim", function()
-  mock.reset()
-  _G.peripheral = mock.install()
-  local cfg = testConfig()
-  cfg.control.altitude.hoverTrim = 0.6      -- 0.6 * 15 = 9, +1 bias
-  cfg.failsafe.biasSteps = 1
-  local r = rig(cfg)
-  local relays = Relays.new(r.per, r.cfg, r.log, r.state)
-  local ok, report = relays:applyDerivedFailsafe(Config)
-  T.isTrue(ok, "applied")
-  T.eq(report.level, 10, "derived level")
-end)
-
-T.it("the failsafe test is gated on being on the ground", function()
-  mock.reset()
-  _G.peripheral = mock.install()
-  local r = rig()
-  local relays = Relays.new(r.per, r.cfg, r.log, r.state)
-  local ok, report = relays:testFailsafe(8, nil, false)
-  T.isFalse(ok, "refused in the air")
-  T.isTrue(tostring(report.reason):find("ground") ~= nil, "reason mentions ground")
+  -- Scrapped 2026-07-26: a relay per thruster cost too much space and weight. If this ever
+  -- comes back it must come back wired, not as a half-version that only looks safe.
+  T.isNil(relays.applyFailsafe, "applyFailsafe removed")
+  T.isNil(relays.applyDerivedFailsafe, "applyDerivedFailsafe removed")
+  T.isNil(relays.testFailsafe, "testFailsafe removed")
 end)
 
 T.it("aux outputs are addressed by label", function()
@@ -535,8 +464,70 @@ T.it("aux outputs are addressed by label", function()
   T.isTrue(relays:setAux("lights", true), "set")
   T.isTrue(r.state:get("aux.lights"), "state updated")
   T.containsMatch(relays:auxLabels(), "lights", "label listed")
-  local ok = relays:setAux("nonexistent", true)
-  T.isFalse(ok, "unknown label refused")
+  T.isFalse(relays:setAux("nonexistent", true), "unknown label refused")
+end)
+
+T.it("toggleAux flips and reports the new value", function()
+  mock.reset()
+  _G.peripheral = mock.install()
+  local cfg = testConfig()
+  cfg.hardware.relays = {
+    { peripheral = "redstone_relay_0", side = "top", purpose = "aux", label = "gear" },
+  }
+  cfg = Config.withDefaults(cfg)
+  local r = rig(cfg)
+  local relays = Relays.new(r.per, r.cfg, r.log, r.state)
+  T.eq(relays:toggleAux("gear"), true, "off -> on")
+  T.eq(relays:toggleAux("gear"), false, "on -> off")
+end)
+
+T.it("an analog aux output is clamped to the legal range", function()
+  mock.reset()
+  _G.peripheral = mock.install()
+  local cfg = testConfig()
+  cfg.hardware.relays = {
+    { peripheral = "redstone_relay_0", side = "top", purpose = "aux", label = "dimmer" },
+  }
+  cfg = Config.withDefaults(cfg)
+  local r = rig(cfg)
+  local relays = Relays.new(r.per, r.cfg, r.log, r.state)
+  T.isTrue(relays:setAuxLevel("dimmer", 99), "set")
+  T.eq(r.state:get("aux.dimmer.level"), 15, "clamped high")
+  relays:setAuxLevel("dimmer", -4)
+  T.eq(r.state:get("aux.dimmer.level"), 0, "clamped low")
+end)
+
+T.it("a write failure is caught rather than thrown", function()
+  mock.reset()
+  _G.peripheral = mock.install({ devices = {
+    redstone_relay_0 = { type = "redstone_relay", dev = mock.relay({ failWrites = true }) },
+  } })
+  local cfg = testConfig()
+  cfg.hardware.relays = {
+    { peripheral = "redstone_relay_0", side = "top", purpose = "aux", label = "lights" },
+  }
+  cfg = Config.withDefaults(cfg)
+  local r = rig(cfg)
+  local relays = Relays.new(r.per, r.cfg, r.log, r.state)
+  local ok = relays:setAux("lights", true)
+  T.isFalse(ok, "reported as a failure, not an exception")
+end)
+
+T.it("readback lists every relay for the UI", function()
+  mock.reset()
+  _G.peripheral = mock.install()
+  local cfg = testConfig()
+  cfg.hardware.relays = {
+    { peripheral = "redstone_relay_0", side = "top", purpose = "aux", label = "lights" },
+  }
+  cfg = Config.withDefaults(cfg)
+  local r = rig(cfg)
+  local relays = Relays.new(r.per, r.cfg, r.log, r.state)
+  relays:setAux("lights", true)
+  local rows = relays:readback()
+  T.eq(#rows, 1, "one relay")
+  T.eq(rows[1].label, "lights", "label")
+  T.isTrue(rows[1].digital, "state read back")
 end)
 
 return true

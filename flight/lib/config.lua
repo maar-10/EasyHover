@@ -48,9 +48,9 @@ end
 local function relayTemplate()
   return {
     peripheral = "",
-    side = "top",         -- NB: a redstone relay's "face" is its BACK (DriveByWire v6)
-    level = 0,            -- analog 0..15 written at boot as the hardware failsafe
-    purpose = "failsafe", -- "failsafe" | "aux"
+    side = "top",     -- NB: a redstone relay's "face" is its BACK (DriveByWire v6)
+    level = 0,        -- analog level, for an aux output that wants one
+    purpose = "aux",  -- "aux" only; the "failsafe" purpose was scrapped
     label = "",
   }
 end
@@ -84,6 +84,40 @@ function Config.defaults()
         controller = "",
         typewriter = "",
       },
+      -- Fluid gauges. Create's fluid tanks answer the generic `fluid_storage` methods, so
+      -- tanks() gives amount and (usually) capacity. When the mod does not report a
+      -- capacity, set capacityMb so the gauge has a scale.
+      tanks = {
+        -- { peripheral = "", label = "Main fuel", capacityMb = 0 }
+      },
+      -- Item gauges: the vault feeding the portable engine, so the cockpit can see how much
+      -- engine fuel is left. `item` filters to one id; blank counts everything.
+      vaults = {
+        -- { peripheral = "", label = "Engine fuel", item = "" }
+      },
+      -- The relay whose output gates the funnel above the portable engine.
+      engine = { relay = "", side = "top" },
+    },
+
+    -- Portable-engine master control.
+    --
+    -- The funnel above the engine passes items only while it is UNPOWERED, so the signal is
+    -- inverted by nature: holding it HIGH blocks the funnel, and dropping it briefly lets
+    -- exactly one item through. Therefore:
+    --
+    --   master OFF -> signal held HIGH forever (funnel blocked, engine starves, vehicle off)
+    --   master ON  -> one immediate interrupt pulse to kickstart, then a periodic interrupt
+    --                 to feed one more item and keep the engine alive
+    --
+    -- Set `invert = true` if your wiring is the other way round (signal LOW blocks).
+    engine = {
+      enabled = false,      -- turns on once hardware.engine.relay is set
+      pulseMs = 400,        -- how long the signal drops -- long enough for ONE item
+      intervalMs = 8000,    -- gap between interrupt pulses while running
+      kickstart = true,     -- pulse immediately when the master switch goes on
+      masterDefault = false,-- the vehicle boots OFF, as a vehicle should
+      invert = false,       -- flip if HIGH lets items through on your build
+      warnWhenOffAirborne = true,
     },
 
     -- Sensor normalisation. Every raw read passes through here, so a probe surprise
@@ -284,16 +318,16 @@ function Config.defaults()
       maxGroundSpeed = 12.0,
     },
 
+    -- The HARDWARE failsafe -- a relay per lift thruster holding an open-loop hover thrust
+    -- level -- was SCRAPPED 2026-07-26. One relay plus cabling and a modem per thruster cost
+    -- too much space and weight for something that, with wired-only controls, should never
+    -- fire. The accepted consequence is recorded in docs/WIRING.md: if the flight computer is
+    -- destroyed, unloaded or rebooted in flight, the thrusters revert to redstone control,
+    -- see no signal, and the craft falls. What remains is the software reference below.
     failsafe = {
-      -- HARDWARE failsafe: an open-loop THRUST level (0..15) written to the relays at
-      -- boot. It cannot hold an altitude -- it only makes the craft settle instead of
-      -- fall. Default is derived from the learned hover trim.
-      redstoneLevel = 8,
-      biasSteps = 1,           -- err upward by this many steps when deriving from trim
-      deriveFromTrim = true,
-      -- SOFTWARE degraded-hold reference. nil = adopt the first altitude read at boot.
+      -- Degraded-hold altitude: where the loop holds when it is alive but has lost inputs or
+      -- nav. nil = adopt the first altitude read at boot.
       holdAltitude = nil,
-      verifyRelays = true,
     },
 
     input = {
@@ -307,7 +341,7 @@ function Config.defaults()
         -- action = button index 1..15
         buttons = {
           brake = 1, cycleFeel = 2, toggleLateral = 3, toggleAssist = 4,
-          gear = 5, lights = 6,
+          gear = 5, lights = 6, engineMaster = 7,
         },
       },
       typewriter = {
@@ -322,7 +356,7 @@ function Config.defaults()
           accelerate = "r", decelerate = "f",
           brake = "b",
           cycleFeel = "m", toggleLateral = "n", toggleAssist = "h",
-          gear = "g", lights = "l",
+          gear = "g", lights = "l", engineMaster = "z",
         },
         rate = 2.0,            -- how fast a held key ramps its axis, per second
         centreRate = 3.0,      -- how fast an axis returns to centre when released
@@ -416,11 +450,7 @@ function Config.validate(cfg)
     err("envelope.altCeil must be above altFloor")
   end
 
-  -- failsafe
-  local lvl = cfg.failsafe.redstoneLevel
-  if type(lvl) ~= "number" or lvl < 0 or lvl > 15 or lvl ~= math.floor(lvl) then
-    err("failsafe.redstoneLevel must be an integer 0..15 (got %s)", tostring(lvl))
-  end
+  -- failsafe (software only; the hardware failsafe was scrapped -- see the defaults above)
   if cfg.failsafe.holdAltitude ~= nil then
     num(cfg.failsafe.holdAltitude, "failsafe.holdAltitude")
   end
@@ -492,6 +522,33 @@ function Config.validate(cfg)
           .. "and attitude trim will lose authority", tostring(t.id), t.maxVector, peak)
         break
       end
+    end
+  end
+
+  -- engine
+  num(cfg.engine.pulseMs, "engine.pulseMs", 50, 5000)
+  num(cfg.engine.intervalMs, "engine.intervalMs", 200, 600000)
+  if type(cfg.engine.pulseMs) == "number" and type(cfg.engine.intervalMs) == "number"
+    and cfg.engine.pulseMs >= cfg.engine.intervalMs then
+    err("engine.pulseMs (%s) must be shorter than engine.intervalMs (%s), or the funnel would "
+      .. "never be blocked", cfg.engine.pulseMs, cfg.engine.intervalMs)
+  end
+  if cfg.engine.enabled and (cfg.hardware.engine.relay == "" or cfg.hardware.engine.relay == nil) then
+    err("engine.enabled is set but hardware.engine.relay names no peripheral")
+  end
+  if (cfg.hardware.engine.relay or "") ~= "" and not cfg.engine.enabled then
+    warn("an engine relay is configured but engine.enabled is false -- the master switch will do nothing")
+  end
+
+  -- gauges
+  for i, tank in ipairs(cfg.hardware.tanks or {}) do
+    if type(tank.peripheral) ~= "string" or tank.peripheral == "" then
+      err("hardware.tanks[%d].peripheral is required", i)
+    end
+  end
+  for i, vault in ipairs(cfg.hardware.vaults or {}) do
+    if type(vault.peripheral) ~= "string" or vault.peripheral == "" then
+      err("hardware.vaults[%d].peripheral is required", i)
     end
   end
 
@@ -596,14 +653,6 @@ function Config.validate(cfg)
       err("%s.level must be 0..15", where)
     end
   end
-  local hasFailsafeRelay = false
-  for _, r in ipairs(cfg.hardware.relays or {}) do
-    if r.purpose == "failsafe" then hasFailsafeRelay = true end
-  end
-  if not hasFailsafeRelay then
-    warn("no failsafe relay configured -- a computer failure will drop the craft")
-  end
-
   return #errors == 0, errors, warnings
 end
 
@@ -660,17 +709,6 @@ end
 --- The largest residual the quantiser can leave behind, as a fraction of thrust.
 function Config.residualBound(cfg)
   return math.max(cfg.tuning.thrustHysteresisSteps or 0.5, 0.5) / 15
-end
-
---- Derive the hardware failsafe level from the learned hover trim.
--- Returns the level and whether it was actually derived.
-function Config.deriveFailsafeLevel(cfg)
-  local trim = cfg.control.altitude.hoverTrim or 0
-  if not cfg.failsafe.deriveFromTrim or trim <= 0 then
-    return cfg.failsafe.redstoneLevel, false
-  end
-  local step = Util.round(trim * 15) + (cfg.failsafe.biasSteps or 0)
-  return Util.clamp(step, 0, 15), true
 end
 
 return Config

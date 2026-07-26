@@ -28,7 +28,7 @@ local function baseCfg(overrides)
           pos = { x = 1.5, y = 0, z = -2 } },
       },
       relays = {
-        { peripheral = "redstone_relay_0", side = "top", level = 8, purpose = "failsafe" },
+        { peripheral = "redstone_relay_0", side = "top", purpose = "aux", label = "lights" },
       },
       sensors = { velocityVector = {
         { peripheral = "velocity_sensor_0", axis = "z" },
@@ -281,7 +281,7 @@ end)
 
 T.suite("flight computer end to end")
 
-T.it("boots against mocked hardware, arms the failsafe, and flies cycles", function()
+T.it("boots against mocked hardware and flies cycles", function()
   mock.reset()
   _G.peripheral = mock.install()
   local App = require("app")
@@ -291,8 +291,6 @@ T.it("boots against mocked hardware, arms the failsafe, and flies cycles", funct
   local app = App.new({ configPath = path })
   local valid = app:boot()
   T.isTrue(valid, "config validated")
-  T.isTrue(app.state:get("failsafe.applied"), "hardware failsafe armed and verified")
-  T.notNil(app.state:get("failsafe.level"), "level recorded")
   T.notNil(app.modes.altitudeTarget, "hold altitude adopted from the first reading")
 
   for _ = 1, 40 do app:cycle(0.05) end
