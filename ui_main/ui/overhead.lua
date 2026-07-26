@@ -133,9 +133,10 @@ function Overhead.build(frame, opts)
   sy = sy + 1
 
   -- The gauge needs a maximum to draw a bar against. Create usually reports one; when it does
-  -- not, this is the fallback, and 0 means "trust whatever the tank reports".
+  -- not, this is the fallback, and 0 means "trust whatever the tank reports" -- which the row
+  -- itself says by showing "auto", so no hint line is spent on it. Rows are scarce here: every
+  -- one saved is a hardware candidate the pilot can see without paging.
   local capacityRow = tunable("tank max", "hardware.tanks.1.capacityMb", 1000, 0, 1000000, "")
-  Theme.line(settings, sy, width, "0 = auto", Theme.dim); sy = sy + 1
 
   Theme.rule(settings, sy, width); sy = sy + 1
 

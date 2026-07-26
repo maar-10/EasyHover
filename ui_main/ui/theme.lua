@@ -69,22 +69,29 @@ function Theme.gauge(frame, y, width, cfg)
 end
 
 --- A button. `onPress` gets no arguments -- panels should not care about click coordinates.
+---
+--- BOTH click events are wired, and that is not belt-and-braces. Basalt turns two clicks on
+--- the same element within 0.4 s into `mouse_double_click` INSTEAD OF a second `mouse_click`
+--- (VisualElement:mouse_click), so an `onClick`-only button silently eats every rapid second
+--- tap. In the cockpit that reads as a dead button: you tap, nothing seems to happen, you tap
+--- again -- and the second tap is the one that gets thrown away.
 function Theme.button(frame, x, y, width, text, onPress)
   local button = frame:addButton({
     x = x, y = y, width = width, height = 1,
     background = Theme.buttonBg, foreground = Theme.buttonFg,
   }):setText(text)
   if onPress then
-    button:onClick(function()
+    local function fire()
       -- pcall so a panel bug cannot take down the whole UI computer
-      local ok, err = pcall(onPress)
+      local ok = pcall(onPress)
       if not ok then
         button:setText("ERR")
         button:setBackground(Theme.warning)
-        return true
       end
       return true
-    end)
+    end
+    button:onClick(fire)
+    button:onDoubleClick(fire)
   end
   return button
 end

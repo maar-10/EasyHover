@@ -16,6 +16,7 @@ local Monitors = require("lib.monitors")
 local Overhead = require("ui.overhead")
 local ConfigPanel = require("ui.config_panel")
 local Hardware = require("ui.hardware")
+local Theme = require("ui.theme")
 local Log = require("shared.log")
 local basalt = require("basalt")
 
@@ -69,15 +70,24 @@ end
 
 --- Click an element for real, through Basalt's own hit test.
 ---
---- Two details that both cost a debugging round:
----   * isInBounds() compares against the element's x/y in its PARENT's coordinate space, so
----     that is where the click has to land. Dispatching at (1,1) silently misses.
----   * Basalt coalesces clicks within 0.4 s into mouse_double_click, which a plain onClick
----     handler never sees. Tests click faster than any human, so we wait past the threshold --
----     which also makes each call represent one real tap.
+--- isInBounds() compares against the element's x/y in its PARENT's coordinate space, so that
+--- is where the click has to land. Dispatching at (1,1) silently misses.
+---
+--- NO DELAY between calls, deliberately. Basalt coalesces two clicks on one element within
+--- 0.4 s into `mouse_double_click` INSTEAD OF a second `mouse_click`, so a button that only
+--- listens for `mouse_click` throws away every rapid second tap -- which is exactly what made
+--- the hardware picker look dead in the cockpit. Tests used to sleep past the threshold, which
+--- hid the bug. Now they tap as fast as an impatient pilot.
 local function click(element)
-  sleep(0.45)
   return element:dispatchEvent("mouse_click", "left", element:getX(), element:getY())
+end
+
+--- A tap the way CC actually delivers one: `monitor_touch` on the FRAME, in the monitor's own
+--- absolute coordinates. BaseFrame matches the peripheral name, then calls mouse_click(1, x, y).
+--- `pageY` is the y of the element's containing sub-frame, for panels that use pages.
+local function tap(frame, element, pageY)
+  local absY = element:getY() + (pageY or 1) - 1
+  return frame:dispatchEvent("monitor_touch", frame._peripheralName, element:getX(), absY)
 end
 
 local function sent()
@@ -557,16 +567,39 @@ end)
 
 T.suite("hardware assignment")
 
+local hardwareAck = nil
+
 local function hardwareRig(width, height)
   mock.reset()
   _G.peripheral = mock.install()
-  local monitor = mock.monitor(width or 15, height or 12)
+  hardwareAck = nil
+  -- A REGISTERED monitor, not a bare window: the rapid-tap test dispatches monitor_touch on
+  -- the frame, and BaseFrame only routes it if peripheral.getName(monitor) matched.
+  local monitor = peripheral.wrap("monitor_0")
+  if width or height then monitor = mock.monitor(width or 15, height or 12) end
   local frame = basalt.createFrame()
   frame:setTerm(monitor)
   local commands, actions = sent()
   local widget = Hardware.build(frame, 1, 1, frame:getWidth(), frame:getHeight(),
-    { actions = actions, log = quietLog() })
-  return widget, commands
+    { actions = actions, log = quietLog(), lastAck = function() return hardwareAck end })
+  return widget, commands, frame
+end
+
+--- The candidate rows currently drawn, as text. `(none)` is always first.
+local function rowTexts(widget)
+  local out = {}
+  for _, entry in ipairs(widget.elements.rows) do
+    if entry.button:getVisible() then out[#out + 1] = entry.button:getText() end
+  end
+  return out
+end
+
+--- Find the drawn row offering `name`, so a test taps what the pilot would tap.
+local function rowFor(widget, name)
+  for _, entry in ipairs(widget.elements.rows) do
+    if entry.button:getVisible() and entry.name == name then return entry.button end
+  end
+  return nil
 end
 
 T.it("shows the engine relay first, and that nothing is set yet", function()
@@ -579,27 +612,51 @@ T.it("shows the engine relay first, and that nothing is set yet", function()
     "offers the relays the craft reported: " .. widget.elements.count:getText())
 end)
 
-T.it("PICK assigns the first candidate", function()
+T.it("LISTS every candidate as its own row, so you can see what you are choosing", function()
+  local widget = hardwareRig()
+  widget.update(model())
+  local rows = rowTexts(widget)
+  T.eq(#rows, 3, "(none) plus two relays, got: " .. table.concat(rows, " | "))
+  T.isTrue(rows[1]:find("none") ~= nil, "first row unassigns: " .. rows[1])
+  T.notNil(rowFor(widget, "redstone_relay_0"), "relay 0 offered")
+  T.notNil(rowFor(widget, "redstone_relay_1"), "relay 1 offered")
+end)
+
+T.it("tapping a candidate row assigns THAT one, not the next in a cycle", function()
   local widget, commands = hardwareRig()
   widget.update(model())
-  click(widget.elements.pick)
+  click(rowFor(widget, "redstone_relay_1"))
+  T.eq(#commands, 1, "one command")
   T.eq(commands[1].cmd, "setEngineRelay", "the right command")
-  T.eq(commands[1].peripheral, "redstone_relay_0", "the first candidate")
+  T.eq(commands[1].peripheral, "redstone_relay_1", "the row that was tapped")
   T.eq(commands[1].side, "top", "with a side")
 end)
 
-T.it("PICK cycles on, and past the end unassigns", function()
+T.it("tapping (none) unassigns, so a wrong pick is always undoable", function()
   local widget, commands = hardwareRig()
   local m = model()
   m.telemetry.config.engineRelay = "redstone_relay_0"
   widget.update(m)
-  click(widget.elements.pick)
-  T.eq(commands[1].peripheral, "redstone_relay_1", "moves to the second")
+  click(rowFor(widget, ""))
+  T.eq(commands[1].peripheral, "", "cleared")
+end)
 
+T.it("marks the row that is currently assigned", function()
+  local widget = hardwareRig()
+  local m = model()
   m.telemetry.config.engineRelay = "redstone_relay_1"
   widget.update(m)
-  click(widget.elements.pick)
-  T.eq(commands[2].peripheral, "", "past the end clears it, so a wrong pick is undoable")
+  T.eq(rowFor(widget, "redstone_relay_1"):getBackground(), Theme.ok, "the assigned row stands out")
+  T.eq(rowFor(widget, "redstone_relay_0"):getBackground(), Theme.buttonBg, "the others do not")
+end)
+
+T.it("the assignment shows immediately, without waiting for telemetry", function()
+  -- The pilot's finger is on the row. If the highlight only moves when the next frame arrives,
+  -- a dropped frame looks exactly like a dead button.
+  local widget = hardwareRig(30, 12)
+  widget.update(model())
+  click(rowFor(widget, "redstone_relay_0"))
+  T.eq(widget.elements.value:getText(), "redstone_relay_0", "value line updated on the tap")
 end)
 
 T.it("SIDE cycles the relay side", function()
@@ -613,19 +670,42 @@ T.it("SIDE cycles the relay side", function()
   T.isFalse(commands[1].side == "top", "side changed to " .. tostring(commands[1].side))
 end)
 
-T.it("the next button moves to the tank, then the vault", function()
+T.it("the tabs switch item, and each one lists its own hardware", function()
   local widget, commands = hardwareRig()
   widget.update(model())
-  click(widget.elements.next)
+
+  click(widget.elements.tabs[2])
   T.eq(widget.elements.title:getText(), "FUEL TANK", "second item")
-  click(widget.elements.pick)
+  click(rowFor(widget, "create:fluid_tank_0"))
   T.eq(commands[1].cmd, "setTank", "assigns a tank")
   T.eq(commands[1].peripheral, "create:fluid_tank_0", "the candidate the craft reported")
 
-  click(widget.elements.next)
+  click(widget.elements.tabs[3])
   T.eq(widget.elements.title:getText(), "ENGINE VAULT", "third item")
-  click(widget.elements.pick)
+  click(rowFor(widget, "create:item_vault_0"))
   T.eq(commands[2].cmd, "setVault", "assigns a vault")
+end)
+
+T.it("RAPID CONSECUTIVE TAPS all register -- the bug that made PICK look dead", function()
+  -- Regression guard. Basalt turns a second click on the same element within 0.4 s into
+  -- mouse_double_click, so an onClick-only button silently ate it. This drives the REAL
+  -- monitor_touch path with no delay at all: every tap must produce its command.
+  local widget, commands, frame = hardwareRig()
+  widget.update(model())
+
+  tap(frame, widget.elements.tabs[2])
+  T.eq(widget.elements.title:getText(), "FUEL TANK", "tab tap 1 landed")
+  tap(frame, widget.elements.tabs[3])
+  T.eq(widget.elements.title:getText(), "ENGINE VAULT", "tab tap 2 landed, back to back")
+  tap(frame, widget.elements.tabs[2])
+  T.eq(widget.elements.title:getText(), "FUEL TANK", "tab tap 3 landed")
+
+  local target = rowFor(widget, "create:fluid_tank_0")
+  tap(frame, target)
+  tap(frame, target)
+  tap(frame, target)
+  T.eq(#commands, 3, "three taps, three commands -- none swallowed")
+  T.eq(commands[3].cmd, "setTank", "and the last one is still the right command")
 end)
 
 T.it("the SIDE button only appears for the relay", function()
@@ -643,7 +723,39 @@ T.it("says so when the craft reports no candidates", function()
   widget.update(m)
   T.isTrue(widget.elements.count:getText():find("none on network") ~= nil,
     "count line: " .. widget.elements.count:getText())
-  T.eq(widget.elements.pick:getText(), "--", "and PICK is inert")
+  local rows = rowTexts(widget)
+  T.eq(#rows, 1, "only the (none) row is offered")
+end)
+
+T.it("pages when there are more candidates than rows", function()
+  local widget = hardwareRig(15, 8)          -- 2 list rows: 3 entries need 2 pages
+  widget.update(model())
+  T.isTrue(widget.elements.count:getText():find("pg 1/2") ~= nil,
+    "page indicator: " .. widget.elements.count:getText())
+  T.isTrue(widget.elements.down:getVisible(), "paging offered")
+  click(widget.elements.down)
+  T.eq(widget.page(), 2, "moved on")
+  T.notNil(rowFor(widget, "redstone_relay_1"), "the last candidate is reachable")
+end)
+
+T.it("does not offer paging when everything fits", function()
+  local widget = hardwareRig()
+  widget.update(model())
+  T.isFalse(widget.elements.down:getVisible(), "no paging buttons cluttering the screen")
+end)
+
+T.it("shows when the craft REFUSED an assignment", function()
+  -- Otherwise a rejected command is invisible: the value reverts on the next frame and the
+  -- pilot has no idea whether the tap even arrived.
+  local widget = hardwareRig()
+  widget.update(model())
+  hardwareAck = { ack = false, cmd = "setEngineRelay", detail = {} }
+  widget.update(model())
+  T.isTrue(widget.elements.count:getText():find("REFUSED") ~= nil,
+    "count line: " .. widget.elements.count:getText())
+  hardwareAck = { ack = true, cmd = "setEngineRelay" }
+  widget.update(model())
+  T.isFalse(widget.elements.count:getText():find("REFUSED") ~= nil, "and it clears")
 end)
 
 T.it("shows what is already assigned", function()
@@ -653,8 +765,8 @@ T.it("shows what is already assigned", function()
   m.telemetry.config.engineSide = "back"
   widget.update(m)
   T.eq(widget.elements.value:getText(), "redstone_relay_1", "current assignment in full")
-  T.isTrue(widget.elements.extra:getText():find("back") ~= nil,
-    "and its side: " .. widget.elements.extra:getText())
+  T.isTrue(widget.elements.side:getText():find("back") ~= nil,
+    "and its side is on the button: " .. widget.elements.side:getText())
 end)
 
 T.it("a name too long for the screen keeps its TAIL, not its head", function()
@@ -674,6 +786,19 @@ T.it("the config panel hosts the same widget", function()
   T.notNil(panel.hardware, "hardware page present")
   panel.update(model())
   T.eq(panel.hardware.elements.title:getText(), "ENGINE RELAY", "and it is live")
+end)
+
+T.it("the overhead panel hosts it too, on the real 1x2 screen", function()
+  -- The overhead monitor is where the pilot starts the engine, so "which relay" has to be
+  -- answerable there. If the picker does not fit, that page silently sends you elsewhere.
+  local panel = overheadRig(15, 20)
+  panel.update(model())
+  T.notNil(panel.hardware, "the picker fits the overhead monitor")
+  local rows = 0
+  for _, entry in ipairs(panel.hardware.elements.rows) do
+    if entry.button:getVisible() then rows = rows + 1 end
+  end
+  T.isTrue(rows >= 3, "and it lists (none) plus both relays, got " .. rows)
 end)
 
 -- ------------------------------------------------------- incremental sync

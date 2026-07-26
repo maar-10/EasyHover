@@ -47,10 +47,18 @@ disagree.
 Config panel → **HW**, or the overhead panel's **CFG** page — the same widget, so there is one
 implementation of "which peripheral is the tank".
 
-Three items, **one at a time** with a `>` to move on. That is not stylistic: a 1×1 monitor at
-scale 0.5 is 15×10 characters, and three candidate lists cannot fit. **PICK** cycles through the
-candidates and past the end unassigns, so a wrong choice is always undoable. **SIDE** cycles the
-relay's side (a relay's "face" is its BACK — see [WIRING.md](WIRING.md)).
+**Every candidate is a row you tap once.** Three tabs — `RLY` `TNK` `VLT` — choose which item you
+are assigning; under them is the list of what the craft can actually see, with `(none)` first so a
+wrong choice is undoable, and the assigned row highlighted. Longer lists page with `^`/`v`.
+**SIDE** cycles the relay's side (a relay's "face" is its BACK — see [WIRING.md](WIRING.md)).
+
+> The first version cycled instead: one **PICK** button stepped to the next candidate. The first
+> dry run killed it. You could not see what you were choosing between, reaching candidate three
+> took three taps, and it interacted with the double-click bug below to look completely dead.
+
+The assignment appears **on the tap**, before the craft confirms it, and a refusal shows as
+`CRAFT REFUSED` on the count line. Silently reverting on the next telemetry frame is
+indistinguishable from a dead button.
 
 **The candidate list comes from the flight computer over telemetry**, not from the UI's own
 peripheral scan. Both computers see the same wired network, but the flight computer is the one
@@ -113,8 +121,14 @@ Both cost a debugging round and are noted where they bite:
 
 - **`isInBounds()` compares against an element's x/y in its *parent's* coordinate space.** A
   simulated click at (1,1) silently misses.
-- **Basalt coalesces clicks within 0.4 s into `mouse_double_click`**, which a plain `onClick`
-  handler never sees.
+- **Basalt coalesces two clicks on one element within 0.4 s into `mouse_double_click` *instead
+  of* a second `mouse_click`.** A plain `onClick` handler never sees it, so the button eats every
+  rapid second tap — which in the cockpit reads as a dead control: you tap, nothing appears to
+  happen, you tap again, and the second tap is the one thrown away. `Theme.button` therefore
+  wires **both** events to the same handler, which is why every button in the cockpit is safe
+  rather than just the one that was reported. The tests used to `sleep(0.45)` between taps, which
+  hid this for weeks; they now tap with no delay and one test taps the same row three times in a
+  row on purpose.
 - **Never stash state on a Basalt element.** The property system owns field access, so an
   arbitrary key like `_master` is not a safe place to keep anything — panels keep their last
   reported state in a closure instead.
@@ -137,3 +151,9 @@ computers in game, different interpreters in test.
 The panels are built against **real Basalt**, rendering into real `window` objects, and the
 tests assert on the text that ended up on screen rather than on the model — so a panel that
 silently stops updating is caught.
+
+Two click paths are exercised, deliberately. `click()` dispatches `mouse_click` on an element,
+which is fast and enough for most assertions. `tap()` dispatches **`monitor_touch` on the frame**
+— the event CC actually delivers — so `BaseFrame`'s peripheral-name routing and its
+`mouse_click(1, x, y)` translation are under test too. The double-click bug above was only
+reachable through `tap()`.
