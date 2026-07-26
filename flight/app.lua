@@ -547,12 +547,33 @@ function App:handleSetSlot(cmd)
     return false, { errors = errors }
   end
 
-  self.per:scan()
-  self.state:set("candidates", self.per:candidates())
+  self:rebuildHardware()
   Config.save(self.configPath, self.cfg)
   self.log:info("slot %s:%s -> %s", tostring(kind), tostring(key),
     name == "" and "(none)" or name)
   return true, { kind = kind, key = key, peripheral = name }
+end
+
+--- Re-derive everything that depends on WHICH hardware is attached.
+---
+--- A rescan alone is not enough and that gap was real: the mixer builds its matrix once, the
+--- thruster layer caches what it last wrote, and the layout and velocity capability are
+--- published from boot(). Assigning a thruster from the config screen therefore changed the
+--- file and nothing else -- the craft flew on its old mixer until someone rebooted it, which
+--- is exactly how it was reported from the cockpit.
+---
+--- Same list as boot() performs, deliberately: if a hardware change needs it at startup, it
+--- needs it now.
+function App:rebuildHardware()
+  self.per:scan()
+  self.thrusters:invalidate()
+  self.mixer:build()
+
+  local caps = self.mixer:capabilities()
+  self.state:set("layout", caps)
+  self.state:set("velocity.capability", self.sensors:velocityCapability())
+  self.state:set("candidates", self.per:candidates())
+  return caps
 end
 
 function App:handleCommand(cmd)

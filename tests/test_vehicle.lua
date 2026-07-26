@@ -578,6 +578,42 @@ T.it("assigns velocity axes, the altimeter, the gimbal and a laser direction", f
   fs.delete(path)
 end)
 
+T.it("A NEW THRUSTER REACHES THE MIXER WITHOUT A REBOOT", function()
+  -- The cockpit report that found this: configure the craft from the UI, and nothing takes
+  -- effect until the flight computer is restarted. A rescan alone was not enough -- the mixer
+  -- builds its matrix once and the layout is published from boot().
+  local app, path = appRig({ hardware = { thrusters = {
+    { id = "fl", peripheral = "vector_thruster_0", group = "lift" },
+  } } })
+  T.eq(app.mixer:capabilities().lift, 1, "one lift thruster to begin with")
+
+  app:handleCommand({ cmd = "setSlot", kind = "lift", key = "fr", peripheral = "vector_thruster_1" })
+  T.eq(app.mixer:capabilities().lift, 2, "the mixer knows about the new one IMMEDIATELY")
+  T.eq((app.state:get("layout") or {}).lift, 2, "and the published layout agrees")
+  fs.delete(path)
+end)
+
+T.it("removing a thruster leaves the mixer without it, immediately", function()
+  local app, path = appRig({ hardware = { thrusters = {
+    { id = "fl", peripheral = "vector_thruster_0", group = "lift" },
+    { id = "fr", peripheral = "vector_thruster_1", group = "lift" },
+  } } })
+  T.eq(app.mixer:capabilities().lift, 2, "two to begin with")
+  app:handleCommand({ cmd = "setSlot", kind = "lift", key = "fr", peripheral = "" })
+  T.eq(app.mixer:capabilities().lift, 1, "and one after clearing the slot")
+  fs.delete(path)
+end)
+
+T.it("a velocity sensor assigned from the UI updates the reported capability", function()
+  -- Drift damping and the brake law both key off this, and it was published only at boot.
+  local app, path = appRig()
+  app:handleCommand({ cmd = "setSlot", kind = "velocity", key = "x", peripheral = "velocity_sensor_0" })
+  app:handleCommand({ cmd = "setSlot", kind = "velocity", key = "z", peripheral = "velocity_sensor_1" })
+  T.eq(app.state:get("velocity.capability"), "vector",
+    "a full horizontal vector is recognised without a restart")
+  fs.delete(path)
+end)
+
 T.it("REFUSES a slot that does not exist rather than inventing one", function()
   local app, path = appRig()
   T.isFalse((app:handleCommand({ cmd = "setSlot", kind = "lift", key = "middle",

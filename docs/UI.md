@@ -190,6 +190,23 @@ Saying that a request went out is also fine, because it is a fact about this com
 than a claim about the craft: `sent, waiting` on the hardware picker, `saving...` on the disk
 page. These clear when the real state confirms, and a refusal is shown rather than swallowed.
 
+## Hardware changes apply live
+
+Assigning a thruster from the config screen used to change the config file **and nothing else**.
+A `per:scan()` alone is not enough: the mixer builds its control matrix once, the thruster layer
+caches what it last wrote, and the layout and velocity capability are published from `boot()`.
+The craft therefore kept flying on its old mixer until someone rebooted the flight computer —
+which is how it was reported from the cockpit ("I have to restart the flight controller").
+
+`App:rebuildHardware()` re-derives all of it, and every `setSlot` calls it. It performs the same
+list `boot()` does, deliberately: **if a hardware change needs it at startup, it needs it now.**
+
+> Separately, and not the same thing: after the Suite *updates* a computer, that computer is
+> still running the code it loaded at boot. CC loads a program once; new files on disk do
+> nothing until something starts them. The Suite now says `REBOOT THIS COMPUTER` rather than
+> leaving it as a dim hint, because updating a running cockpit and then finding the new buttons
+> dead is the obvious trap.
+
 ## The event-queue trap
 
 `basalt.onEvent("timer", ...)` fires for **every** timer on the computer, including Basalt's own

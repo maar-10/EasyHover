@@ -788,7 +788,16 @@ function Suite.main(args)
   end
   good(("Now at %s as role '%s'."):format(manifest.version, role))
   if spec.entry ~= "" then
-    dim("Reboot to run it, or: " .. spec.entry)
+    if #staged > 0 and not fresh then
+      -- THIS COMPUTER IS STILL RUNNING THE OLD CODE. CC loads a program once; new files on
+      -- disk do nothing until something starts them. Updating a running cockpit and then
+      -- wondering why the new buttons do not work is exactly what happens without this line,
+      -- so it is a warning rather than a dim hint.
+      warn("REBOOT THIS COMPUTER -- it is still running the old version.")
+      dim("  reboot     (or run: " .. spec.entry .. ")")
+    else
+      dim("Reboot to run it, or: " .. spec.entry)
+    end
   end
 
   Suite.selfUpdateNotice(base, manifest)

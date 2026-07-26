@@ -96,6 +96,15 @@ else
   fail "deletes are not guarded" "a repair could cost the operator their config"
 fi
 
+# 8a. An UPDATE must tell the operator to reboot. CC loads a program once, so a cockpit that
+# was updated while running keeps executing the OLD code -- which looks exactly like the new
+# features being broken, and is how it was reported from the cockpit.
+if grep -q "REBOOT THIS COMPUTER" easyhover_suite.lua; then
+  pass "an update tells the operator the running code is stale"
+else
+  fail "an update does not mention rebooting"     "the operator will test the old code and report the new features as broken"
+fi
+
 # 8. Staging must exist, or an interrupted update would half-overwrite the install.
 if grep -q 'local STAGE = "%.ehnew"' easyhover_suite.lua \
   || grep -q 'local STAGE = ".ehnew"' easyhover_suite.lua; then
