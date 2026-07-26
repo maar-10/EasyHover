@@ -102,7 +102,7 @@ function Nav.build(frame, opts)
     return p
   end
 
-  local navPage, fcsPage, selfPage = page(), page(), page()
+  local navPage, fcsPage, selfPage, axisPage = page(), page(), page(), page()
   navPage:setVisible(true)
 
   local function show(target)
@@ -121,11 +121,12 @@ function Nav.build(frame, opts)
   local navPlaceholder = Theme.line(navPage, math.floor((reservedTop + reservedBottom) / 2),
     width, Theme.centre("no nav yet", width), Theme.dim)
 
-  -- the border carries the pre-flight tests
-  local halfWidth = math.max(6, math.floor((width - 1) / 2))
-  Theme.button(navPage, 1, height, halfWidth, "FCS TEST", function() show(fcsPage) end)
-  Theme.button(navPage, halfWidth + 2, height, width - halfWidth - 1, "SELF TEST",
-    function() show(selfPage) end)
+  -- the border carries the pre-flight tests: three buttons across the bottom edge
+  local third = math.max(5, math.floor((width - 2) / 3))
+  Theme.button(navPage, 1, height, third, "FCS TEST", function() show(fcsPage) end)
+  Theme.button(navPage, third + 2, height, third, "SELFTEST", function() show(selfPage) end)
+  Theme.button(navPage, third * 2 + 3, height, math.max(5, width - third * 2 - 2), "AXISMAP",
+    function() show(axisPage) end)
 
   -- ---------------------------------------------------------------- FCS test
 
@@ -170,6 +171,127 @@ function Nav.build(frame, opts)
     function() actions.selfTest("abort") end)
   Theme.button(selfPage, 1, height, math.min(6, width), "BACK", function() show(navPage) end)
 
+  -- --------------------------------------------------------------- axis map
+
+  Theme.line(axisPage, 1, width, Theme.centre("AXIS MAP", width), Theme.accent)
+  local axisHint = Theme.line(axisPage, 2, width, "tap a nozzle direction", Theme.dim)
+  Theme.rule(axisPage, 3, width)
+
+  --- One row per thruster, four buttons per row: the nozzle's OWN four deflections. Tapping one
+  --- latches that nozzle at full deflection so you can walk out and look at it; the panel below
+  --- lights up with the direction the system currently believes it points, and holding a/d/w/s
+  --- on the typewriter renames it.
+  ---
+  --- A LATCH, not a held switch: CC delivers `monitor_touch` and nothing whatsoever for the
+  --- release, so press-and-hold on a monitor is not expressible. Tap again to let go.
+  local axisLabelWidth = math.max(3, math.min(6, width - 12))
+  local axisButtonWidth = math.max(3, math.floor((width - axisLabelWidth) / 4))
+  local axisFooterRow = height - 2
+  local axisRowCount = math.max(1, axisFooterRow - 4)
+  local axisRows, axisPageIndex = {}, 1
+  local refreshAxisRows
+
+  local DEFLECTIONS = {
+    { axis = "x", sign = 1, label = "X+" },
+    { axis = "x", sign = -1, label = "X-" },
+    { axis = "y", sign = 1, label = "Y+" },
+    { axis = "y", sign = -1, label = "Y-" },
+  }
+
+  for i = 1, axisRowCount do
+    local row = { entry = nil, buttons = {} }
+    row.label = Theme.line(axisPage, 3 + i, axisLabelWidth, "", Theme.fg)
+    for j, deflection in ipairs(DEFLECTIONS) do
+      row.buttons[j] = Theme.button(axisPage,
+        axisLabelWidth + (j - 1) * axisButtonWidth + 1, 3 + i, axisButtonWidth,
+        deflection.label, function()
+          local e = row.entry
+          if not e then return end
+          local held = live.axisMap or {}
+          -- tapping the one already latched releases it
+          if held.holding and held.id == e.id and held.axis == deflection.axis
+            and held.sign == deflection.sign then
+            actions.vectorHold("release", e.id, deflection.axis, deflection.sign)
+          else
+            actions.vectorHold("latch", e.id, deflection.axis, deflection.sign)
+          end
+        end)
+    end
+    axisRows[i] = row
+  end
+
+  local axisFooter = Theme.line(axisPage, axisFooterRow, width, "", Theme.dim)
+  local axisHolding = Theme.line(axisPage, height - 1, width, "", Theme.fg)
+  Theme.button(axisPage, 1, height, math.min(6, width), "BACK", function()
+    actions.vectorHold("release", "", "x", 1)
+    show(navPage)
+  end)
+  local axisRelease = Theme.button(axisPage, math.max(1, width - 8), height, 9, "RELEASE",
+    function() actions.vectorHold("release", "", "x", 1) end)
+
+  function refreshAxisRows()
+    local list = live.thrusterAxes or {}
+    local held = live.axisMap or {}
+    local pagesTotal = math.max(1, math.ceil(#list / axisRowCount))
+    axisPageIndex = math.max(1, math.min(axisPageIndex, pagesTotal))
+
+    for i, row in ipairs(axisRows) do
+      local entry = list[(axisPageIndex - 1) * axisRowCount + i]
+      row.entry = entry
+      row.label:setVisible(entry ~= nil)
+      if entry then
+        row.label:setText(Theme.fit((entry.group:sub(1, 3) .. tostring(entry.key)):upper(),
+          axisLabelWidth))
+      end
+      for j, button in ipairs(row.buttons) do
+        button:setVisible(entry ~= nil)
+        if entry then
+          local d = DEFLECTIONS[j]
+          local isHeld = held.holding and held.id == entry.id and held.axis == d.axis
+            and held.sign == d.sign
+          button:setBackground(isHeld and Theme.warning or Theme.buttonBg)
+          button:setForeground(isHeld and colours.white or Theme.buttonFg)
+        end
+      end
+    end
+
+    if #list == 0 then
+      axisFooter:setText(Theme.fit("no thrusters assigned", width))
+      axisFooter:setForeground(Theme.warning)
+    elseif pagesTotal > 1 then
+      axisFooter:setText(Theme.fit(("%d thrusters  pg %d/%d"):format(#list, axisPageIndex,
+        pagesTotal), width))
+      axisFooter:setForeground(Theme.dim)
+    else
+      axisFooter:setText(Theme.fit(("%d thrusters"):format(#list), width))
+      axisFooter:setForeground(Theme.dim)
+    end
+
+    -- THE LIT PANEL: what is deflected, and what the system thinks that direction is.
+    if held.holding then
+      axisHolding:setText(Theme.fit(("%s %s%s = %s"):format(tostring(held.id),
+        held.sign > 0 and "+" or "-", tostring(held.axis),
+        tostring(held.direction or "?")), width))
+      axisHolding:setForeground(Theme.ok)
+      local vertical = (held.group == "main") and "w/s = up/down" or "w/s = fwd/back"
+      axisHint:setText(Theme.fit("HOLD a/d " .. vertical, width))
+      axisHint:setForeground(Theme.accent)
+      axisRelease:setBackground(Theme.warning)
+      axisRelease:setForeground(colours.white)
+    else
+      axisHolding:setText("")
+      axisHint:setText(Theme.fit("tap a nozzle direction", width))
+      axisHint:setForeground(Theme.dim)
+      axisRelease:setBackground(Theme.buttonBg)
+      axisRelease:setForeground(Theme.buttonFg)
+    end
+    if held.error then
+      axisHolding:setText(Theme.fitEnd(tostring(held.error), width))
+      axisHolding:setForeground(Theme.warning)
+    end
+  end
+  refreshAxisRows()
+
   -- ---------------------------------------------------------------- update
 
   local function update(model)
@@ -178,6 +300,9 @@ function Nav.build(frame, opts)
     live.pilot = t.pilot or {}
     live.modes = t.modes or {}
     live.selfTest = t.selfTest or {}
+    live.thrusterAxes = t.thrusterAxes or {}
+    live.axisMap = t.axisMap or {}
+    refreshAxisRows()
 
     navPlaceholder:setText(Theme.centre(model.stale and "NO DATA" or "no nav yet", width))
     navPlaceholder:setForeground(model.stale and Theme.warning or Theme.dim)
@@ -288,13 +413,16 @@ function Nav.build(frame, opts)
   return {
     update = update,
     show = show,
-    pages = { nav = navPage, fcs = fcsPage, selfTest = selfPage },
+    pages = { nav = navPage, fcs = fcsPage, selfTest = selfPage, axisMap = axisPage },
+    axisRows = axisRows,
     bars = bars,
     elements = {
       placeholder = navPlaceholder, fcsStale = fcsStale, brake = brakeLine,
       mode = modeLine, source = sourceLine, warn = selfWarn,
       steps = stepLines, status = selfStatus, timer = selfTimer,
       watch = selfWatch, result = selfResult, start = startButton,
+      axisHint = axisHint, axisFooter = axisFooter, axisHolding = axisHolding,
+      axisRelease = axisRelease,
     },
   }
 end

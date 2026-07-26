@@ -107,6 +107,7 @@ function Pilot:snapshot()
     controller = self.sources.controller,
     typewriter = self.sources.typewriter,
     unbound = self.bindings:unbound(),
+    pressedCodes = self.typewriter.pressedCodes,
     keybindProblems = self.bindings.problems,
   }
 end

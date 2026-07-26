@@ -144,6 +144,36 @@ While the sweep runs it **owns the thrusters** — the mixer's commands are not 
 writing to the same nozzles would spoil the test and, worse, is the one thing this vehicle must
 never do.
 
+### AXIS MAP — naming directions by looking at them
+
+The third button on the nav border. A grid of every thruster against its nozzle's own four
+deflections (`X+ X- Y+ Y-`). Tap one and that nozzle goes to **full deflection and stays there**;
+a panel lights up with the direction the system currently believes it points:
+
+```
+lift_fl +x = RIGHT
+```
+
+Walk out, look at the nozzle, and if it is wrong **hold `a` / `d` / `w` / `s` on the typewriter**
+to rename it. The label changes as soon as the craft accepts it, and the mixer is rebuilt on the
+spot. While a nozzle is latched the normal keybinds are **silenced** — a/d/w/s are naming a
+direction, and leaving them live would roll and pitch the craft while you stand next to it.
+
+`w`/`s` mean **fore/aft** on a lift or lateral thruster and **up/down** on a rear-facing
+accelerator, whose nozzle steers in the vertical plane and cannot point forward at all. The
+screen says which, so there is nothing to remember.
+
+> **It is a latch, not a held switch, and that is a platform limit rather than a choice.** CC
+> gives a monitor `monitor_touch` and *nothing at all* for the release — there is no touch-up
+> event in the API. Press-and-hold on a monitor cannot be expressed, so a tap latches and a
+> second tap lets go. A watchdog releases anything forgotten after 45 s, and the latch is
+> refused while the self test owns the same nozzles.
+
+**Naming one axis fixes half the answer.** Assigning a nozzle axis also forces the *other* one
+onto the remaining axis of the plane — both on one craft axis is geometrically impossible and the
+mixer could never satisfy it. So six of the eight orientations are reachable from a single
+naming, and all eight once you have named both axes, which is the workflow anyway.
+
 ## Thruster orientation — the thing nothing can work out for itself
 
 The mixer turns a wanted craft-frame force into a nozzle deflection through each thruster's
@@ -152,7 +182,10 @@ them.** A thruster mounted rotated or mirrored therefore gets pushed the *wrong 
 attitude loop sees the error grow and pushes harder — which is precisely the escalating
 oscillation this design exists to prevent.
 
-The fix is two screens working together:
+**AXIS MAP is the direct way to fix it** (above): deflect, look, name. THR AXES on the config
+screen is the same eight states as abstract toggles, kept for when you already know the answer.
+
+The fix is these screens working together:
 
 1. **SELF TEST** shows you the truth. It commands nozzles through `setVectorRaw`, which
    deliberately **bypasses the mapping** — pushing the sweep through `mapVector()` would let a

@@ -77,6 +77,10 @@ function App:buildActions()
       link:send({ cmd = "setSlot", kind = kind, key = key, peripheral = peripheral or "" })
     end,
     selfTest = function(action) link:send({ cmd = "selfTest", action = action or "start" }) end,
+    vectorHold = function(action, id, axis, sign)
+      link:send({ cmd = "vectorHold", action = action or "latch", id = id or "",
+                  axis = axis or "x", sign = sign or 1 })
+    end,
     setAxes = function(id, swap, invertX, invertY)
       link:send({ cmd = "setAxes", id = id, swap = swap and true or false,
                   invertX = invertX and true or false, invertY = invertY and true or false })

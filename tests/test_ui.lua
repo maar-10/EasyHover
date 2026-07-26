@@ -115,6 +115,9 @@ local function sent()
       out[#out + 1] = { cmd = "setSlot", kind = kind, key = key, peripheral = pe }
     end,
     selfTest = function(action) out[#out + 1] = { cmd = "selfTest", action = action } end,
+    vectorHold = function(action, id, axis, sign)
+      out[#out + 1] = { cmd = "vectorHold", action = action, id = id, axis = axis, sign = sign }
+    end,
     setAxes = function(id, swap, ix, iy)
       out[#out + 1] = { cmd = "setAxes", id = id, swap = swap, invertX = ix, invertY = iy }
     end,
@@ -1224,6 +1227,129 @@ T.it("warns on the page that this is a ground-only procedure", function()
   local panel = navRig()
   T.isTrue(panel.elements.warn:getText():find("GROUND ONLY") ~= nil,
     "warning: " .. panel.elements.warn:getText())
+end)
+
+
+-- ---------------------------------------------------- nav: nozzle axis map
+
+T.suite("nozzle axis map screen")
+
+local function axisNavRig(hold, rows)
+  local panel, commands = navRig()
+  local m = navModel()
+  m.telemetry.thrusterAxes = rows or {
+    { index = 1, id = "lift_fl", group = "lift", key = "fl",
+      swap = false, invertX = false, invertY = false },
+    { index = 2, id = "main_1", group = "main", key = "1",
+      swap = false, invertX = false, invertY = false },
+  }
+  m.telemetry.axisMap = hold or { holding = false }
+  panel.update(m)
+  return panel, commands
+end
+
+T.it("is the third button on the nav border, and replaces the nav view", function()
+  local panel = axisNavRig()
+  panel.show(panel.pages.axisMap)
+  T.isTrue(panel.pages.axisMap:getVisible(), "up")
+  T.isFalse(panel.pages.nav:getVisible(), "and the nav view is not")
+end)
+
+T.it("offers all four nozzle deflections for every thruster", function()
+  local panel = axisNavRig()
+  local row = panel.axisRows[1]
+  T.eq(#row.buttons, 4, "X+, X-, Y+, Y-")
+  T.eq(row.buttons[1]:getText(), "X+")
+  T.eq(row.buttons[4]:getText(), "Y-")
+  T.isTrue(row.label:getText():find("LIFFL") ~= nil, "named: " .. row.label:getText())
+end)
+
+T.it("tapping a deflection LATCHES that nozzle", function()
+  local panel, commands = axisNavRig()
+  click(panel.axisRows[1].buttons[3])          -- Y+
+  T.eq(commands[1].cmd, "vectorHold", "the right command")
+  T.eq(commands[1].action, "latch", "latches")
+  T.eq(commands[1].id, "lift_fl", "the thruster tapped")
+  T.eq(commands[1].axis, "y", "on its Y axis")
+  T.eq(commands[1].sign, 1, "positive")
+end)
+
+T.it("tapping the LATCHED one again releases it", function()
+  -- There is no touch-release event on a monitor, so a second tap is the only way to let go.
+  local panel, commands = axisNavRig({ holding = true, id = "lift_fl", axis = "y", sign = 1,
+    direction = "FWD", group = "lift" })
+  click(panel.axisRows[1].buttons[3])          -- the same Y+
+  T.eq(commands[1].action, "release", "releases rather than re-latching")
+end)
+
+T.it("tapping a DIFFERENT deflection latches that one instead", function()
+  local panel, commands = axisNavRig({ holding = true, id = "lift_fl", axis = "y", sign = 1,
+    direction = "FWD", group = "lift" })
+  click(panel.axisRows[1].buttons[1])          -- X+
+  T.eq(commands[1].action, "latch", "latches the new one")
+  T.eq(commands[1].axis, "x")
+end)
+
+T.it("LIGHTS UP with the direction the system currently believes", function()
+  local panel = axisNavRig({ holding = true, id = "lift_fl", axis = "x", sign = 1,
+    direction = "RIGHT", group = "lift" })
+  local text = panel.elements.axisHolding:getText()
+  T.isTrue(text:find("lift_fl") ~= nil, "names the thruster: " .. text)
+  T.isTrue(text:find("%+x") ~= nil, "and the deflection")
+  T.isTrue(text:find("RIGHT") ~= nil, "and what it is currently called")
+  T.eq(panel.elements.axisHolding:getForeground(), Theme.ok, "lit")
+end)
+
+T.it("marks the held deflection on the grid", function()
+  local panel = axisNavRig({ holding = true, id = "lift_fl", axis = "x", sign = -1,
+    direction = "LEFT", group = "lift" })
+  T.eq(panel.axisRows[1].buttons[2]:getBackground(), Theme.warning, "X- is held")
+  T.eq(panel.axisRows[1].buttons[1]:getBackground(), Theme.buttonBg, "X+ is not")
+  T.eq(panel.axisRows[2].buttons[2]:getBackground(), Theme.buttonBg,
+    "and neither is the same deflection on another thruster")
+end)
+
+T.it("tells you which keys to hold, and that w/s MEANS something different on an accelerator",
+  function()
+    local panel = axisNavRig({ holding = true, id = "lift_fl", axis = "x", sign = 1,
+      direction = "RIGHT", group = "lift" })
+    T.isTrue(panel.elements.axisHint:getText():find("fwd/back") ~= nil,
+      "fore/aft on a lift thruster: " .. panel.elements.axisHint:getText())
+
+    panel = axisNavRig({ holding = true, id = "main_1", axis = "y", sign = 1,
+      direction = "UP", group = "main" })
+    T.isTrue(panel.elements.axisHint:getText():find("up/down") ~= nil,
+      "up/down on an accelerator, whose nozzle cannot point forward: "
+      .. panel.elements.axisHint:getText())
+  end)
+
+T.it("goes quiet when nothing is held", function()
+  local panel = axisNavRig({ holding = false })
+  T.eq(panel.elements.axisHolding:getText(), "", "no lit panel")
+  T.isTrue(panel.elements.axisHint:getText():find("tap a nozzle") ~= nil, "back to the prompt")
+end)
+
+T.it("BACK releases whatever is held rather than walking away from it", function()
+  local panel, commands = axisNavRig({ holding = true, id = "lift_fl", axis = "x", sign = 1,
+    direction = "RIGHT", group = "lift" })
+  panel.show(panel.pages.axisMap)
+  -- the BACK button is the first one on the page's bottom row
+  click(panel.elements.axisRelease)
+  T.eq(commands[1].action, "release", "RELEASE lets go")
+end)
+
+T.it("shows the craft's refusal instead of pretending it latched", function()
+  local panel = axisNavRig({ holding = false,
+    error = "lift_fl has no nozzle -- nothing to point" })
+  T.isTrue(panel.elements.axisHolding:getText():find("nothing to point") ~= nil,
+    "the craft's own words: " .. panel.elements.axisHolding:getText())
+  T.eq(panel.elements.axisHolding:getForeground(), Theme.warning, "flagged")
+end)
+
+T.it("says so when no thrusters are assigned yet", function()
+  local panel = axisNavRig(nil, {})
+  T.isTrue(panel.elements.axisFooter:getText():find("no thrusters") ~= nil,
+    "footer: " .. panel.elements.axisFooter:getText())
 end)
 
 -- ------------------------------------------------------------ terminal panel

@@ -1000,4 +1000,250 @@ T.it("the whole pilot input state is published for the FCS page", function()
   fs.delete(path)
 end)
 
+
+-- ------------------------------------------------------------- axis mapping
+
+T.suite("nozzle direction mapping")
+
+local AxisMap = require("lib.control.axismap")
+
+T.it("names what the system currently believes each deflection points at", function()
+  local spec = { group = "lift", vectorMap = { x = "x", y = "z" },
+                 invertVectorX = false, invertVectorY = false }
+  -- craft x is RIGHT, craft z is FORWARD (see the thruster template)
+  T.eq(AxisMap.believedDirection(spec, "x", 1), "RIGHT")
+  T.eq(AxisMap.believedDirection(spec, "x", -1), "LEFT")
+  T.eq(AxisMap.believedDirection(spec, "y", 1), "FWD")
+  T.eq(AxisMap.believedDirection(spec, "y", -1), "BACK")
+end)
+
+T.it("an invert flag flips what a deflection is called", function()
+  local spec = { group = "lift", vectorMap = { x = "x", y = "z" },
+                 invertVectorX = true, invertVectorY = false }
+  T.eq(AxisMap.believedDirection(spec, "x", 1), "LEFT", "inverted X reads the other way")
+  T.eq(AxisMap.believedDirection(spec, "y", 1), "FWD", "Y is unaffected")
+end)
+
+T.it("an accelerator's nozzle steers UP and DOWN, not fore and aft", function()
+  -- A rear-facing thruster cannot point its nozzle "forward"; its plane is left/right and
+  -- up/down. Offering fore/aft would invite a mapping the geometry cannot hold.
+  local spec = { group = "main", vectorMap = { x = "x", y = "y" },
+                 invertVectorX = false, invertVectorY = false }
+  T.eq(AxisMap.believedDirection(spec, "y", 1), "UP")
+  T.eq(AxisMap.believedDirection(spec, "y", -1), "DOWN")
+end)
+
+T.it("ASSIGNING a direction writes the map and the sign", function()
+  local spec = { group = "lift", vectorMap = { x = "x", y = "z" },
+                 invertVectorX = false, invertVectorY = false, maxVector = 0.6 }
+  -- "this nozzle's +X points LEFT"
+  T.isTrue((AxisMap.assign(spec, "x", 1, "x", -1)), "accepted")
+  T.eq(spec.vectorMap.x, "x", "nozzle X lies on the craft's left-right axis")
+  T.isTrue(spec.invertVectorX, "and is inverted, because +X came out as LEFT")
+  T.eq(AxisMap.believedDirection(spec, "x", 1), "LEFT", "which is what it now reads")
+end)
+
+T.it("assigning one nozzle axis forces the OTHER onto the remaining craft axis", function()
+  -- Both nozzle axes on the same craft axis is geometrically impossible, so it must not be
+  -- expressible -- the mixer could never satisfy it.
+  local spec = { group = "lift", vectorMap = { x = "x", y = "z" },
+                 invertVectorX = false, invertVectorY = false }
+  AxisMap.assign(spec, "x", 1, "z", 1)          -- nozzle +X now points FORWARD
+  T.eq(spec.vectorMap.x, "z", "X took fore/aft")
+  T.eq(spec.vectorMap.y, "x", "so Y was pushed onto left/right")
+  T.isFalse(spec.vectorMap.x == spec.vectorMap.y, "never both on one axis")
+end)
+
+T.it("REFUSES a direction the geometry cannot hold", function()
+  local spec = { group = "main", vectorMap = { x = "x", y = "y" } }
+  local ok, err = AxisMap.assign(spec, "y", 1, "z", 1)
+  T.isFalse(ok, "an accelerator cannot point forward")
+  T.isTrue(tostring(err):find("cannot point") ~= nil, "and says so: " .. tostring(err))
+end)
+
+T.it("all eight orientations are reachable by naming BOTH nozzle axes", function()
+  -- One assignment fixes one nozzle axis and leaves the other's sign alone, so a single naming
+  -- reaches six of the eight. Naming both -- which is the actual workflow, since the pilot
+  -- deflects and names each axis in turn -- reaches all of them.
+  local seen = {}
+  for _, xCraft in ipairs({ "x", "z" }) do
+    for _, xSign in ipairs({ 1, -1 }) do
+      for _, ySign in ipairs({ 1, -1 }) do
+        local spec = { group = "lift", vectorMap = { x = "x", y = "z" },
+                       invertVectorX = false, invertVectorY = false }
+        local yCraft = (xCraft == "x") and "z" or "x"
+        AxisMap.assign(spec, "x", 1, xCraft, xSign)
+        AxisMap.assign(spec, "y", 1, yCraft, ySign)
+        seen[("%s%s%s%s"):format(spec.vectorMap.x, spec.vectorMap.y,
+          tostring(spec.invertVectorX), tostring(spec.invertVectorY))] = true
+      end
+    end
+  end
+  local count = 0
+  for _ in pairs(seen) do count = count + 1 end
+  T.eq(count, 8, "all eight distinct mappings, got " .. count)
+end)
+
+T.it("naming the second axis does not undo the first", function()
+  local spec = { group = "lift", vectorMap = { x = "x", y = "z" },
+                 invertVectorX = false, invertVectorY = false }
+  AxisMap.assign(spec, "x", 1, "x", -1)            -- +X is LEFT
+  T.eq(AxisMap.believedDirection(spec, "x", 1), "LEFT")
+  AxisMap.assign(spec, "y", 1, "z", -1)            -- +Y is BACK
+  T.eq(AxisMap.believedDirection(spec, "y", 1), "BACK", "the second naming took")
+  T.eq(AxisMap.believedDirection(spec, "x", 1), "LEFT", "and the first still holds")
+end)
+
+-- ------------------------------------------------------------ the live latch
+
+local function axisRig()
+  local app, path = appRig({ hardware = { thrusters = {
+    { id = "lift_fl", peripheral = "vector_thruster_0", group = "lift" },
+    { id = "lift_fr", peripheral = "vector_thruster_1", group = "lift" },
+    { id = "main_1", peripheral = "solid_fuel_thruster_0", group = "main", thrustAxis = "back" },
+  } } })
+  app.state.mode = "GROUND"
+  return app, path
+end
+
+T.it("latching HOLDS the nozzle at its full deflection", function()
+  local app, path = axisRig()
+  T.isTrue((app:handleCommand({ cmd = "vectorHold", action = "latch", id = "lift_fl",
+    axis = "x", sign = 1 })), "latched")
+  local commanded
+  app.per.thrusters["lift_fl"].dev.setVector = function(x, y) commanded = { x = x, y = y } end
+  app.axisMap:tick(os.epoch("utc"), {})
+  T.notNil(commanded, "the nozzle was commanded")
+  T.isTrue(commanded.x > 0.5, "to full deflection on X: " .. tostring(commanded.x))
+  T.eq(commanded.y, 0, "and nothing on Y")
+  fs.delete(path)
+end)
+
+T.it("HOLDING 'a' renames the held deflection to LEFT", function()
+  local app, path = axisRig()
+  app:handleCommand({ cmd = "vectorHold", action = "latch", id = "lift_fl", axis = "x", sign = 1 })
+  T.eq(app.state:get("axisMap").direction, "RIGHT", "it starts believing +X is RIGHT")
+
+  app.axisMap:tick(os.epoch("utc"), { [keys.a] = true })
+  T.eq(app.state:get("axisMap").direction, "LEFT", "and now believes it is LEFT")
+  local spec = app.per.thrusters["lift_fl"].spec
+  T.eq(AxisMap.believedDirection(spec, "x", 1), "LEFT", "the config was rewritten")
+  fs.delete(path)
+end)
+
+T.it("w and s mean FWD/BACK on a lift thruster and UP/DOWN on an accelerator", function()
+  local app, path = axisRig()
+  app:handleCommand({ cmd = "vectorHold", action = "latch", id = "lift_fl", axis = "y", sign = 1 })
+  app.axisMap:tick(os.epoch("utc"), { [keys.s] = true })
+  T.eq(app.state:get("axisMap").direction, "BACK", "s is BACK on a lift thruster")
+  app:handleCommand({ cmd = "vectorHold", action = "release" })
+
+  app:handleCommand({ cmd = "vectorHold", action = "latch", id = "main_1", axis = "y", sign = 1 })
+  fs.delete(path)
+end)
+
+T.it("a key rewrite happens ONCE per press, not every cycle it is held", function()
+  local app, path = axisRig()
+  app:handleCommand({ cmd = "vectorHold", action = "latch", id = "lift_fl", axis = "x", sign = 1 })
+  local writes = 0
+  local realSave = Config.save
+  Config.save = function(...) writes = writes + 1; return realSave(...) end
+  for _ = 1, 10 do app.axisMap:tick(os.epoch("utc"), { [keys.a] = true }) end
+  Config.save = realSave
+  T.eq(writes, 1, "one config write for one press, got " .. writes)
+  fs.delete(path)
+end)
+
+T.it("SILENCES the normal keybinds while a nozzle is latched", function()
+  -- a/d/w/s are naming a direction. Leaving them live would roll and pitch the craft while
+  -- someone stands next to it reading nozzle angles.
+  local app, path = axisRig()
+  app:handleCommand({ cmd = "vectorHold", action = "latch", id = "lift_fl", axis = "x", sign = 1 })
+  local before = app.modes.feel
+  app.pilot.read = function()
+    return { pitch = 1, roll = 1, yaw = 1, climb = 1, accel = 1 },
+           { brake = true }, { cycleFeel = true, engineMaster = true }
+  end
+  app:cycle(0.05)
+  T.eq(app.modes.feel, before, "the feel mode was NOT cycled by a naming key")
+  T.isFalse(app.engine.master, "and the engine was not switched on")
+  fs.delete(path)
+end)
+
+T.it("the latch OWNS the thrusters -- the mixer does not write", function()
+  local app, path = axisRig()
+  app:handleCommand({ cmd = "vectorHold", action = "latch", id = "lift_fl", axis = "x", sign = 1 })
+  local applied = 0
+  local realApply = app.thrusters.apply
+  app.thrusters.apply = function(...) applied = applied + 1; return realApply(...) end
+  app:cycle(0.05)
+  T.eq(applied, 0, "the mixer stayed out of it")
+  fs.delete(path)
+end)
+
+T.it("releasing centres the nozzle", function()
+  local app, path = axisRig()
+  app:handleCommand({ cmd = "vectorHold", action = "latch", id = "lift_fl", axis = "x", sign = 1 })
+  local centred = false
+  app.per.thrusters["lift_fl"].dev.setVector = function(x, y) centred = (x == 0 and y == 0) end
+  T.isTrue((app:handleCommand({ cmd = "vectorHold", action = "release" })), "released")
+  T.isTrue(centred, "and the nozzle went back to centre")
+  T.isFalse(app.axisMap:isHolding(), "nothing is held")
+  fs.delete(path)
+end)
+
+T.it("TIMES OUT rather than leaving a nozzle deflected for ever", function()
+  local app, path = axisRig()
+  app:handleCommand({ cmd = "vectorHold", action = "latch", id = "lift_fl", axis = "x", sign = 1 })
+  app.axisMap:tick(app.axisMap.hold.startedAt + app.axisMap.timeoutMs + 1, {})
+  T.isFalse(app.axisMap:isHolding(), "a forgotten latch lets go by itself")
+  fs.delete(path)
+end)
+
+T.it("refuses a thruster with no nozzle, and one that does not exist", function()
+  local app, path = axisRig()
+  local ok, detail = app:handleCommand({ cmd = "vectorHold", action = "latch",
+    id = "main_1", axis = "x", sign = 1 })
+  T.isFalse(ok, "a solid-fuel thruster has nothing to point")
+  T.isTrue(tostring((detail or {}).error):find("no nozzle") ~= nil,
+    "and says so: " .. tostring((detail or {}).error))
+
+  local ok2 = app:handleCommand({ cmd = "vectorHold", action = "latch",
+    id = "nope", axis = "x", sign = 1 })
+  T.isFalse(ok2, "and an unknown thruster is refused")
+  fs.delete(path)
+end)
+
+T.it("will not latch while the self test owns the same nozzles", function()
+  local app, path = axisRig()
+  app:handleCommand({ cmd = "selfTest", action = "start" })
+  local ok, detail = app:handleCommand({ cmd = "vectorHold", action = "latch",
+    id = "lift_fl", axis = "x", sign = 1 })
+  T.isFalse(ok, "refused")
+  T.isTrue(tostring((detail or {}).error):find("self test") ~= nil,
+    "and says why: " .. tostring((detail or {}).error))
+  fs.delete(path)
+end)
+
+T.it("latching a second nozzle releases the first", function()
+  local app, path = axisRig()
+  app:handleCommand({ cmd = "vectorHold", action = "latch", id = "lift_fl", axis = "x", sign = 1 })
+  app:handleCommand({ cmd = "vectorHold", action = "latch", id = "lift_fr", axis = "y", sign = -1 })
+  T.eq(app.state:get("axisMap").id, "lift_fr", "only the newest is held")
+  T.eq(app.state:get("axisMap").axis, "y", "on the axis asked for")
+  T.eq(app.state:get("axisMap").sign, -1, "with the sign asked for")
+  fs.delete(path)
+end)
+
+T.it("a remap REBUILDS the mixer, so it applies without a reboot", function()
+  local app, path = axisRig()
+  app:handleCommand({ cmd = "vectorHold", action = "latch", id = "lift_fl", axis = "x", sign = 1 })
+  local rebuilt = 0
+  local realBuild = app.mixer.build
+  app.mixer.build = function(...) rebuilt = rebuilt + 1; return realBuild(...) end
+  app.axisMap:tick(os.epoch("utc"), { [keys.a] = true })
+  T.eq(rebuilt, 1, "the mixer picked up the new mapping immediately")
+  fs.delete(path)
+end)
+
 return true

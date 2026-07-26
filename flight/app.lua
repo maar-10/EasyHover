@@ -26,6 +26,7 @@ local Oscillation = require("lib.control.oscillation")
 local Assist = require("lib.control.assist")
 local Brake = require("lib.control.brake")
 local SelfTest = require("lib.control.selftest")
+local AxisMap = require("lib.control.axismap")
 local Modes = require("lib.modes")
 local Pilot = require("lib.input.pilot")
 local Telemetry = require("lib.telemetry")
@@ -74,6 +75,14 @@ function App.new(opts)
   self.pilot = Pilot.new(cfg, self.log)
   self.telemetry = Telemetry.new(cfg, self.log, self.state)
   self.selfTest = SelfTest.new(self.thrusters, self.per, cfg, self.log, self.state)
+  self.axisMap = AxisMap.new(self.thrusters, self.per, cfg, self.log, self.state)
+  -- A remap changes the mixer's matrix, so it must be rebuilt and saved the moment it happens.
+  self.axisMap.onAssigned = function()
+    self.thrusters:invalidate()
+    self.mixer:build()
+    self:publishThrusterAxes()
+    Config.save(self.configPath, self.cfg)
+  end
 
   self.altitudeAccumulator = 0
   self.lastCycleAt = nil
@@ -194,6 +203,14 @@ function App:cycle(dt)
 
   -- ---- pilot
   local axes, held, edges = self.pilot:read(self:devices(), dt)
+  -- While a nozzle is latched for mapping, the pilot's keys are NAMING a direction, not flying.
+  -- Leaving them live would have a/d/s/w roll and pitch the craft while someone stands next to
+  -- it reading nozzle angles.
+  if self.axisMap:isHolding() then
+    axes = { pitch = 0, roll = 0, yaw = 0, climb = 0, accel = 0 }
+    held = {}
+    edges = {}
+  end
   if edges.cycleFeel then self.modes:cycleFeel() end
   if edges.toggleLateral then self.modes:toggleLateral() end
   if edges.toggleAssist then self.modes:toggleAssist() end
@@ -315,7 +332,15 @@ function App:cycle(dt)
   -- The self test and the identify sweep each OWN the thrusters while they run. Applying the
   -- mixer's commands as well would have the attitude loop fighting the sweep for the same
   -- nozzles, which would both spoil the test and be the one thing this vehicle must never do.
-  if self.selfTest:isRunning() then
+  if self.axisMap:isHolding() then
+    local flying = (self.state.mode == "FLIGHT" or self.state.mode == "HOVER"
+      or self.state.mode == "REVERSE")
+    if flying then
+      self.axisMap:release("the craft is flying")
+    else
+      self.axisMap:tick(now, (self.state:get("pilot") or {}).pressedCodes)
+    end
+  elseif self.selfTest:isRunning() then
     -- Only ACTIVE flight aborts. GROUND depends on a down-facing laser being assigned, so
     -- demanding it here would make the pre-flight test unavailable on a half-configured craft.
     -- The sweep's own power interlock is the guarantee that nothing is holding the craft up.
@@ -700,6 +725,19 @@ function App:handleCommand(cmd)
     Config.save(self.configPath, self.cfg)
     self.log:info("%s -> %s", cmd.cmd, cmd.peripheral == "" and "(none)" or cmd.peripheral)
     return true, { peripheral = cmd.peripheral }
+
+  elseif cmd.cmd == "vectorHold" then
+    if cmd.action == "release" then
+      return true, { released = self.axisMap:release("by the pilot") }
+    end
+    local allowed = (self.state.mode == "GROUND") or (not self.engine.master)
+    -- One latch at a time, and never while the sweep owns the same nozzles.
+    if self.selfTest:isRunning() then
+      return false, { error = "the self test is running" }
+    end
+    if self.axisMap:isHolding() then self.axisMap:release("switching nozzle") end
+    local ok, err = self.axisMap:latch(cmd.id, cmd.axis, cmd.sign, { allowed = allowed, now = now })
+    return ok, { error = err }
 
   elseif cmd.cmd == "selfTest" then
     if cmd.action == "abort" then

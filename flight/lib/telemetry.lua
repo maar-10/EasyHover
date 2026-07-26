@@ -38,6 +38,11 @@ local COMMANDS = {
   setSlot        = { kind = "enum:lift,main,lateral,velocity,altitude,gimbal,optical",
                      key = "string", peripheral = "string" },
   selfTest       = { action = "enum:start,abort" },
+  -- Latch one nozzle at full deflection so the pilot can see which way it really points, then
+  -- name it with a/d/s/w. A LATCH rather than a held switch because CC gives a monitor
+  -- `monitor_touch` and nothing at all for the release.
+  vectorHold     = { action = "enum:latch,release", id = "string",
+                     axis = "enum:x,y", sign = "number" },
   -- Which way a nozzle's own axes point in the CRAFT's frame. Addressed by thruster id, not by
   -- list index: setSlot reorders the list, so an index would silently retarget.
   setAxes        = { id = "string", swap = "boolean",
@@ -280,6 +285,7 @@ function Telemetry:build(extra)
     pilot = s:get("pilot"),
     selfTest = s:get("selfTest"),
     thrusterAxes = s:get("thrusterAxes"),
+    axisMap = s:get("axisMap"),
     candidates = s:get("candidates"),
     disk = {
       driveCount = s:get("disk.driveCount"),

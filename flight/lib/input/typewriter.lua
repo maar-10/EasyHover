@@ -51,6 +51,12 @@ function Typewriter:poll(dev, dt)
   end
   self.failures = 0
 
+  -- The RAW codes as well as the resolved actions. The nozzle-mapping screen needs a/d/s/w by
+  -- key rather than by action -- they are being used to NAME a direction, not to fly.
+  local raw = {}
+  for _, code in ipairs(codes) do raw[code] = true end
+  self.pressedCodes = raw
+
   local down = {}
   for _, code in ipairs(codes) do
     local action = self.bindings:actionForKey(code)
