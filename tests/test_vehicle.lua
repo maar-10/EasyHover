@@ -777,4 +777,227 @@ T.it("the whole binding map is published so the config screen can show it", func
 end)
 
 
+
+-- ---------------------------------------------------------------- self test
+
+T.suite("flight control self test")
+
+--- The mock offers vector_thruster_0..3 plus a solid_fuel and an ion thruster, so the layout
+--- here is what those can actually express: three lift, one lateral, and one main WITHOUT a
+--- nozzle -- which is also the realistic case for an accelerator.
+local function fullCraft()
+  return { hardware = { thrusters = {
+    { id = "lift_fl", peripheral = "vector_thruster_0", group = "lift" },
+    { id = "lift_fr", peripheral = "vector_thruster_1", group = "lift" },
+    { id = "lift_rl", peripheral = "vector_thruster_2", group = "lift" },
+    { id = "lateral_fl", peripheral = "vector_thruster_3", group = "lateral",
+      yawAuthority = true, thrustAxis = "right" },
+    { id = "main_1", peripheral = "solid_fuel_thruster_0", group = "main", thrustAxis = "back" },
+  } } }
+end
+
+T.it("REFUSES to run on a craft that is flying under power", function()
+  local app, path = appRig(fullCraft())
+  app.state.mode = "HOVER"
+  app.engine.master = true
+  local ok, detail = app:handleCommand({ cmd = "selfTest", action = "start" })
+  T.isFalse(ok, "refused in the air with the engine running")
+  T.isTrue(tostring((detail or {}).error):find("ground") ~= nil,
+    "and says why: " .. tostring((detail or {}).error))
+  fs.delete(path)
+end)
+
+T.it("but ALLOWS it with the engine off, whatever the ground sensor believes", function()
+  -- GROUND depends on a down-facing laser being assigned. Requiring it would deny the
+  -- pre-flight test to exactly the half-configured craft that most needs it -- and a craft
+  -- whose thrusters have no fuel is not holding itself up regardless.
+  local app, path = appRig(fullCraft())
+  app.state.mode = "HOVER"
+  app.engine.master = false
+  T.isTrue((app:handleCommand({ cmd = "selfTest", action = "start" })), "permitted")
+  fs.delete(path)
+end)
+
+T.it("refuses while a thruster is producing thrust", function()
+  local app, path = appRig(fullCraft())
+  app.state.mode = "GROUND"
+  app.per.thrusters["lift_fl"].dev.getPower = function() return 0.5 end
+  local ok, detail = app:handleCommand({ cmd = "selfTest", action = "start" })
+  T.isFalse(ok, "refused")
+  T.isTrue(tostring((detail or {}).error):find("thrust") ~= nil,
+    "and says why: " .. tostring((detail or {}).error))
+  fs.delete(path)
+end)
+
+T.it("runs three 15-second steps, in the order the pilot was told", function()
+  local app, path = appRig(fullCraft())
+  app.state.mode = "GROUND"
+  T.isTrue((app:handleCommand({ cmd = "selfTest", action = "start" })), "started")
+
+  local started = app.selfTest.run.startedAt
+  local seen = {}
+  for _, at in ipairs({ 0, 7600, 15100, 22000, 30100, 40000 }) do
+    local p = app.selfTest:progress(started + at)
+    seen[#seen + 1] = ("%d:%s"):format(p.step, p.phase)
+  end
+  T.eq(seen[1], "1:X sweep", "step 1 starts on the X axis")
+  T.eq(seen[2], "1:Y sweep", "and moves to Y half way through")
+  T.eq(seen[3], "2:X sweep", "step 2 after 15 s")
+  T.eq(seen[5], "3:X sweep", "step 3 after 30 s")
+  T.eq(app.selfTest:progress(started).totalMs, 45000, "45 s in total")
+  fs.delete(path)
+end)
+
+T.it("MOVES THE NOZZLES, and only the group under test", function()
+  local app, path = appRig(fullCraft())
+  app.state.mode = "GROUND"
+  app:handleCommand({ cmd = "selfTest", action = "start" })
+  local started = app.selfTest.run.startedAt
+
+  local commanded = {}
+  for _, entry in ipairs(app.per:thrusterList()) do
+    local id = entry.id
+    entry.dev.setVector = function(x, y) commanded[id] = { x = x, y = y } end
+  end
+
+  app.selfTest:tick(started + 1875)
+  T.notNil(commanded["lift_fl"], "a lift thruster moved")
+  T.isTrue(commanded["lift_fl"].x > 0.1, "on its X axis: " .. tostring(commanded["lift_fl"].x))
+  T.eq(commanded["lift_fl"].y, 0, "and not on Y during the X sweep")
+  T.isNil(commanded["lateral_fl"], "the lateral group is NOT moving during step 1")
+  T.isNil(commanded["main_1"], "nor the accelerators")
+
+  commanded = {}
+  app.selfTest:tick(started + 15000 + 1875)
+  T.notNil(commanded["lateral_fl"], "the lateral thruster moved in step 2")
+  T.isNil(commanded["lift_fl"], "and the lift group has stopped")
+  fs.delete(path)
+end)
+
+T.it("sweeps the FULL range of an axis, both directions", function()
+  local app, path = appRig(fullCraft())
+  app.state.mode = "GROUND"
+  app:handleCommand({ cmd = "selfTest", action = "start" })
+  local started = app.selfTest.run.startedAt
+  local seenX = {}
+  for _, entry in ipairs(app.per:thrusterList()) do
+    local id = entry.id
+    entry.dev.setVector = function(x) if id == "lift_fl" then seenX[#seenX + 1] = x end end
+  end
+  for offset = 0, 7400, 200 do app.selfTest:tick(started + offset) end
+  local lo, hi = math.huge, -math.huge
+  for _, v in ipairs(seenX) do lo = math.min(lo, v); hi = math.max(hi, v) end
+  T.isTrue(hi > 0.5, "reached a positive deflection: " .. tostring(hi))
+  T.isTrue(lo < -0.5, "and a negative one: " .. tostring(lo))
+  fs.delete(path)
+end)
+
+T.it("respects each thruster's own maxVector limit", function()
+  local cfg = fullCraft()
+  cfg.hardware.thrusters[1].maxVector = 0.3
+  local app, path = appRig(cfg)
+  app.state.mode = "GROUND"
+  app:handleCommand({ cmd = "selfTest", action = "start" })
+  local started = app.selfTest.run.startedAt
+  local peak = 0
+  for _, entry in ipairs(app.per:thrusterList()) do
+    local id = entry.id
+    entry.dev.setVector = function(x)
+      if id == "lift_fl" then peak = math.max(peak, math.abs(x)) end
+    end
+  end
+  for offset = 0, 7400, 100 do app.selfTest:tick(started + offset) end
+  T.isTrue(peak <= 0.3001, "never exceeded its limit: " .. tostring(peak))
+  T.isTrue(peak > 0.25, "but did use it: " .. tostring(peak))
+  fs.delete(path)
+end)
+
+T.it("THE MIXER DOES NOT FIGHT THE SWEEP", function()
+  -- The attitude loop wants those same nozzles. Both writing would spoil the test and, worse,
+  -- is the one thing this craft must never do.
+  local app, path = appRig(fullCraft())
+  app.state.mode = "GROUND"
+  app:handleCommand({ cmd = "selfTest", action = "start" })
+  local applied = 0
+  local realApply = app.thrusters.apply
+  app.thrusters.apply = function(...) applied = applied + 1; return realApply(...) end
+  app:cycle(0.05)
+  T.eq(applied, 0, "the mixer's commands were not applied while the sweep owns the thrusters")
+  T.isTrue(app.selfTest:isRunning(), "and the sweep is still the one in charge")
+  fs.delete(path)
+end)
+
+T.it("ABORTS ITSELF if the craft leaves the ground mid-test", function()
+  local app, path = appRig(fullCraft())
+  app.state.mode = "GROUND"
+  app:handleCommand({ cmd = "selfTest", action = "start" })
+  T.isTrue(app.selfTest:isRunning(), "running")
+  -- force ACTIVE flight, which is what aborts it. The state machine is stubbed because the
+  -- mock craft has no ground sensor, so a real cycle would land in FAILSAFE, not FLIGHT.
+  app.modes.updateState = function() return "FLIGHT", true end
+  app:cycle(0.05)
+  T.isFalse(app.selfTest:isRunning(), "stopped the moment it was flying")
+  T.isTrue(tostring(app.state:get("selfTest").aborted):find("flying") ~= nil,
+    "and said why: " .. tostring(app.state:get("selfTest").aborted))
+  fs.delete(path)
+end)
+
+T.it("the pilot can abort it, and the nozzles are centred", function()
+  local app, path = appRig(fullCraft())
+  app.state.mode = "GROUND"
+  app:handleCommand({ cmd = "selfTest", action = "start" })
+  local centred = {}
+  for _, entry in ipairs(app.per:thrusterList()) do
+    local id = entry.id
+    entry.dev.setVector = function(x, y) centred[id] = (x == 0 and y == 0) end
+  end
+  T.isTrue((app:handleCommand({ cmd = "selfTest", action = "abort" })), "aborted")
+  T.isFalse(app.selfTest:isRunning(), "stopped")
+  T.isTrue(centred["lift_fl"], "and every nozzle was returned to centre")
+  fs.delete(path)
+end)
+
+T.it("REPORTS A GROUP WITH NO NOZZLES rather than pretending it swept", function()
+  -- A main thruster often has thrust only. Saying "tested" would be a lie the pilot would
+  -- believe right up until the first flight.
+  local app, path = appRig(fullCraft())
+  app.state.mode = "GROUND"
+  app:handleCommand({ cmd = "selfTest", action = "start" })
+  local started = app.selfTest.run.startedAt
+  app.selfTest:tick(started + 30100)
+  local findings = app.state:get("selfTest").findings
+  T.notNil(findings.main, "step 3 recorded what it saw")
+  T.eq(#findings.main.plain, 1, "one thruster with no nozzle")
+  T.eq(findings.main.plain[1], "main_1", "named")
+  fs.delete(path)
+end)
+
+T.it("publishes progress the UI can draw a timer from", function()
+  local app, path = appRig(fullCraft())
+  app.state.mode = "GROUND"
+  app:handleCommand({ cmd = "selfTest", action = "start" })
+  app.selfTest:tick(app.selfTest.run.startedAt + 5000)
+  local st = app.state:get("selfTest")
+  T.isTrue(st.running, "running")
+  T.eq(st.step, 1, "step")
+  T.eq(st.steps, 3, "of three")
+  T.isTrue(st.stepRemainingMs > 9000 and st.stepRemainingMs <= 10000,
+    "ten seconds left in the step: " .. tostring(st.stepRemainingMs))
+  T.notNil(st.watch, "and what to look at")
+  fs.delete(path)
+end)
+
+T.it("the whole pilot input state is published for the FCS page", function()
+  local app, path = appRig(fullCraft())
+  app:cycle(0.05)
+  local payload = app.telemetry:build()
+  T.notNil(payload.pilot, "pilot state reported")
+  T.notNil(payload.pilot.axes, "with its axes")
+  for _, axis in ipairs({ "pitch", "roll", "yaw", "climb", "accel" }) do
+    T.eq(type(payload.pilot.axes[axis]), "number", axis .. " is a number")
+  end
+  T.eq(type(payload.pilot.brake), "boolean", "and whether the brake is held")
+  fs.delete(path)
+end)
+
 return true

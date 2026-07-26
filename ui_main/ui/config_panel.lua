@@ -181,6 +181,7 @@ function ConfigPanel.build(frame, opts)
   local home = page()
   local enginePage, timesPage = page(), page()
   local flightPage, diskPage, tankPage, keysPage = page(), page(), page(), page()
+  local axesPage = page()
   local slotPages = {}
   for _, name in ipairs({ "lift", "accel", "lateral", "velocity", "attitude", "optical" }) do
     slotPages[name] = page()
@@ -208,6 +209,7 @@ function ConfigPanel.build(frame, opts)
     { label = "ALT+GIMBAL", page = function() return slotPages.attitude end },
     { label = "FUEL TANK",  page = function() return tankPage end },
     { label = "OPTICAL",    page = function() return slotPages.optical end },
+    { label = "THR AXES",   page = function() return axesPage end },
     { label = "KEYS",       page = function() return keysPage end },
     { label = "DISK",       page = function() return diskPage end },
   }
@@ -401,6 +403,97 @@ function ConfigPanel.build(frame, opts)
   Theme.line(tankPage, height - 1, width, "0 = auto scale", Theme.dim)
   backButton(tankPage)
 
+  -- ----------------------------------------------------------- thruster axes
+
+  Theme.line(axesPage, 1, width, Theme.centre("THR AXES", width), Theme.accent)
+  Theme.line(axesPage, 2, width, "SWP flips X/Z", Theme.dim)
+  Theme.rule(axesPage, 3, width)
+
+  --- One row per configured thruster: which nozzle axis drives which craft axis, and the two
+  --- sign flips. Nothing can work this out for itself -- a thruster mounted rotated or mirrored
+  --- gets pushed the WRONG WAY and the attitude loop answers by pushing harder. Run SELF TEST
+  --- on the nav screen to see which way each nozzle actually moves, then fix it here.
+  local axesRows = {}
+  local axesFooterRow = height - 1
+  local axesRowCount = math.max(1, axesFooterRow - 4)
+  local axesPage1 = 1
+  local refreshAxes
+
+  -- Three 3-wide toggles leave six columns for the label on a 15-column screen. Four-wide
+  -- toggles left two, which truncated "LIFFL" to "LI".
+  local toggleWidth = 3
+  local labelWidth = math.max(3, width - toggleWidth * 3)
+  for i = 1, axesRowCount do
+    local row = { entry = nil }
+    row.label = Theme.line(axesPage, 3 + i, labelWidth, "", Theme.fg)
+    --- Toggle ONE field and pass the other two through unchanged.
+    ---
+    --- Written out rather than with `and`/`or`: that idiom cannot return false, so toggling a
+    --- set flag OFF silently left it on. Exactly the bug the test caught.
+    local function send(field)
+      return function()
+        local e = row.entry
+        if not e then return end
+        local swap, invX, invY = e.swap, e.invertX, e.invertY
+        if field == "swap" then swap = not swap
+        elseif field == "invertX" then invX = not invX
+        else invY = not invY end
+        actions.setAxes(e.id, swap, invX, invY)
+      end
+    end
+    row.swap = Theme.button(axesPage, labelWidth + 1, 3 + i, toggleWidth, "SWP", send("swap"))
+    row.invX = Theme.button(axesPage, labelWidth + toggleWidth + 1, 3 + i, toggleWidth, "-X",
+      send("invertX"))
+    row.invY = Theme.button(axesPage, labelWidth + toggleWidth * 2 + 1, 3 + i, toggleWidth, "-Y",
+      send("invertY"))
+    axesRows[i] = row
+  end
+
+  local axesFooter = Theme.line(axesPage, axesFooterRow, width, "", Theme.dim)
+  local axesPrev = Theme.button(axesPage, math.max(1, width - 7), axesFooterRow, 3, "^",
+    function() axesPage1 = axesPage1 - 1; refreshAxes() end)
+  local axesNext = Theme.button(axesPage, math.max(1, width - 3), axesFooterRow, 3, "v",
+    function() axesPage1 = axesPage1 + 1; refreshAxes() end)
+  backButton(axesPage)
+
+  function refreshAxes()
+    local list = live.thrusterAxes or {}
+    local pagesTotal = math.max(1, math.ceil(#list / axesRowCount))
+    axesPage1 = math.max(1, math.min(axesPage1, pagesTotal))
+    for i, row in ipairs(axesRows) do
+      local entry = list[(axesPage1 - 1) * axesRowCount + i]
+      row.entry = entry
+      local show = (entry ~= nil)
+      row.label:setVisible(show)
+      row.swap:setVisible(show)
+      row.invX:setVisible(show)
+      row.invY:setVisible(show)
+      if entry then
+        row.label:setText(Theme.fit(("%s%s"):format(entry.group:sub(1, 3):upper(),
+          tostring(entry.key):upper()), labelWidth))
+        local function paint(button, on, text)
+          button:setText(text)
+          button:setBackground(on and Theme.accent or Theme.buttonBg)
+          button:setForeground(on and colours.black or Theme.buttonFg)
+        end
+        paint(row.swap, entry.swap, "SWP")
+        paint(row.invX, entry.invertX, "-X")
+        paint(row.invY, entry.invertY, "-Y")
+      end
+    end
+    if #list == 0 then
+      axesFooter:setText(Theme.fit("no thrusters set", width))
+      axesFooter:setForeground(Theme.warning)
+    else
+      axesFooter:setText(pagesTotal > 1
+        and ("pg %d/%d"):format(axesPage1, pagesTotal) or ("%d thrusters"):format(#list))
+      axesFooter:setForeground(Theme.dim)
+    end
+    axesPrev:setVisible(pagesTotal > 1)
+    axesNext:setVisible(pagesTotal > 1)
+  end
+  refreshAxes()
+
   -- ------------------------------------------------------------ typewriter
 
   --- Which key each action is bound to, and whether two actions are fighting over one key --
@@ -532,10 +625,12 @@ function ConfigPanel.build(frame, opts)
 
     live.candidates = t.candidates or {}
     live.slots = t.slots or {}
+    live.thrusterAxes = t.thrusterAxes or {}
     live.config = t.config or {}
     live.disk = t.disk or {}
 
     for _, section in pairs(sections) do section.update() end
+    refreshAxes()
 
     sideButton:setText(Theme.fit("side " .. tostring(live.config.engineSide or "--"),
       math.min(9, width)))
@@ -618,6 +713,7 @@ function ConfigPanel.build(frame, opts)
     pages = {
       home = home, engine = enginePage, times = timesPage, flight = flightPage,
       disk = diskPage, tank = tankPage, keys = keysPage,
+      axes = axesPage,
       lift = slotPages.lift, accel = slotPages.accel, lateral = slotPages.lateral,
       velocity = slotPages.velocity, attitude = slotPages.attitude,
       optical = slotPages.optical,
@@ -632,6 +728,7 @@ function ConfigPanel.build(frame, opts)
       yaw = yawRow, brake = brakeRow,
       ackTimes = ackLines[timesPage], ackFlight = ackLines[flightPage],
       ackTank = ackLines[tankPage],
+      axesRows = axesRows, axesFooter = axesFooter,
     },
   }
 end

@@ -39,10 +39,12 @@ function Config.defaults()
       -- and the flight-control settings -- all in submenus. Its main page is reserved for
       -- in-flight values that are worth having on screen the whole time.
       config = { monitors = {}, textScale = 0.5, enabled = true },
+      -- The map and waypoints come later, but the panel is LIVE now: its border carries the
+      -- two pre-flight screens (FCS TEST and SELF TEST), which are needed before a first hover.
+      nav = { monitors = {}, textScale = 0.5, enabled = true },
       -- Reserved: built in later phases, declared now so assignments can be made early.
       pfd = { monitors = {}, textScale = 0.5, enabled = false },
       autopilot = { monitors = {}, textScale = 0.5, enabled = false },
-      nav = { monitors = {}, textScale = 0.5, enabled = false },
     },
 
     comms = {

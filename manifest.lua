@@ -27,9 +27,9 @@
       ["files"] = {
         {
           ["dst"] = "flight/app.lua",
-          ["size"] = 32344,
+          ["size"] = 36456,
           ["src"] = "flight/app.lua",
-          ["sum"] = "1cbcc6c4",
+          ["sum"] = "176b89dd",
         },
         {
           ["dst"] = "flight/diskmenu.lua",
@@ -98,6 +98,12 @@
           ["sum"] = "ac177a12",
         },
         {
+          ["dst"] = "flight/lib/control/selftest.lua",
+          ["size"] = 8814,
+          ["src"] = "flight/lib/control/selftest.lua",
+          ["sum"] = "4442cfca",
+        },
+        {
           ["dst"] = "flight/lib/input/bindings.lua",
           ["size"] = 4991,
           ["src"] = "flight/lib/input/bindings.lua",
@@ -153,9 +159,9 @@
         },
         {
           ["dst"] = "flight/lib/io/thrusters.lua",
-          ["size"] = 10500,
+          ["size"] = 11236,
           ["src"] = "flight/lib/io/thrusters.lua",
-          ["sum"] = "da72348e",
+          ["sum"] = "af72124d",
         },
         {
           ["dst"] = "flight/lib/log.lua",
@@ -183,9 +189,9 @@
         },
         {
           ["dst"] = "flight/lib/telemetry.lua",
-          ["size"] = 14026,
+          ["size"] = 14655,
           ["src"] = "flight/lib/telemetry.lua",
-          ["sum"] = "adaae864",
+          ["sum"] = "d247b052",
         },
         {
           ["dst"] = "flight/lib/util.lua",
@@ -305,15 +311,15 @@
         },
         {
           ["dst"] = "ui_main/app.lua",
-          ["size"] = 8565,
+          ["size"] = 8985,
           ["src"] = "ui_main/app.lua",
-          ["sum"] = "7cd23ab5",
+          ["sum"] = "0141fb71",
         },
         {
           ["dst"] = "ui_main/lib/config.lua",
-          ["size"] = 6736,
+          ["size"] = 6925,
           ["src"] = "ui_main/lib/config.lua",
-          ["sum"] = "06c2fe16",
+          ["sum"] = "471a5a18",
         },
         {
           ["dst"] = "ui_main/lib/link.lua",
@@ -335,9 +341,15 @@
         },
         {
           ["dst"] = "ui_main/ui/config_panel.lua",
-          ["size"] = 28492,
+          ["size"] = 32700,
           ["src"] = "ui_main/ui/config_panel.lua",
-          ["sum"] = "90372cf3",
+          ["sum"] = "9fa4bcf7",
+        },
+        {
+          ["dst"] = "ui_main/ui/nav.lua",
+          ["size"] = 12022,
+          ["src"] = "ui_main/ui/nav.lua",
+          ["sum"] = "0ef94d46",
         },
         {
           ["dst"] = "ui_main/ui/overhead.lua",
@@ -402,5 +414,5 @@
     ["size"] = 36872,
     ["sum"] = "305c58ce",
   },
-  ["version"] = "74cf51de",
+  ["version"] = "e9c111ab",
 }

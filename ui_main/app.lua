@@ -17,6 +17,7 @@ local Link = require("lib.link")
 local Monitors = require("lib.monitors")
 local Overhead = require("ui.overhead")
 local ConfigPanel = require("ui.config_panel")
+local Nav = require("ui.nav")
 local Terminal = require("ui.terminal")
 local Log = require("shared.log")
 
@@ -75,6 +76,11 @@ function App:buildActions()
     setSlot = function(kind, key, peripheral)
       link:send({ cmd = "setSlot", kind = kind, key = key, peripheral = peripheral or "" })
     end,
+    selfTest = function(action) link:send({ cmd = "selfTest", action = action or "start" }) end,
+    setAxes = function(id, swap, invertX, invertY)
+      link:send({ cmd = "setAxes", id = id, swap = swap and true or false,
+                  invertX = invertX and true or false, invertY = invertY and true or false })
+    end,
     configSave = function() link:send({ cmd = "configSave" }) end,
     diskSave = function() link:send({ cmd = "diskSave" }) end,
     diskLoad = function() link:send({ cmd = "diskLoad" }) end,
@@ -104,6 +110,7 @@ function App:builders()
   return {
     overhead = function(frame) return Overhead.build(frame, options) end,
     config = function(frame) return ConfigPanel.build(frame, options) end,
+    nav = function(frame) return Nav.build(frame, options) end,
   }
 end
 

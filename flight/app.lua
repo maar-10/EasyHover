@@ -25,6 +25,7 @@ local Envelope = require("lib.control.envelope")
 local Oscillation = require("lib.control.oscillation")
 local Assist = require("lib.control.assist")
 local Brake = require("lib.control.brake")
+local SelfTest = require("lib.control.selftest")
 local Modes = require("lib.modes")
 local Pilot = require("lib.input.pilot")
 local Telemetry = require("lib.telemetry")
@@ -72,6 +73,7 @@ function App.new(opts)
   self.modes = Modes.new(cfg, self.log)
   self.pilot = Pilot.new(cfg, self.log)
   self.telemetry = Telemetry.new(cfg, self.log, self.state)
+  self.selfTest = SelfTest.new(self.thrusters, self.per, cfg, self.log, self.state)
 
   self.altitudeAccumulator = 0
   self.lastCycleAt = nil
@@ -310,7 +312,21 @@ function App:cycle(dt)
     allowPrecision = demand.allowPrecision or (self.modes.lateral == "precision"),
   })
 
-  if self.thrusters:isIdentifying() then
+  -- The self test and the identify sweep each OWN the thrusters while they run. Applying the
+  -- mixer's commands as well would have the attitude loop fighting the sweep for the same
+  -- nozzles, which would both spoil the test and be the one thing this vehicle must never do.
+  if self.selfTest:isRunning() then
+    -- Only ACTIVE flight aborts. GROUND depends on a down-facing laser being assigned, so
+    -- demanding it here would make the pre-flight test unavailable on a half-configured craft.
+    -- The sweep's own power interlock is the guarantee that nothing is holding the craft up.
+    local flying = (self.state.mode == "FLIGHT" or self.state.mode == "HOVER"
+      or self.state.mode == "REVERSE")
+    if flying then
+      self.selfTest:abort("aborted: the craft is flying")
+    else
+      self.selfTest:tick(now)
+    end
+  elseif self.thrusters:isIdentifying() then
     self.thrusters:tickIdentify()
   else
     self.thrusters:apply(commands)
@@ -585,7 +601,35 @@ function App:rebuildHardware()
   self.state:set("layout", caps)
   self.state:set("velocity.capability", self.sensors:velocityCapability())
   self.state:set("candidates", self.per:candidates())
+  self:publishThrusterAxes()
   return caps
+end
+
+--- How each thruster's nozzle axes map onto the craft, for the orientation screen.
+---
+--- THIS IS THE ONE THING NOTHING CAN WORK OUT FOR ITSELF. The mixer converts a wanted craft
+--- force into a nozzle deflection through vectorMap and the invert flags, and those default to
+--- the identity. A thruster mounted rotated or mirrored therefore gets pushed the WRONG WAY,
+--- and the attitude loop responds by pushing harder -- which is the divergence this whole
+--- design exists to avoid. The self test shows you which way each nozzle really moves; this is
+--- what you correct it with.
+function App:publishThrusterAxes()
+  local rows = {}
+  for index, t in ipairs(self.cfg.hardware.thrusters or {}) do
+    local map = t.vectorMap or {}
+    rows[#rows + 1] = {
+      index = index,
+      id = t.id,
+      group = t.group,
+      key = Config.slotKey(t),
+      -- "swapped" means nozzle X drives the craft's fore/aft axis instead of left/right
+      swap = (map.x == "z"),
+      invertX = t.invertVectorX and true or false,
+      invertY = t.invertVectorY and true or false,
+    }
+  end
+  self.state:set("thrusterAxes", rows)
+  return rows
 end
 
 function App:handleCommand(cmd)
@@ -656,6 +700,48 @@ function App:handleCommand(cmd)
     Config.save(self.configPath, self.cfg)
     self.log:info("%s -> %s", cmd.cmd, cmd.peripheral == "" and "(none)" or cmd.peripheral)
     return true, { peripheral = cmd.peripheral }
+
+  elseif cmd.cmd == "selfTest" then
+    if cmd.action == "abort" then
+      local aborted = self.selfTest:abort("aborted by the pilot")
+      return true, { running = false, aborted = aborted }
+    end
+    -- Decided HERE rather than by the sender: a UI is not a trusted peer. On the ground, or
+    -- with the engine master off -- a craft with no fuel reaching its thrusters cannot be
+    -- airborne, and that covers the craft whose ground sensor is not configured yet.
+    local allowed = (self.state.mode == "GROUND") or (not self.engine.master)
+    local ok, err = self.selfTest:start({ allowed = allowed, now = now })
+    return ok, { error = err }
+
+  elseif cmd.cmd == "setAxes" then
+    local target
+    for _, t in ipairs(self.cfg.hardware.thrusters or {}) do
+      if t.id == cmd.id then target = t end
+    end
+    if not target then return false, { errors = { "no such thruster: " .. tostring(cmd.id) } } end
+    local previous = {
+      vectorMap = { x = (target.vectorMap or {}).x, y = (target.vectorMap or {}).y },
+      invertVectorX = target.invertVectorX, invertVectorY = target.invertVectorY,
+    }
+    target.vectorMap = cmd.swap and { x = "z", y = "x" } or { x = "x", y = "z" }
+    target.invertVectorX = cmd.invertX
+    target.invertVectorY = cmd.invertY
+    local ok, errors = Config.validate(self.cfg)
+    if not ok then
+      target.vectorMap = previous.vectorMap
+      target.invertVectorX = previous.invertVectorX
+      target.invertVectorY = previous.invertVectorY
+      return false, { errors = errors }
+    end
+    -- The mixer holds the mapping, so it has to be rebuilt -- the same live-apply rule as
+    -- every other hardware change.
+    self.thrusters:invalidate()
+    self.mixer:build()
+    self:publishThrusterAxes()
+    Config.save(self.configPath, self.cfg)
+    self.log:info("axes %s: swap=%s invX=%s invY=%s", cmd.id, tostring(cmd.swap),
+      tostring(cmd.invertX), tostring(cmd.invertY))
+    return true, { id = cmd.id }
 
   elseif cmd.cmd == "setSlot" then
     return self:handleSetSlot(cmd)

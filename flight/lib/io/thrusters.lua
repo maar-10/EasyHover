@@ -167,6 +167,20 @@ end
 
 --- Neutral nozzles, thrust untouched. This is the DAMPED HOVER actuator state: stop
 --- steering, keep flying.
+--- Command one thruster's nozzle in its OWN axes, bypassing the craft-frame mapping.
+---
+--- Only the self test uses this, and only on the ground. The mapping is exactly what is under
+--- test there: pushing a sweep through mapVector() would hide a mirrored or rotated mounting,
+--- because the wrong mapping would cancel against itself and look correct.
+function Thrusters:setVectorRaw(id, nx, ny)
+  local entry = self.per.thrusters[id]
+  if not entry then return false, "no such thruster: " .. tostring(id) end
+  if type(entry.dev.setVector) ~= "function" then return false, "no nozzle" end
+  callDevice(self, id, entry.dev, "setVector", nx, ny)
+  self.last[id] = nil          -- our cached belief no longer holds
+  return true
+end
+
 function Thrusters:neutralVectors()
   local commands = {}
   for _, entry in ipairs(self.per:thrusterList()) do

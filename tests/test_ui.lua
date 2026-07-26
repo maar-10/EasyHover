@@ -17,6 +17,7 @@ local Overhead = require("ui.overhead")
 local ConfigPanel = require("ui.config_panel")
 local Slots = require("ui.slots")
 local Terminal = require("ui.terminal")
+local Nav = require("ui.nav")
 local Theme = require("ui.theme")
 local Log = require("shared.log")
 local basalt = require("basalt")
@@ -113,6 +114,10 @@ local function sent()
     setSlot = function(kind, key, pe)
       out[#out + 1] = { cmd = "setSlot", kind = kind, key = key, peripheral = pe }
     end,
+    selfTest = function(action) out[#out + 1] = { cmd = "selfTest", action = action } end,
+    setAxes = function(id, swap, ix, iy)
+      out[#out + 1] = { cmd = "setAxes", id = id, swap = swap, invertX = ix, invertY = iy }
+    end,
   }
 end
 
@@ -127,6 +132,7 @@ T.it("defaults declare every panel, including the reserved ones", function()
     T.eq(type(cfg.panels[name].monitors), "table", name .. " has a monitor list")
   end
   T.isTrue(cfg.panels.overhead.enabled, "overhead is live")
+  T.isTrue(cfg.panels.nav.enabled, "nav is live -- its border carries the pre-flight tests")
   T.isFalse(cfg.panels.pfd.enabled, "pfd is reserved for a later phase")
 end)
 
@@ -444,7 +450,7 @@ end)
 T.it("offers every config section the craft has", function()
   local panel = configRig()
   local wanted = { "ENGINE", "LIMITS", "LIFT THR", "ACCEL THR", "LAT THR", "VELOCITY",
-                   "ALT+GIMBAL", "FUEL TANK", "OPTICAL", "KEYS", "DISK" }
+                   "ALT+GIMBAL", "FUEL TANK", "OPTICAL", "THR AXES", "KEYS", "DISK" }
   for _, label in ipairs(wanted) do
     local found = false
     for _, entry in ipairs(panel.menu) do if entry.label == label then found = true end end
@@ -842,6 +848,80 @@ T.it("the tank scale says SET A TANK rather than showing dead buttons", function
   T.eq(#commands, 0, "and the buttons genuinely have nothing to send")
 end)
 
+
+-- ----------------------------------------------------------- thruster axes
+
+T.suite("thruster orientation")
+
+local function axesRig(rows)
+  local panel, commands = configRig()
+  local m = model()
+  m.telemetry.thrusterAxes = rows or {
+    { index = 1, id = "lift_fl", group = "lift", key = "fl",
+      swap = false, invertX = false, invertY = false },
+    { index = 2, id = "lift_fr", group = "lift", key = "fr",
+      swap = true, invertX = false, invertY = true },
+  }
+  panel.update(m)
+  return panel, commands
+end
+
+T.it("lists each thruster with its current nozzle mapping", function()
+  local panel = axesRig()
+  local rows = panel.elements.axesRows
+  T.isTrue(rows[1].label:getText():find("LIFFL") ~= nil,
+    "names the slot: " .. rows[1].label:getText())
+  T.eq(rows[1].swap:getBackground(), Theme.buttonBg, "not swapped")
+  T.eq(rows[2].swap:getBackground(), Theme.accent, "swapped, and it shows")
+  T.eq(rows[2].invY:getBackground(), Theme.accent, "Y inverted, and it shows")
+  T.eq(rows[2].invX:getBackground(), Theme.buttonBg, "X is not")
+end)
+
+T.it("SWP sends setAxes for that thruster, toggling only the swap", function()
+  local panel, commands = axesRig()
+  click(panel.elements.axesRows[1].swap)
+  T.eq(commands[1].cmd, "setAxes", "the right command")
+  T.eq(commands[1].id, "lift_fl", "addressed BY ID, not by list index")
+  T.eq(commands[1].swap, true, "swap toggled on")
+  T.eq(commands[1].invertX, false, "and the sign flips left alone")
+  T.eq(commands[1].invertY, false)
+end)
+
+T.it("-X and -Y each toggle only themselves", function()
+  local panel, commands = axesRig()
+  click(panel.elements.axesRows[1].invX)
+  T.eq(commands[1].invertX, true, "X flipped")
+  T.eq(commands[1].swap, false, "swap untouched")
+
+  click(panel.elements.axesRows[1].invY)
+  T.eq(commands[2].invertY, true, "Y flipped")
+  T.eq(commands[2].invertX, false, "and X is back to what the craft reports")
+end)
+
+T.it("toggling OFF an already-set flag turns it off", function()
+  local panel, commands = axesRig()
+  click(panel.elements.axesRows[2].invY)     -- row 2 has invertY = true
+  T.eq(commands[1].invertY, false, "turned off, not blindly set")
+end)
+
+T.it("says so when nothing is configured yet", function()
+  local panel = axesRig({})
+  T.isTrue(panel.elements.axesFooter:getText():find("no thrusters") ~= nil,
+    "footer: " .. panel.elements.axesFooter:getText())
+  T.isFalse(panel.elements.axesRows[1].label:getVisible(), "and draws no rows")
+end)
+
+T.it("pages when there are more thrusters than rows", function()
+  local many = {}
+  for i = 1, 40 do
+    many[i] = { index = i, id = "lift_" .. i, group = "lift", key = tostring(i),
+                swap = false, invertX = false, invertY = false }
+  end
+  local panel = axesRig(many)
+  T.isTrue(panel.elements.axesFooter:getText():find("pg 1/") ~= nil,
+    "page indicator: " .. panel.elements.axesFooter:getText())
+end)
+
 -- ------------------------------------------------------------ typewriter keys
 
 T.suite("typewriter keybinds")
@@ -950,6 +1030,200 @@ end)
 T.it("an unbound action reads as unset rather than as blank", function()
   local _, _, keys = keysRig({ pitchUp = "s" })
   T.eq(keys.elements.subtitle:getText(), "1 of 17 set", "counts what is bound")
+end)
+
+
+-- ------------------------------------------------------------------ nav
+
+T.suite("nav panel and the pre-flight tests")
+
+local navAck = nil
+
+local function navRig(width, height)
+  mock.reset()
+  _G.peripheral = mock.install()
+  navAck = nil
+  local cfg = UiConfig.withDefaults({})
+  local monitor = mock.monitor(width or 29, height or 19)
+  local frame = basalt.createFrame()
+  frame:setTerm(monitor)
+  local commands, actions = sent()
+  local panel = Nav.build(frame, {
+    cfg = cfg, actions = actions, log = quietLog(),
+    lastAck = function() return navAck end,
+  })
+  return panel, commands
+end
+
+--- Telemetry with pilot state and an optional self-test block.
+local function navModel(pilot, selfTest)
+  local m = model()
+  m.telemetry.pilot = pilot or {
+    axes = { pitch = 0, roll = 0, yaw = 0, climb = 0, accel = 0 },
+    brake = false, controller = false, typewriter = true,
+  }
+  m.telemetry.selfTest = selfTest or { running = false }
+  return m
+end
+
+T.it("leaves the middle empty -- the map goes there", function()
+  local panel = navRig()
+  panel.update(navModel())
+  T.isTrue(panel.elements.placeholder:getText():find("no nav yet") ~= nil,
+    "says so rather than drawing decoration: " .. panel.elements.placeholder:getText())
+end)
+
+T.it("both pre-flight tests are on the border, and each replaces the nav view", function()
+  local panel = navRig()
+  panel.update(navModel())
+  T.isTrue(panel.pages.nav:getVisible(), "nav is up first")
+
+  panel.show(panel.pages.fcs)
+  T.isTrue(panel.pages.fcs:getVisible(), "FCS TEST replaces it")
+  T.isFalse(panel.pages.nav:getVisible(), "nav is hidden while it is up")
+
+  panel.show(panel.pages.selfTest)
+  T.isTrue(panel.pages.selfTest:getVisible(), "SELF TEST too")
+  T.isFalse(panel.pages.fcs:getVisible(), "one at a time")
+end)
+
+-- --------------------------------------------------------------- FCS test
+
+T.it("draws every pilot axis from the craft's OWN state", function()
+  local panel = navRig()
+  panel.update(navModel({
+    axes = { pitch = 0.5, roll = -1, yaw = 0, climb = 0.25, accel = -0.75 },
+    brake = false, typewriter = true,
+  }))
+  T.eq(panel.bars.accel.value:getText(), "-0.75", "throttle in reverse")
+  T.eq(panel.bars.roll.value:getText(), "-1.00", "full left roll")
+  T.eq(panel.bars.climb.value:getText(), " 0.25", "a quarter climb")
+  T.eq(panel.bars.yaw.value:getText(), " 0.00", "and a centred axis reads zero")
+end)
+
+T.it("the throttle bar is SIGNED, so reverse cannot look like neutral", function()
+  local panel = navRig()
+  panel.update(navModel({ axes = { accel = -1, pitch = 0, roll = 0, yaw = 0, climb = 0 } }))
+  local reverse = panel.bars.accel.bar:getText()
+  panel.update(navModel({ axes = { accel = 0, pitch = 0, roll = 0, yaw = 0, climb = 0 } }))
+  local neutral = panel.bars.accel.bar:getText()
+  panel.update(navModel({ axes = { accel = 1, pitch = 0, roll = 0, yaw = 0, climb = 0 } }))
+  local forward = panel.bars.accel.bar:getText()
+  T.isFalse(reverse == neutral, "full reverse does not look like neutral")
+  T.isFalse(forward == reverse, "nor like full forward")
+  T.isTrue(neutral:find("|") ~= nil, "and the centre is marked")
+end)
+
+T.it("shows the brake as HELD only when the craft says it is", function()
+  local panel = navRig()
+  panel.update(navModel({ axes = {}, brake = false }))
+  T.isTrue(panel.elements.brake:getText():find("off") ~= nil, "off")
+  panel.update(navModel({ axes = {}, brake = true }))
+  T.isTrue(panel.elements.brake:getText():find("HELD") ~= nil, "held")
+  T.eq(panel.elements.brake:getForeground(), Theme.warning, "and stands out")
+end)
+
+T.it("names which input device the craft is actually hearing", function()
+  -- A dead typewriter looks exactly like a pilot not touching anything, until you can see this.
+  local panel = navRig()
+  panel.update(navModel({ axes = {}, controller = false, typewriter = false }))
+  T.isTrue(panel.elements.source:getText():find("no input") ~= nil,
+    "says when nothing is connected: " .. panel.elements.source:getText())
+  T.eq(panel.elements.source:getForeground(), Theme.warning, "and flags it")
+  panel.update(navModel({ axes = {}, controller = true, typewriter = true }))
+  T.isTrue(panel.elements.source:getText():find("ctrl") ~= nil, "and lists both when both are")
+end)
+
+T.it("BLANKS the bars when the link is down, rather than freezing them", function()
+  local panel = navRig()
+  panel.update(navModel({ axes = { accel = 0.9, pitch = 0, roll = 0, yaw = 0, climb = 0 } }))
+  T.eq(panel.bars.accel.value:getText(), " 0.90", "live")
+  panel.update({ stale = true, ageMs = math.huge, telemetry = nil })
+  T.eq(panel.bars.accel.value:getText(), "  --", "blanked, not left at the last good value")
+  T.isTrue(panel.elements.fcsStale:getText():find("NO DATA") ~= nil, "and says why")
+end)
+
+-- -------------------------------------------------------------- self test
+
+T.it("START asks the craft to run the sweep", function()
+  local panel, commands = navRig()
+  panel.update(navModel())
+  click(panel.elements.start)
+  T.eq(commands[1].cmd, "selfTest", "sends the command")
+  T.eq(commands[1].action, "start", "to start")
+end)
+
+T.it("lists the three steps and marks progress through them", function()
+  local panel = navRig()
+  panel.update(navModel(nil, { running = true, step = 2, steps = 3,
+    label = "LATERAL THRUSTERS", phase = "X sweep", stepRemainingMs = 7000,
+    watch = "front pair, then rear" }))
+  T.isTrue(panel.elements.steps[1]:getText():find("^%+") ~= nil,
+    "step 1 is done: " .. panel.elements.steps[1]:getText())
+  T.isTrue(panel.elements.steps[2]:getText():find("^>") ~= nil,
+    "step 2 is running: " .. panel.elements.steps[2]:getText())
+  T.eq(panel.elements.steps[2]:getForeground(), Theme.accent, "and highlighted")
+  T.isTrue(panel.elements.steps[3]:getText():find("^  ") ~= nil, "step 3 is still to come")
+end)
+
+T.it("shows the phase and a countdown for the step", function()
+  local panel = navRig()
+  panel.update(navModel(nil, { running = true, step = 1, steps = 3,
+    label = "LIFT THRUSTERS", phase = "Y sweep", stepRemainingMs = 7400,
+    watch = "all four lift nozzles" }))
+  T.isTrue(panel.elements.timer:getText():find("Y sweep") ~= nil,
+    "which axis is sweeping: " .. panel.elements.timer:getText())
+  T.isTrue(panel.elements.timer:getText():find("7s") ~= nil, "and the seconds left")
+  T.isTrue(panel.elements.watch:getText():find("lift nozzles") ~= nil, "and what to look at")
+  T.eq(panel.elements.start:getText(), "RUNNING", "the start button reflects it")
+end)
+
+T.it("reports which thrusters could actually be swept", function()
+  -- A group whose thrusters have no nozzle is the interesting answer, so it is the reported one.
+  local panel = navRig()
+  panel.update(navModel(nil, { running = false, complete = true, findings = {
+    lift = { count = 4, vectoring = { "a", "b", "c", "d" }, plain = {} },
+    lateral = { count = 4, vectoring = { "a", "b" }, plain = { "c", "d" } },
+    main = { count = 4, vectoring = {}, plain = { "a", "b", "c", "d" } },
+  } }))
+  local text = panel.elements.result:getText()
+  T.isTrue(text:find("lif 4/4") ~= nil, "all four lift nozzles moved: " .. text)
+  T.isTrue(text:find("mai 0/4") ~= nil, "and none of the accelerators have nozzles: " .. text)
+  T.eq(panel.elements.status:getText(), "complete", "and the run is reported complete")
+end)
+
+T.it("SHOWS THE CRAFT'S REFUSAL -- only it knows whether it is airborne", function()
+  local panel = navRig()
+  panel.update(navModel())
+  navAck = { ack = false, cmd = "selfTest",
+             detail = { error = "the self test only runs on the ground, with the engine off" } }
+  panel.update(navModel())
+  T.isTrue(panel.elements.status:getText():find("engine off") ~= nil,
+    "the craft's own words: " .. panel.elements.status:getText())
+  T.eq(panel.elements.status:getForeground(), Theme.warning, "flagged as a refusal")
+end)
+
+T.it("says an aborted run was aborted, and why", function()
+  local panel = navRig()
+  panel.update(navModel(nil, { running = false, aborted = "aborted: the craft is flying" }))
+  T.isTrue(panel.elements.status:getText():find("flying") ~= nil,
+    "status: " .. panel.elements.status:getText())
+  T.eq(panel.elements.start:getText(), "START", "and it can be started again")
+end)
+
+T.it("still builds on a small screen, and says so when it cannot", function()
+  local panel = navRig(15, 20)
+  T.notNil(panel.elements.start, "a 1x2 screen still gets the pages")
+  panel.update(navModel())            -- must not throw
+  local tiny = navRig(10, 6)
+  T.isNil(tiny.elements.start, "a genuinely unusable screen says so instead")
+  tiny.update(navModel())
+end)
+
+T.it("warns on the page that this is a ground-only procedure", function()
+  local panel = navRig()
+  T.isTrue(panel.elements.warn:getText():find("GROUND ONLY") ~= nil,
+    "warning: " .. panel.elements.warn:getText())
 end)
 
 -- ------------------------------------------------------------ terminal panel

@@ -37,6 +37,11 @@ local COMMANDS = {
   -- `kind` says which family, `key` which slot inside it. An empty peripheral UNASSIGNS.
   setSlot        = { kind = "enum:lift,main,lateral,velocity,altitude,gimbal,optical",
                      key = "string", peripheral = "string" },
+  selfTest       = { action = "enum:start,abort" },
+  -- Which way a nozzle's own axes point in the CRAFT's frame. Addressed by thruster id, not by
+  -- list index: setSlot reorders the list, so an index would silently retarget.
+  setAxes        = { id = "string", swap = "boolean",
+                     invertX = "boolean", invertY = "boolean" },
   engineFeed    = {},
   setAux        = { label = "string", value = "boolean" },
   setFeel       = { value = "enum:cruise,rate,stutter" },
@@ -270,6 +275,11 @@ function Telemetry:build(extra)
     },
 
     layout = s:get("layout"),
+    -- What the pilot's controls are actually doing, and the self test's progress. Both exist
+    -- so the pre-flight screens can show real internal state rather than a guess.
+    pilot = s:get("pilot"),
+    selfTest = s:get("selfTest"),
+    thrusterAxes = s:get("thrusterAxes"),
     candidates = s:get("candidates"),
     disk = {
       driveCount = s:get("disk.driveCount"),

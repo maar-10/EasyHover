@@ -18,6 +18,7 @@ of the cockpit.
 |---|---|---|
 | **overhead** | **live** | Engine start/stop with a countdown to the next feed, and both fuel gauges. **No configuration** — that moved out, which is what freed the rows. Built for a 1×2 portrait screen. |
 | **config** | **live** | Every craft setting, reached from a menu. Nothing else. |
+| **nav** | **live** | The map and waypoints come later, so the centre is empty on purpose. Its border carries the two pre-flight screens. |
 | pfd | reserved | Attitude / flight-path indicator. Mirrored pair. |
 | autopilot | reserved | Autopilot settings. |
 | nav | reserved | Waypoints and the map. |
@@ -53,10 +54,11 @@ both at once.
 | **ALT+GIMBAL** | The altimeter, the attitude gimbal, and the **down-facing laser** — that one is the radar altimeter, so it belongs with height rather than with the obstacle rays |
 | **FUEL TANK** | The liquid tank and its gauge scale |
 | **OPTICAL** | The proximity lasers — forward, back, left, right |
+| **THR AXES** | Which way each thruster's nozzle points in the craft's frame |
 | **KEYS** | The typewriter keybind for each of the 17 flight actions |
 | **DISK** | Save and load every config to a floppy |
 
-The menu pages itself when the screen is too short for all eleven.
+The menu pages itself when the screen is too short for all twelve.
 
 ## Assigning hardware
 
@@ -105,6 +107,61 @@ The velocity page says MEDIAL, LATERAL and VERTICAL. `x`/`y`/`z` depend on whose
 mean and which way the sensor is bolted on, and a sensor on the wrong axis makes the flight
 assistant push the craft the wrong way. The config keys stay `x`/`y`/`z`, because that is what
 the control code reads.
+
+## The pre-flight screens
+
+They live on the **nav** panel's border, because navigation itself comes later and the centre of
+that screen is reserved for the map. Both replace the nav view until backed out.
+
+### FCS TEST
+
+Every pilot axis as a **signed** bar, drawn from the craft's own reported state — throttle runs
+reverse ← 0 → forward, and a 0..1 bar would make full reverse and neutral look identical, which
+is the one confusion that matters on this screen. Plus whether the brake is held, the current
+feel/lateral/assist modes, and **which input device the craft is actually hearing**: a dead
+typewriter looks exactly like a pilot not touching anything until you can see that line.
+
+When the link drops the bars **blank** rather than freezing on their last value.
+
+### SELF TEST
+
+Three steps of 15 s — lift, lateral, then accelerators — each split into two 7.5 s phases that
+sweep one nozzle axis through a full sine cycle (`0 → + → 0 → − → 0`). A whole group moves at
+once, so you can watch four nozzles together and spot the one that disagrees. The screen shows
+the step list with progress, the axis sweeping, and a countdown.
+
+It reports **which thrusters could actually be swept** (`lif 4/4  mai 0/4`). A main thruster
+often has thrust only and no nozzle; saying "tested" would be a lie you would believe until the
+first flight.
+
+> **The interlock is POWER, not the flight state.** A craft whose thrusters produce nothing is
+> not flying, whatever any sensor believes — and `GROUND` depends on a down-facing laser being
+> assigned, so gating on that alone would deny the test to exactly the half-configured craft
+> that needs it. Power is re-checked every second while the sweep runs, and active flight aborts
+> it. Nothing here ever commands thrust.
+
+While the sweep runs it **owns the thrusters** — the mixer's commands are not applied. Both
+writing to the same nozzles would spoil the test and, worse, is the one thing this vehicle must
+never do.
+
+## Thruster orientation — the thing nothing can work out for itself
+
+The mixer turns a wanted craft-frame force into a nozzle deflection through each thruster's
+`vectorMap` and its two invert flags. **Those default to the identity, and nothing measures
+them.** A thruster mounted rotated or mirrored therefore gets pushed the *wrong way*, the
+attitude loop sees the error grow and pushes harder — which is precisely the escalating
+oscillation this design exists to prevent.
+
+The fix is two screens working together:
+
+1. **SELF TEST** shows you the truth. It commands nozzles through `setVectorRaw`, which
+   deliberately **bypasses the mapping** — pushing the sweep through `mapVector()` would let a
+   wrong mapping cancel against itself and look correct.
+2. **THR AXES** is where you correct it: one row per thruster with `SWP` (nozzle X drives
+   fore/aft instead of left/right), `-X` and `-Y`. Eight orientations per thruster, all
+   reachable. `setAxes` is addressed **by thruster id, not list index** — `setSlot` reorders the
+   list, so an index would silently retarget the wrong thruster — and it rebuilds the mixer
+   immediately.
 
 ## Typewriter keybinds
 
