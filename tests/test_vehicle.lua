@@ -1033,6 +1033,55 @@ T.it("an accelerator's nozzle steers UP and DOWN, not fore and aft", function()
   T.eq(AxisMap.believedDirection(spec, "y", -1), "DOWN")
 end)
 
+T.it("A NOZZLE DEFLECTS PERPENDICULAR TO ITS OWN THRUST", function()
+  -- The rule comes from thrustAxis, not from the group. A sideways-pointing lateral thruster
+  -- CANNOT deflect its thrust sideways -- that is the direction it already points -- so its
+  -- nozzle steers up/down and fore/aft.
+  T.eq(table.concat(AxisMap.planeFor({ thrustAxis = "down", group = "lift" }), ""), "xz",
+    "a down-facing lift thruster: left/right and fore/aft")
+  T.eq(table.concat(AxisMap.planeFor({ thrustAxis = "back", group = "main" }), ""), "xy",
+    "a rear-facing accelerator: left/right and up/down")
+  T.eq(table.concat(AxisMap.planeFor({ thrustAxis = "right", group = "lateral" }), ""), "yz",
+    "a sideways lateral thruster: up/down and fore/aft")
+  T.eq(table.concat(AxisMap.planeFor({ thrustAxis = "left", group = "lateral" }), ""), "yz",
+    "and the same on the other side")
+end)
+
+T.it("the KEYS mean what the pilot said they mean, per thruster kind", function()
+  -- lift:    a=left  d=right  s=back  w=forward
+  -- main:    a=left  d=right  s=down  w=up
+  -- lateral: a=down  d=up     s=back  w=forward
+  local function legend(spec)
+    local plan = AxisMap.keyPlan(spec)
+    local out = {}
+    for _, k in ipairs({ "a", "d", "s", "w" }) do
+      out[k] = AxisMap.NAMES[plan[k].axis][plan[k].sign]
+    end
+    return out
+  end
+
+  local lift = legend({ thrustAxis = "down", group = "lift" })
+  T.eq(lift.a, "LEFT"); T.eq(lift.d, "RIGHT")
+  T.eq(lift.s, "BACK"); T.eq(lift.w, "FWD")
+
+  local main = legend({ thrustAxis = "back", group = "main" })
+  T.eq(main.a, "LEFT"); T.eq(main.d, "RIGHT")
+  T.eq(main.s, "DOWN"); T.eq(main.w, "UP")
+
+  local lateral = legend({ thrustAxis = "right", group = "lateral" })
+  T.eq(lateral.a, "DOWN", "a is DOWN on a lateral thruster, not left")
+  T.eq(lateral.d, "UP", "and d is UP")
+  T.eq(lateral.s, "BACK"); T.eq(lateral.w, "FWD")
+end)
+
+T.it("a lateral nozzle REFUSES to be called left or right", function()
+  local spec = { group = "lateral", thrustAxis = "right",
+                 vectorMap = { x = "y", y = "z" }, invertVectorX = false, invertVectorY = false }
+  local ok, err = AxisMap.assign(spec, "x", 1, "x", 1)
+  T.isFalse(ok, "sideways is the one direction it cannot point")
+  T.isTrue(tostring(err):find("cannot point") ~= nil, "and says so: " .. tostring(err))
+end)
+
 T.it("ASSIGNING a direction writes the map and the sign", function()
   local spec = { group = "lift", vectorMap = { x = "x", y = "z" },
                  invertVectorX = false, invertVectorY = false, maxVector = 0.6 }
@@ -1131,14 +1180,36 @@ T.it("HOLDING 'a' renames the held deflection to LEFT", function()
   fs.delete(path)
 end)
 
-T.it("w and s mean FWD/BACK on a lift thruster and UP/DOWN on an accelerator", function()
+T.it("w and s mean FWD/BACK on a lift thruster", function()
   local app, path = axisRig()
   app:handleCommand({ cmd = "vectorHold", action = "latch", id = "lift_fl", axis = "y", sign = 1 })
   app.axisMap:tick(os.epoch("utc"), { [keys.s] = true })
   T.eq(app.state:get("axisMap").direction, "BACK", "s is BACK on a lift thruster")
-  app:handleCommand({ cmd = "vectorHold", action = "release" })
+  fs.delete(path)
+end)
 
-  app:handleCommand({ cmd = "vectorHold", action = "latch", id = "main_1", axis = "y", sign = 1 })
+T.it("PUBLISHES THE KEY LEGEND, so the panel never has to guess", function()
+  -- A screen showing "a/d = left/right" on a lateral nozzle would be a lie: that nozzle cannot
+  -- point sideways. The rule lives on the craft, so the legend is computed there and sent.
+  local app, path = axisRig()
+  app:handleCommand({ cmd = "vectorHold", action = "latch", id = "lift_fl", axis = "x", sign = 1 })
+  local legend = app.state:get("axisMap").legend
+  T.isTrue(legend:find("LEFT/RIGHT") ~= nil, "lift: " .. tostring(legend))
+  T.isTrue(legend:find("FWD/BACK") ~= nil, "and fore/aft on w/s: " .. tostring(legend))
+  fs.delete(path)
+end)
+
+T.it("a lateral thruster's legend says a/d are DOWN and UP", function()
+  local app, path = appRig({ hardware = { thrusters = {
+    { id = "lift_fl", peripheral = "vector_thruster_0", group = "lift" },
+    { id = "lateral_fl", peripheral = "vector_thruster_1", group = "lateral",
+      thrustAxis = "right", yawAuthority = true },
+  } } })
+  app.state.mode = "GROUND"
+  app:handleCommand({ cmd = "vectorHold", action = "latch", id = "lateral_fl",
+    axis = "x", sign = 1 })
+  local legend = app.state:get("axisMap").legend
+  T.isTrue(legend:find("a/d DOWN/UP") ~= nil, "lateral: " .. tostring(legend))
   fs.delete(path)
 end)
 

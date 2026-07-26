@@ -1309,19 +1309,19 @@ T.it("marks the held deflection on the grid", function()
     "and neither is the same deflection on another thruster")
 end)
 
-T.it("tells you which keys to hold, and that w/s MEANS something different on an accelerator",
-  function()
-    local panel = axisNavRig({ holding = true, id = "lift_fl", axis = "x", sign = 1,
-      direction = "RIGHT", group = "lift" })
-    T.isTrue(panel.elements.axisHint:getText():find("fwd/back") ~= nil,
-      "fore/aft on a lift thruster: " .. panel.elements.axisHint:getText())
+T.it("shows THE CRAFT'S key legend rather than one of its own", function()
+  -- The plane rule lives on the craft. A panel that hardcoded "a/d = left/right" would be
+  -- lying on all four lateral thrusters, whose nozzles cannot point sideways at all.
+  local panel = axisNavRig({ holding = true, id = "lateral_fl", axis = "x", sign = 1,
+    direction = "DOWN", group = "lateral", legend = "a/d DOWN/UP w/s FWD/BACK" })
+  T.isTrue(panel.elements.axisHint:getText():find("DOWN/UP") ~= nil,
+    "a/d are down/up on a lateral: " .. panel.elements.axisHint:getText())
 
-    panel = axisNavRig({ holding = true, id = "main_1", axis = "y", sign = 1,
-      direction = "UP", group = "main" })
-    T.isTrue(panel.elements.axisHint:getText():find("up/down") ~= nil,
-      "up/down on an accelerator, whose nozzle cannot point forward: "
-      .. panel.elements.axisHint:getText())
-  end)
+  panel = axisNavRig({ holding = true, id = "main_1", axis = "y", sign = 1,
+    direction = "UP", group = "main", legend = "a/d LEFT/RIGHT w/s UP/DOWN" })
+  T.isTrue(panel.elements.axisHint:getText():find("UP/DOWN") ~= nil,
+    "and w/s are up/down on an accelerator: " .. panel.elements.axisHint:getText())
+end)
 
 T.it("goes quiet when nothing is held", function()
   local panel = axisNavRig({ holding = false })

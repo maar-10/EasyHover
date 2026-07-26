@@ -63,9 +63,9 @@
         },
         {
           ["dst"] = "flight/lib/control/axismap.lua",
-          ["size"] = 9301,
+          ["size"] = 11456,
           ["src"] = "flight/lib/control/axismap.lua",
-          ["sum"] = "5967dd70",
+          ["sum"] = "88735ea4",
         },
         {
           ["dst"] = "flight/lib/control/brake.lua",
@@ -353,9 +353,9 @@
         },
         {
           ["dst"] = "ui_main/ui/nav.lua",
-          ["size"] = 17604,
+          ["size"] = 17732,
           ["src"] = "ui_main/ui/nav.lua",
-          ["sum"] = "70cd74b0",
+          ["sum"] = "9b3a8513",
         },
         {
           ["dst"] = "ui_main/ui/overhead.lua",
@@ -420,5 +420,5 @@
     ["size"] = 36872,
     ["sum"] = "305c58ce",
   },
-  ["version"] = "af6eeab7",
+  ["version"] = "8bb4aa5f",
 }

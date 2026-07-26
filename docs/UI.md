@@ -159,9 +159,22 @@ to rename it. The label changes as soon as the craft accepts it, and the mixer i
 spot. While a nozzle is latched the normal keybinds are **silenced** — a/d/w/s are naming a
 direction, and leaving them live would roll and pitch the craft while you stand next to it.
 
-`w`/`s` mean **fore/aft** on a lift or lateral thruster and **up/down** on a rear-facing
-accelerator, whose nozzle steers in the vertical plane and cannot point forward at all. The
-screen says which, so there is nothing to remember.
+**What the keys mean depends on the nozzle**, because a nozzle deflects in the plane
+perpendicular to its own thrust — the rule comes from `thrustAxis`, not from the group:
+
+| Thruster | `a` / `d` | `w` / `s` |
+|---|---|---|
+| lift (points down) | LEFT / RIGHT | FWD / BACK |
+| accelerator (points back) | LEFT / RIGHT | UP / DOWN |
+| lateral (points sideways) | **DOWN / UP** | FWD / BACK |
+
+The lateral row is the one that catches people: a sideways-pointing thruster **cannot** deflect
+its thrust sideways, so `a`/`d` are down and up there. `a` and `s` are always the negative
+direction and `d`/`w` always positive, so the keys never reverse their sense.
+
+The legend is computed **on the craft**, where the rule lives, and sent as text — a panel that
+hardcoded "a/d = left/right" would be lying on all four laterals. It is shown while a nozzle is
+held, so there is nothing to remember.
 
 > **It is a latch, not a held switch, and that is a platform limit rather than a choice.** CC
 > gives a monitor `monitor_touch` and *nothing at all* for the release — there is no touch-up

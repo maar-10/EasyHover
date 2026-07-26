@@ -186,3 +186,35 @@ suite asserts:
 
 Nothing flies until this suite is green. It is cheap, it runs in CraftOS-PC headless, and it is
 the only place we can safely provoke divergence.
+
+## Which nozzles the mixer actually deflects
+
+Worth stating plainly, because the pre-flight screens let you map all of them:
+
+| Group | Thrust | Nozzle |
+|---|---|---|
+| **lift** | collective + differential | **deflected** — the toe trick for pitch/roll, plus uniform translation |
+| **lateral** | translation + yaw | **centred**. `defX = 0, defZ = 0` |
+| **main** | forward thrust | **centred**. `defX = 0, defZ = 0` |
+
+So today **only the lift thrusters' nozzle mapping affects flight.** Mapping the lateral and
+accelerator nozzles in AXIS MAP records the truth for when the mixer starts using them; it
+changes nothing yet, and a wrong mapping on those is currently harmless because a zero
+deflection maps to zero whatever the signs say.
+
+### The roll coupling, for when it does
+
+A lateral thruster's nozzle steers **up/down and fore/aft** — it cannot deflect sideways,
+because sideways is where it already points. Deflecting it downward tilts its thrust down, so
+the reaction pushes that side of the craft **up**:
+
+- **left-side** thruster, nozzle down → left side lifts → **rolls right** (clockwise from behind)
+- **right-side** thruster, nozzle down → right side lifts → **rolls left**
+
+That is real roll authority sitting unused, and it is the reason to wire lateral vectoring into
+the attitude mixer later: it adds roll that costs no lift, where the lift-thruster toe trick
+trades a little. It also means the pilot's mapping of those nozzles has to be right *before*
+that change lands, which is what AXIS MAP is for.
+
+> Until then the lateral nozzles are held at centre, so none of this coupling occurs — and the
+> attitude loop is not silently fighting an unmodelled moment.

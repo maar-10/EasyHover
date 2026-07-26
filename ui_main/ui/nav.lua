@@ -273,14 +273,15 @@ function Nav.build(frame, opts)
         held.sign > 0 and "+" or "-", tostring(held.axis),
         tostring(held.direction or "?")), width))
       axisHolding:setForeground(Theme.ok)
-      local vertical = (held.group == "main") and "w/s = up/down" or "w/s = fwd/back"
-      axisHint:setText(Theme.fit("HOLD a/d " .. vertical, width))
+      -- The legend comes from the CRAFT, which owns the plane rule. A lateral nozzle cannot
+      -- point sideways, so a hardcoded "a/d = left/right" here would be a lie on four of them.
+      axisHint:setText(Theme.fit(tostring(held.legend or "hold a/d w/s"), width))
       axisHint:setForeground(Theme.accent)
       axisRelease:setBackground(Theme.warning)
       axisRelease:setForeground(colours.white)
     else
       axisHolding:setText("")
-      axisHint:setText(Theme.fit("tap a nozzle direction", width))
+      axisHint:setText(Theme.fit("tap a nozzle, then hold a/d/w/s", width))
       axisHint:setForeground(Theme.dim)
       axisRelease:setBackground(Theme.buttonBg)
       axisRelease:setForeground(Theme.buttonFg)

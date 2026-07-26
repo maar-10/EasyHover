@@ -26,16 +26,56 @@ local Util = require("lib.util")
 local AxisMap = {}
 AxisMap.__index = AxisMap
 
---- The craft-frame plane each thruster group's nozzle steers in.
+--- A NOZZLE DEFLECTS IN THE PLANE PERPENDICULAR TO ITS OWN THRUST. That is the whole rule, and
+--- it comes from the thruster's `thrustAxis` rather than from its group -- so an unusual mounting
+--- is handled without a special case:
 ---
---- A down-facing lift thruster tilts fore/aft and left/right. A rear-facing accelerator tilts
---- up/down and left/right -- its nozzle cannot point "forward", so offering that would invite a
---- mapping the geometry cannot hold.
+---   down / up      thrust along y  ->  deflects left/right and fore/aft   (the lift thrusters)
+---   back / forward thrust along z  ->  deflects left/right and up/down    (the accelerators)
+---   left / right   thrust along x  ->  deflects up/down and fore/aft      (the laterals)
+---
+--- The lateral case is the one worth stating: a sideways-pointing thruster CANNOT deflect its
+--- thrust sideways, because that is the direction it already points. Its nozzle steers up/down
+--- and fore/aft. Getting this wrong offers the pilot a direction the geometry cannot hold.
+AxisMap.PLANE_FOR_THRUST = {
+  down = { "x", "z" }, up = { "x", "z" },
+  back = { "x", "y" }, forward = { "x", "y" },
+  left = { "y", "z" }, right = { "y", "z" },
+}
+
+--- Fallback by group, for a thruster whose thrustAxis is missing or unknown.
 AxisMap.PLANES = {
   lift    = { "x", "z" },
-  lateral = { "x", "z" },
+  lateral = { "y", "z" },
   main    = { "x", "y" },
 }
+
+function AxisMap.planeFor(spec)
+  return AxisMap.PLANE_FOR_THRUST[spec.thrustAxis]
+    or AxisMap.PLANES[spec.group]
+    or { "x", "z" }
+end
+
+--- Which craft axis each key pair steers, for a given plane, and which sign.
+---
+--- a/d take the LEFT-RIGHT axis when the nozzle has one, and up/down when it does not -- which
+--- is the lateral case, where a is DOWN and d is UP. w/s take FORE-AFT when available and
+--- up/down otherwise, which is the accelerator case. a and s are always the negative direction,
+--- d and w always the positive one, so the keys never reverse their sense between thrusters.
+function AxisMap.keyPlan(spec)
+  local plane = AxisMap.planeFor(spec)
+  local has = {}
+  for _, axis in ipairs(plane) do has[axis] = true end
+
+  local adAxis = has.x and "x" or "y"
+  local wsAxis = has.z and "z" or "y"
+  return {
+    a = { axis = adAxis, sign = -1 },
+    d = { axis = adAxis, sign = 1 },
+    s = { axis = wsAxis, sign = -1 },
+    w = { axis = wsAxis, sign = 1 },
+  }
+end
 
 --- What each craft axis and sign is CALLED, from the pilot's seat.
 AxisMap.NAMES = {
@@ -44,14 +84,8 @@ AxisMap.NAMES = {
   z = { [1] = "FWD",   [-1] = "BACK" },
 }
 
---- The reassignment keys, and what they mean per plane. a/d are left/right everywhere; w/s are
---- forward/back on a lift or lateral thruster and up/down on an accelerator.
-AxisMap.KEYS = {
-  a = { axis = "x", sign = -1 },
-  d = { axis = "x", sign = 1 },
-  w = { z = { axis = "z", sign = 1 },  y = { axis = "y", sign = 1 } },
-  s = { z = { axis = "z", sign = -1 }, y = { axis = "y", sign = -1 } },
-}
+--- The four reassignment keys. What each one MEANS depends on the nozzle's plane -- see keyPlan.
+AxisMap.KEY_NAMES = { "a", "d", "s", "w" }
 
 --- Which craft direction the system currently believes a nozzle deflection points.
 --- `nozzleAxis` is "x" or "y" -- the nozzle's own axis -- and `sign` is +1 or -1.
@@ -71,7 +105,7 @@ end
 --- Both nozzle axes lying on the same craft axis is geometrically impossible, so allowing it
 --- would let the pilot save a mapping the mixer could never satisfy.
 function AxisMap.assign(spec, nozzleAxis, sign, craftAxis, craftSign)
-  local plane = AxisMap.PLANES[spec.group] or { "x", "z" }
+  local plane = AxisMap.planeFor(spec)
   local isInPlane = false
   for _, axis in ipairs(plane) do if axis == craftAxis then isInPlane = true end end
   if not isInPlane then
@@ -193,17 +227,16 @@ end
 
 --- Apply a/d/s/w on the EDGE of the press, so holding a key does not rewrite repeatedly.
 function AxisMap:handleKeys(spec, pressed)
-  local plane = AxisMap.PLANES[spec.group] or { "x", "z" }
-  local vertical = (plane[2] == "y") and "y" or "z"
+  local plan = AxisMap.keyPlan(spec)
 
-  for name, meaning in pairs(AxisMap.KEYS) do
+  for _, name in ipairs(AxisMap.KEY_NAMES) do
+    local target = plan[name]
     local code = keys[name]
     local down = code ~= nil and pressed[code] and true or false
     local was = self.hold.lastKeys[name] and true or false
     self.hold.lastKeys[name] = down
 
     if down and not was then
-      local target = meaning.axis and meaning or meaning[vertical]
       if target then
         local ok, err = AxisMap.assign(spec, self.hold.axis, self.hold.sign,
           target.axis, target.sign)
@@ -230,6 +263,22 @@ function AxisMap:publish()
   end
   local entry = self.per.thrusters[self.hold.id]
   local spec = entry and entry.spec
+  -- The key legend is computed HERE, where the plane rule lives, and sent as text. The UI
+  -- showing "w/s = fwd/back" on a thruster whose nozzle cannot go forward would be worse than
+  -- showing nothing, and duplicating the rule in the panel is how that happens.
+  local legend = nil
+  if spec then
+    local plan = AxisMap.keyPlan(spec)
+    local function name(key)
+      local t = plan[key]
+      local names = t and AxisMap.NAMES[t.axis]
+      return names and names[t.sign] or "?"
+    end
+    -- Single-spaced: "a/d LEFT/RIGHT w/s UP/DOWN" is 26 columns and a 2x2 monitor is 29, so a
+    -- prefix or double spacing here truncates the last word -- which is the one that matters.
+    legend = ("a/d %s/%s w/s %s/%s"):format(name("a"), name("d"), name("w"), name("s"))
+  end
+
   self.state:set("axisMap", {
     holding = true,
     id = self.hold.id,
@@ -237,6 +286,7 @@ function AxisMap:publish()
     sign = self.hold.sign,
     direction = spec and AxisMap.believedDirection(spec, self.hold.axis, self.hold.sign) or nil,
     group = spec and spec.group or nil,
+    legend = legend,
     error = self.hold.error,
     remainingMs = math.max(0, self.timeoutMs - (os.epoch("utc") - self.hold.startedAt)),
   })
