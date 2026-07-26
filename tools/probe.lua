@@ -36,6 +36,49 @@ local function section(title)
   w("=== %s ===", title)
 end
 
+--- The decision-critical answers, one short line each.
+---
+--- The full report is ~130 lines, which is fine as a FILE and useless if the only way off the
+--- computer is a screenshot -- which is the case on a server, where nobody has the world save.
+--- So the run ends with a digest that fits on one screen.
+local briefs = {}
+
+--- A CC terminal is 51 columns and the digest is printed with a two-space indent, so a line
+--- has 49 to play with. EVERY line is wrapped, not just the ones that looked long: an
+--- over-wide line does not error, it silently becomes two and pushes the top of the digest off
+--- the screen -- which on a server is the only copy anyone can read.
+local BRIEF_TEXT = 38          -- 2 indent + 9 prefix + 38 = 49
+local BRIEF_PREFIX = 9
+
+local function brief(fmt, ...)
+  local line = select("#", ...) > 0 and string.format(fmt, ...) or fmt
+  local prefix, rest = line:sub(1, BRIEF_PREFIX), line:sub(BRIEF_PREFIX + 1)
+  if #rest <= BRIEF_TEXT then
+    briefs[#briefs + 1] = line
+    return
+  end
+  local indent = (" "):rep(BRIEF_PREFIX)
+  local current = nil
+  for word in rest:gmatch("[^ ]+") do
+    if current == nil then
+      current = word
+    elseif #current + 1 + #word <= BRIEF_TEXT then
+      current = current .. " " .. word
+    else
+      briefs[#briefs + 1] = prefix .. current
+      prefix, current = indent, word
+    end
+  end
+  if current then briefs[#briefs + 1] = prefix .. current end
+end
+
+--- Kept for callers that build the prefix separately.
+local function briefWrapped(prefix, text) brief("%s%s", prefix, text) end
+
+--- One line per sensor TYPE, not per instance: four identical thrusters would otherwise push
+--- everything else off the screen.
+local reportedType = {}
+
 local function fmt(v)
   if v == nil then return "nil" end
   local t = type(v)
@@ -78,6 +121,7 @@ w("computer id   : %s", tostring(os.getComputerID()))
 w("label         : %s", tostring(os.getComputerLabel() or "(none)"))
 w("lua version   : %s", tostring(_VERSION))
 w("epoch utc     : %s", tostring(os.epoch("utc")))
+brief("lua      %s", tostring(_VERSION))
 
 section("peripheral inventory")
 
@@ -90,6 +134,14 @@ for _, name in ipairs(names) do
   byType[ptype] = byType[ptype] or {}
   table.insert(byType[ptype], name)
 end
+
+-- A per-type census is what I need at a glance; the full name list is in the file.
+local censusParts = {}
+for ptype, list in pairs(byType) do
+  censusParts[#censusParts + 1] = ("%s x%d"):format(ptype, #list)
+end
+table.sort(censusParts)
+briefWrapped("periph   ", #censusParts > 0 and table.concat(censusParts, " ") or "NONE FOUND")
 
 section("method lists")
 -- One representative per type; that is what we need to confirm the API surface.
@@ -145,6 +197,7 @@ for ptype, methods in pairs(SENSOR_METHODS) do
       sampled = true
       local dev = peripheral.wrap(name)
       w("-- %s (%s)", name, ptype)
+      local liveMethods, deadMethods = {}, {}
       local series = {}
       for _, m in ipairs(methods) do series[m] = {} end
       for _ = 1, SAMPLES do
@@ -165,16 +218,33 @@ for ptype, methods in pairs(SENSOR_METHODS) do
             hi = (hi == nil or v > hi) and v or hi
           end
         end
-        if lo then w("   %-18s min=%s  max=%s  span=%s", "", fmt(lo), fmt(hi), fmt(hi - lo)) end
+        if lo then
+          w("   %-18s min=%s  max=%s  span=%s", "", fmt(lo), fmt(hi), fmt(hi - lo))
+          liveMethods[#liveMethods + 1] = m
+        elseif type(s[1]) == "table" then
+          liveMethods[#liveMethods + 1] = m .. "[]"
+        else
+          deadMethods[#deadMethods + 1] = m
+        end
         -- for table returns, report the element count so we learn the shape
         if type(s[1]) == "table" then
           w("   %-18s element count=%d  sample=%s", "", #s[1], fmt(s[1]))
         end
       end
+      if not reportedType[ptype] then
+        reportedType[ptype] = true
+        local short = ptype:gsub("_sensor$", ""):gsub("^create_?", "")
+        briefWrapped(("%-8s "):format(short:sub(1, 8)),
+          (#liveMethods > 0 and table.concat(liveMethods, ",") or "NO DATA")
+          .. (#deadMethods > 0 and ("  dead:" .. table.concat(deadMethods, ",")) or ""))
+      end
     end
   end
 end
-if not sampled then w("No known Simulated sensors found on the network.") end
+if not sampled then
+  w("No known Simulated sensors found on the network.")
+  brief("sensors  NONE of the known Simulated types are on the network")
+end
 
 -- ------------------------------------------------- attitude / heading identity
 
@@ -247,6 +317,19 @@ else
     w("   >> Fewer than 3 elements: this sensor probably reports PITCH and ROLL only.")
     w("   >> Absolute heading must then come from a nav fallback (see docs/NAVIGATION.md).")
   end
+  -- Which elements actually MOVED is the whole answer; a static one tells us nothing.
+  local moved = {}
+  for i = 1, #elems do
+    local t = elems[i]
+    local span = (t.hi and t.lo) and (t.hi - t.lo) or 0
+    if span > 1 then moved[#moved + 1] = ("e%d span %.1f"):format(i, span) end
+  end
+  if #moved == 0 then
+    brief("gimbal   %d elem, NONE MOVED: axes unresolved", #elems)
+  else
+    briefWrapped("gimbal   ", ("%d element(s); moved: %s"):format(#elems, table.concat(moved, " ")))
+  end
+
   if navDev then
     w("navigation_table.getRelativeAngle():")
     navT.report("relative angle")
@@ -344,8 +427,10 @@ section("nozzle slew rate  (THE number that sets attitude-loop bandwidth)")
 
 if not vecName then
   w("SKIPPED -- no vector thruster on the network.")
+  brief("slew     SKIPPED: no vector thruster")
 elseif unsafe then
   w("SKIPPED -- a thruster reports non-zero power. Land, cut throttle, and re-run.")
+  brief("slew     SKIPPED: thruster powered -- re-run with the engine OFF")
 else
   w("Using %s (%s). Thrust is never commanded; only the nozzle moves.", vecName, vecType)
   local dev = peripheral.wrap(vecName)
@@ -382,9 +467,11 @@ else
     w("RESULT:   0 -> 1 in %d ms  (~%d polls)", elapsed, ticks)
     w("          full-scale rate ~= %.3f per second", 1000 / math.max(elapsed, 1))
     w("          => attitude loop should run at or below ~1/5 of that bandwidth")
+    brief("SLEW     0->1 in %d ms = %.2f full-scale/s", elapsed, 1000 / math.max(elapsed, 1))
   else
     w("RESULT:   did NOT reach 0.98 within %d ms. final=%s target=%s",
       elapsed, fmt(finalX), fmt(targetX))
+    brief("SLEW     did not reach full deflection in %d ms (final %s)", elapsed, fmt(finalX))
     w("          If final is stuck at 0, the nozzle may need thrust to move, or the")
     w("          peripheral did not take authority. Check for another attached computer.")
   end
@@ -400,6 +487,7 @@ else
   end
   local c1 = os.epoch("utc")
   w("%d setVector calls in %d ms  => %.2f ms/call", CALL_COUNT, c1 - c0, (c1 - c0) / CALL_COUNT)
+  brief("CALL     %.2f ms per setVector call", (c1 - c0) / CALL_COUNT)
   w("(mainThread calls yield to the server thread; this is the per-cycle budget input)")
   try(dev, "setVector", 0, 0)
 end
@@ -441,8 +529,18 @@ if ctrlName then
   for b = 1, 15 do if btnSeen[b] then pressed[#pressed + 1] = b end end
   w("   buttons pressed during capture: %s",
     #pressed > 0 and table.concat(pressed, ",") or "none")
+  local live = {}
+  for i = 1, 6 do
+    if (hi[i] - lo[i]) > 0.05 then
+      live[#live + 1] = ("a%d[%.2f..%.2f]"):format(i, lo[i], hi[i])
+    end
+  end
+  briefWrapped("ctrl     ", ("fullPrec=%s axes:%s btns:%s"):format(fmt(fullPrec),
+    #live > 0 and table.concat(live, " ") or "NONE",
+    #pressed > 0 and table.concat(pressed, ",") or "none"))
 else
   w("No tweaked_controller found.")
+  brief("ctrl     no tweaked_controller on the network")
 end
 
 local twName = firstOf("linked_typewriter")
@@ -470,9 +568,13 @@ if twName then
   if #labelled == 0 then
     w("   -> nothing polled. Every control key must be BOUND TO A FREQUENCY on the")
     w("      typewriter, or it reports nothing at all.")
+    brief("typwrtr  POLLED NOTHING -- bind the keys to a frequency on the typewriter")
+  else
+    briefWrapped("typwrtr  ", "polls OK: " .. table.concat(labelled, " "))
   end
 else
   w("No linked_typewriter found.")
+  brief("typwrtr  no linked_typewriter on the network")
 end
 
 -- ------------------------------------------------------ unrecognised hardware
@@ -508,13 +610,25 @@ for _, name in ipairs(names) do
     end
   end
 end
-if unknown == 0 then w("None -- every peripheral on the network is a known type.") end
+if unknown == 0 then
+  w("None -- every peripheral on the network is a known type.")
+else
+  brief("unknown  %d unrecognised peripheral type(s)", unknown)
+end
 
 -- ---------------------------------------------------------------- write
 
+section("BRIEF -- screenshot this")
+for _, line in ipairs(briefs) do w("  " .. line) end
+
 section("done")
-w("Paste probe_report.txt back to continue. Nothing was left commanded:")
-w("all nozzles returned to centre and thrust was never touched.")
+w("Nothing was left commanded: all nozzles returned to centre and thrust")
+w("was never touched.")
+w("")
+w("Send the report back EITHER way:")
+w("  1. pastebin put " .. REPORT)
+w("     ...then hand over the code it prints.")
+w("  2. screenshot the BRIEF block above -- it holds the decisions.")
 
 local f = fs.open(REPORT, "w")
 f.write(table.concat(out, "\n") .. "\n")

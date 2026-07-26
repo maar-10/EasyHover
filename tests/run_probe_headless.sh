@@ -116,6 +116,20 @@ check "beacon nav detected"               "getClosestDistance = 17\.5"
 check "laser altimeter counted"           "laser alt +: 1 optical_sensor"
 check "unknown peripheral surfaced"       "vista:view_finder"
 check "report reached the end"            "=== done ==="
+# The digest is the ONLY way the report leaves a server where nobody has the world save, so
+# assert it exists and that the two numbers the control design depends on are in it.
+check "digest block present"              "BRIEF -- screenshot this"
+check "digest carries the slew rate"      "SLEW +.*full-scale/s"
+check "digest carries the call cost"      "CALL +.*ms per setVector"
+# Long lines must be wrapped, or one of them silently pushes the rest off a 51-column screen.
+WIDE=$(awk '/BRIEF -- screenshot/,/=== done ===/' "$REPORT" | awk 'length($0) > 51' | wc -l | tr -d ' ')
+if [[ "$WIDE" == "0" ]]; then
+  echo "  ok   : every digest line fits a CC terminal"
+else
+  echo "  FAIL : $WIDE digest line(s) wider than 51 columns -- they would wrap and push"
+  echo "         the rest of the digest off the top of the screen"
+  fails=$((fails + 1))
+fi
 
 if [[ $fails -gt 0 ]]; then
   echo "FAILED: $fails assertion(s)"
