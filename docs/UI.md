@@ -17,7 +17,7 @@ of the cockpit.
 | Panel | Status | What it shows |
 |---|---|---|
 | **overhead** | **live** | Engine start/stop with a countdown to the next feed, both fuel gauges (liquid tank, solid vault), and their configuration in a submenu. Built for a 1×2 portrait screen. |
-| **config** | **live** | In-flight values on its main page; **MONITORS**, **DISK** and **FLIGHT** submenus. |
+| **config** | **live** | In-flight values on its main page; **MON**, **HW**, **DISK** and **FLT** submenus. |
 | pfd | reserved | Attitude / flight-path indicator. Mirrored pair. |
 | autopilot | reserved | Autopilot settings. |
 | nav | reserved | Waypoints and the map. |
@@ -41,6 +41,35 @@ Verified from Basalt 2.0's source, because the obvious approach is the wrong one
 
 `Monitors:update(model)` pushes one model into every instance, so two mirrored screens cannot
 disagree.
+
+## Assigning hardware
+
+Config panel → **HW**, or the overhead panel's **CFG** page — the same widget, so there is one
+implementation of "which peripheral is the tank".
+
+Three items, **one at a time** with a `>` to move on. That is not stylistic: a 1×1 monitor at
+scale 0.5 is 15×10 characters, and three candidate lists cannot fit. **PICK** cycles through the
+candidates and past the end unassigns, so a wrong choice is always undoable. **SIDE** cycles the
+relay's side (a relay's "face" is its BACK — see [WIRING.md](WIRING.md)).
+
+**The candidate list comes from the flight computer over telemetry**, not from the UI's own
+peripheral scan. Both computers see the same wired network, but the flight computer is the one
+that will actually open these peripherals, so its names are the authoritative ones.
+
+Assigning the engine relay also switches `engine.enabled` on — a relay with the subsystem still
+off looks configured and does nothing. `setEngineRelay` / `setTank` / `setVault` are dedicated
+commands rather than `configSet`, because they have to *create* a list entry (`hardware.tanks`
+starts empty) and `configSet` deliberately refuses to invent keys.
+
+## Fitting a 1x1 monitor
+
+Both panels compute their layout from the frame's real size. The config panel has a **narrow
+mode** below 26 columns: shorter labels, the menu stacked into a 2×2 grid, and the live-value
+block taking whatever rows are left. Minimum 14×9; below that it says which size it needs rather
+than drawing nonsense.
+
+`Theme.fitEnd` keeps a peripheral name's **tail** when it will not fit, because truncating
+`redstone_relay_1` to `redstone_relay_` renders `relay_0` and `relay_1` identically.
 
 ## Assigning monitors
 
@@ -91,6 +120,9 @@ Both cost a debugging round and are noted where they bite:
   reported state in a closure instead.
 - **Register click handlers once.** Basalt *appends* callbacks rather than replacing them, so
   re-registering on every refresh made one tap cycle an assignment several times.
+- **Redraw on the tap, not on the next data frame.** A handler that only mutates state leaves
+  the label under the pilot's finger stale until something else triggers a refresh. Both the
+  monitor rows and the hardware widget's `>` had this bug in the first dry run.
 
 ## Testing
 
