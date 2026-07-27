@@ -797,6 +797,17 @@ function App:handleCommand(cmd)
     local ok, err, short = self.selfTest:start({
       airborne = self:knownAirborne(),
       engineOn = self.engine.master and true or false, now = now })
+    -- SAID OUT LOUD, ON THIS COMPUTER. Every refusal so far has been read off the cockpit panel,
+    -- which shows what the last telemetry frame carried -- so a craft whose telemetry has gone
+    -- quiet looks exactly like one that is idle, and the pilot ends up arguing with a photograph.
+    -- The flight computer's own console cannot be stale.
+    if not ok then
+      self.log:warn("self test REFUSED: %s", tostring(err))
+      self.log:warn("  running=%s  sinceTick=%.1fs  airborne=%s  engineMaster=%s",
+        tostring(self.selfTest:isRunning()),
+        (self.selfTest.run and (now - (self.selfTest.run.lastTickAt or now)) or 0) / 1000,
+        tostring(self:knownAirborne()), tostring(self.engine.master))
+    end
     return ok, { error = err, errorShort = short }
 
   elseif cmd.cmd == "setAxes" then

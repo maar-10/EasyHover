@@ -315,6 +315,11 @@ function SelfTest:tick(now)
       group = step.group, count = #members,
       vectoring = vectoring, plain = plain,
     }
+    -- One line per step on the flight computer's console. A run that is genuinely being driven
+    -- prints three of these; a run that is stuck prints none, and that difference is visible
+    -- without a working telemetry link or a working panel.
+    self.log:info("self test step %d/%d: %s, %d nozzle(s) of %d thruster(s)",
+      p.step, #SelfTest.STEPS, step.group, #vectoring, #members)
     if #members == 0 then
       self.log:warn("self test: no %s thrusters are assigned", step.group)
     elseif #vectoring == 0 then

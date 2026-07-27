@@ -192,3 +192,35 @@ was quietly testing a released role and proving nothing. Iterate on one phase wi
 > its shell and idles until the runner's `timeout 180` kills it — and because the results file
 > was already written, the phase still reports PASS. That cost 27 minutes a run, invisibly,
 > until someone timed it.
+
+---
+
+## "Did it actually install?"
+
+Two things are easy to confuse, and both look like a broken update:
+
+**1. The files did not arrive.** Ask the Suite, on that computer:
+
+```
+easyhover_suite.lua --check
+```
+
+It is a true dry run — it writes nothing, even over a corrupt file — and reports exactly what
+differs from the release. `Nothing to do.` means the bytes on disk match the manifest. Anything else
+lists what would change.
+
+The installed release is recorded in `/easyhover_install.txt`, and `version` there is a digest of
+every shipped file's checksum and size, so it moves whenever shipped bytes move.
+
+**2. The files arrived and the old code is still running.** Lua loads at boot. Until the computer
+restarts, it keeps executing what it loaded, however new the files on disk are. **Each computer
+updates and reboots independently** — the flight computer and the UI computer are separate installs,
+and a change may live in either or both.
+
+### And a third thing that is neither
+
+A screen can look unchanged because the state it would show has not been reached. The SELF TEST
+page only prints `TESTING 2/3` and its countdown **while a test is running**; when a run has been
+refused, an old build and a new one render identically — dim steps, `START` on the button, the
+refusal in the status line. Before concluding a release did not ship, check whether the new text is
+reachable in the state the screen is actually in.
