@@ -62,8 +62,9 @@ const ROLES = {
       + " gps.locate() pings and reports link status and constellation quality.",
     status: "released",
     dirs: ["gps_beacon", "shared"],
-    // Basalt for the beacon's own terminal screen; same pinned build as every other role.
-    extraFiles: [{ src: "vendor/basalt-full.lua", dst: "basalt.lua" }],
+    // NO BASALT. A beacon runs on a BASIC computer, which has no mouse -- mouse_click is only
+    // generated on advanced ones, so a panel of buttons there is entirely inert. The screen is
+    // plain `term`, keyboard-driven, and 300KB lighter on each of four computers.
     launcher: { src: "launchers/gps_beacon.lua", dst: "startup.lua" },
     entry: "gps_beacon/startup.lua",
     luaPath: "/gps_beacon",

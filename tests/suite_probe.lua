@@ -282,9 +282,11 @@ elseif phase == "beacon" then
   check(fs.exists("/gps_beacon/app.lua"), "role files installed")
   check(fs.exists("/gps_beacon/lib/host.lua"), "the GPS host is there")
   check(fs.exists("/gps_beacon/lib/geometry.lua"), "and the constellation maths")
-  check(fs.exists("/gps_beacon/ui/panel.lua"), "and its screen")
+  check(fs.exists("/gps_beacon/ui/console.lua"), "and its screen")
   check(fs.exists("/shared/log.lua"), "the shared tree landed")
-  check(fs.exists("/basalt.lua"), "Basalt installed for the terminal UI")
+  -- NO Basalt: a beacon runs on a basic computer, which has no mouse, so the screen is plain
+  -- `term`. Shipping 300KB of UI framework to four computers that cannot click it was waste.
+  check(not fs.exists("/basalt.lua"), "and NO Basalt -- the beacon screen is plain term")
   check(not fs.exists("/flight/app.lua"), "no flight files on a beacon")
   check(#noStagingLeftBehind() == 0, "no staging files left behind")
 

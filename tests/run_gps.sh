@@ -28,8 +28,6 @@ fi
 mkdir -p "$C0/tests/mocks"
 cp -r "$ROOT/gps_beacon" "$C0/gps_beacon"
 cp -r "$ROOT/shared" "$C0/shared"
-# Basalt: the beacon has a terminal UI, and the panel tests build it against the REAL framework.
-cp "$ROOT/vendor/basalt-full.lua" "$C0/basalt.lua"
 cp "$ROOT/tests/util.lua" "$C0/tests/util.lua"
 cp "$ROOT/tests/mocks/peripherals.lua" "$C0/tests/mocks/peripherals.lua"
 cp "$ROOT/tests/test_gps.lua" "$C0/tests/test_gps.lua"

@@ -45,23 +45,52 @@ way to catch it, so it gets the loudest line on the beacon's screen:
 MISMATCH 20.0 BLOCKS OFF
 ```
 
+### The screen is keyboard-driven, on purpose
+
+**A beacon runs on a basic computer, and a basic computer has no mouse.** `mouse_click` is only
+generated on advanced ones, so a panel of buttons there is not merely ugly — it is entirely inert.
+The first beacon in the world proved it: the handlers were correct and the events never arrived.
+
+So every action is a single keypress, and **severity is carried by the text rather than the
+colour**, because a basic terminal is monochrome and a red MISMATCH would otherwise render
+identically to a green OK. Colour is added when the terminal has it and never means anything on
+its own.
+
+It also means the role ships **no Basalt** — 300 KB saved on each of four computers.
+
 ### Quality, in words you can act on
 
 The beacon grades the live constellation from the coordinates the mesh reports, so nobody types
 four positions into a calculator:
 
 ```
-GPS beacon-3
-at 60 150 60
-self check ok (0.12)
------------------
-* beacon-3 (this one)
-+ North 0 70 0
-+ East 200 72 0
-+ South 0 68 200
------------------
-4/4  EXCELLENT
-served 1284  peers 3
+EasyHover GPS   North
+position  0 70 0
+self check  OK (0.12 blocks out)
+---------------------------------------------------
+constellation  4 of 4   EXCELLENT
+  * North (this one)
+  + East  200 72 0
+  + South  0 68 200
+  + High  60 150 60
+---------------------------------------------------
+served 1284 pings   peers 3
+
+[P] set position
+[E] enabled: YES
+[V] verify now
+[Q] quit to shell
+```
+
+A problem is **wrapped** rather than truncated, and at most two show at once — the rest follow
+once these are fixed:
+
+```
+constellation  4 of 4   UNUSABLE
+  ! the beacons are effectively COPLANAR --
+  !   gps.locate() cannot resolve the mirror
+  !   position and will return nothing. Move one
+  !   well above or below the others.
 ```
 
 The grade comes from the **tetrahedron volume** of the best four hosts, scaled by their mean edge
@@ -104,7 +133,9 @@ that sometimes it is stale.
 1. Place four computers, **well apart**, and **not all at the same height** — one clearly above or
    below the others. This is a requirement, not a refinement.
 2. Give each an ender modem, in the **same dimension** you intend to fly in.
-3. Install `gps_beacon` on each, then **SET POS** on its screen and type where it stands.
+3. Install `gps_beacon` on each, then press **P** on its screen and type where it stands. Read
+   the numbers off F3 — a wrong one poisons every fix the craft takes, and only the self check
+   will notice.
 4. Watch the count reach `4/4` and the grade settle. Fix anything the problem line names.
 5. Wait for `self check ok` on all four. A **MISMATCH** on any one means a coordinate is wrong —
    and it may not be the beacon complaining.

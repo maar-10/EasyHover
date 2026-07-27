@@ -234,16 +234,10 @@
       ["entry"] = "gps_beacon/startup.lua",
       ["files"] = {
         {
-          ["dst"] = "basalt.lua",
-          ["size"] = 305968,
-          ["src"] = "vendor/basalt-full.lua",
-          ["sum"] = "96ae5255",
-        },
-        {
           ["dst"] = "gps_beacon/app.lua",
-          ["size"] = 5242,
+          ["size"] = 7796,
           ["src"] = "gps_beacon/app.lua",
-          ["sum"] = "70bd5624",
+          ["sum"] = "e432de1f",
         },
         {
           ["dst"] = "gps_beacon/lib/config.lua",
@@ -276,16 +270,10 @@
           ["sum"] = "5c2f94ce",
         },
         {
-          ["dst"] = "gps_beacon/ui/panel.lua",
-          ["size"] = 8028,
-          ["src"] = "gps_beacon/ui/panel.lua",
-          ["sum"] = "60924d52",
-        },
-        {
-          ["dst"] = "gps_beacon/ui/theme.lua",
-          ["size"] = 4183,
-          ["src"] = "gps_beacon/ui/theme.lua",
-          ["sum"] = "97585227",
+          ["dst"] = "gps_beacon/ui/console.lua",
+          ["size"] = 7590,
+          ["src"] = "gps_beacon/ui/console.lua",
+          ["sum"] = "a81e02b3",
         },
         {
           ["dst"] = "shared/log.lua",
@@ -508,5 +496,5 @@
     ["size"] = 36872,
     ["sum"] = "305c58ce",
   },
-  ["version"] = "119d50db",
+  ["version"] = "33afc1e0",
 }

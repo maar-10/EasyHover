@@ -10,7 +10,6 @@ local Geometry = require("lib.geometry")
 local Host = require("lib.host")
 local Mesh = require("lib.mesh")
 local Config = require("lib.config")
-local Theme = require("ui.theme")
 local Log = require("shared.log")
 
 local function quietLog() return Log.new({ level = "error", capacity = 80 }) end
@@ -322,205 +321,205 @@ T.it("an old config gains fields added later", function()
 end)
 
 
--- ------------------------------------------------------------------- panel
 
-T.suite("beacon panel")
+-- ------------------------------------------------------------------ console
 
---- Built against REAL Basalt, in a real window.
+T.suite("beacon console")
+
+--- The screen is plain `term`, keyboard-driven, because A BEACON RUNS ON A BASIC COMPUTER and a
+--- basic computer HAS NO MOUSE. `mouse_click` is only generated on advanced ones, so the first
+--- version -- a panel of Basalt buttons -- was entirely inert in the world: the handlers were
+--- correct and the events never arrived.
 ---
---- These exist because the first beacon installed in game crashed on boot: the panel called
---- `setValue` on an Input, which does not exist -- Basalt holds an Input's contents in its `text`
---- property, so the generated accessors are setText/getText. Every other module in this role had
---- tests and the screen had none, so a guessed API reached the pilot untested.
-local basalt = require("basalt")
-local Panel = require("ui.panel")
+--- `render` is pure, so all of this is testable without a terminal, which the button panel
+--- never was.
+local Console = require("ui.console")
 
-local function panelRig(width, height, cfgOver)
-  local monitor = window.create(term.current(), 1, 1, width or 51, height or 19, false)
-  monitor.setTextScale = function() end
-  monitor.getTextScale = function() return 1 end
-  local frame = basalt.createFrame()
-  frame:setTerm(monitor)
-  local cfg = Config.withDefaults(cfgOver or {})
-  local saves = { count = 0 }
-  local host = Host.new(cfg, quietLog())
-  local mesh = Mesh.new(cfg, quietLog())
-  local panel = Panel.build(frame, {
-    cfg = cfg, host = host, mesh = mesh, log = quietLog(),
-    save = function() saves.count = saves.count + 1 end,
-  })
-  return panel, cfg, saves, frame, monitor
+local function rendered(cfg, model, width)
+  local rows = Console.render(cfg, model or {}, width or 51, 19)
+  local text = {}
+  for _, row in ipairs(rows) do text[#text + 1] = row.text end
+  for _, row in ipairs(rows.footer) do text[#text + 1] = row.text end
+  return table.concat(text, "\n"), rows
 end
 
 local function model(status, assessment)
   return { status = status or {}, assessment = assessment or { problems = {}, hostCount = 0 } }
 end
 
---- A tap through Basalt's own hit test, as the terminal delivers it.
-local function click(element)
-  return element:dispatchEvent("mouse_click", 1, element:getX(), element:getY())
+T.it("EVERY ACTION IS A SINGLE KEYPRESS -- nothing needs pointing at", function()
+  T.eq(Console.actionFor("p"), "setPosition")
+  T.eq(Console.actionFor("e"), "toggleEnabled")
+  T.eq(Console.actionFor("v"), "verify")
+  T.eq(Console.actionFor("q"), "quit")
+  T.eq(Console.actionFor("P"), "setPosition", "upper case works too")
+  T.isNil(Console.actionFor("x"), "and an unbound key does nothing")
+  T.isNil(Console.actionFor(nil), "nor does a nil")
+end)
+
+T.it("the key legend is on the screen, so nothing has to be remembered", function()
+  local text = rendered(Config.withDefaults({}), model())
+  for _, key in ipairs({ "%[P%]", "%[E%]", "%[V%]", "%[Q%]" }) do
+    T.isTrue(text:find(key) ~= nil, "legend has " .. key)
+  end
+  T.isTrue(text:find("set position") ~= nil, "and says what P does")
+end)
+
+T.it("SEVERITY IS IN THE TEXT, not just the colour", function()
+  -- A basic terminal is MONOCHROME. A red MISMATCH and a green OK would render identically, so
+  -- the words have to carry it on their own.
+  local cfg = Config.withDefaults({ position = { x = 1, y = 2, z = 3 } })
+  local text = rendered(cfg, model({ position = { x = 1, y = 2, z = 3 },
+    selfCheck = { state = "MISMATCH", error = 20.4,
+                  located = { x = 1, y = 2, z = 23 }, configured = { x = 1, y = 2, z = 3 } } }))
+  T.isTrue(text:find("!! MISMATCH") ~= nil, "shouted in text: " .. text:match("[^\\n]*MISMATCH[^\\n]*"))
+  T.isTrue(text:find("20%.4") ~= nil, "with how far off")
+  T.isTrue(text:find("GPS says") ~= nil, "and both numbers, so the typo is obvious")
+end)
+
+T.it("a passing check reads calmly and still says so in words", function()
+  local cfg = Config.withDefaults({ position = { x = 1, y = 2, z = 3 } })
+  local text, rows = rendered(cfg, model({ position = { x = 1, y = 2, z = 3 },
+    selfCheck = { state = "ok", error = 0.12 } }))
+  T.isTrue(text:find("OK") ~= nil, "says OK")
+  T.isFalse(text:find("MISMATCH") ~= nil, "and nothing alarming")
+  -- the tone is a hint for a colour terminal, never the only signal
+  local toned = false
+  for _, row in ipairs(rows) do if row.tone == "good" then toned = true end end
+  T.isTrue(toned, "a colour terminal still gets the hint")
+end)
+
+T.it("says NOT SET rather than drawing zeros", function()
+  local text = rendered(Config.withDefaults({}), model({ position = {} }))
+  T.isTrue(text:find("NOT SET") ~= nil, "named")
+  T.isTrue(text:find("not answering") ~= nil, "and says what that means: " ..
+    text:match("[^\\n]*NOT SET[^\\n]*"))
+end)
+
+T.it("shows the count, the grade, and this beacon marked among its peers", function()
+  local text = rendered(Config.withDefaults({ label = "North" }), model({}, {
+    hostCount = 3, usable = false, grade = "UNUSABLE", problems = {}, hosts = {
+      { x = 0, y = 70, z = 0, label = "North", self_ = true },
+      { x = 200, y = 72, z = 0, label = "East" },
+      { x = 0, y = 68, z = 200, label = "South" },
+    } }))
+  T.isTrue(text:find("3 of 4") ~= nil, "the count")
+  T.isTrue(text:find("UNUSABLE") ~= nil, "the grade")
+  T.isTrue(text:find("%* North %(this one%)") ~= nil, "ours is marked")
+  T.isTrue(text:find("%+ East  200 72 0") ~= nil, "and peers show their coordinates")
+end)
+
+T.it("WRAPS a problem rather than letting it run off the screen unread", function()
+  local long = "the beacons are effectively COPLANAR -- gps.locate() cannot resolve the mirror "
+    .. "position and will return nothing. Move one well above or below the others."
+  local _, rows = rendered(Config.withDefaults({}),
+    model({}, { hostCount = 4, usable = false, grade = "UNUSABLE", problems = { long }, hosts = {} }))
+  local wrapped = 0
+  for _, row in ipairs(rows) do
+    T.isTrue(#row.text <= 51, "no row exceeds the width: " .. row.text)
+    if row.text:find("COPLANAR") or row.text:find("above or below") then wrapped = wrapped + 1 end
+  end
+  T.isTrue(wrapped >= 2, "the sentence was wrapped over several rows, got " .. wrapped)
+end)
+
+T.it("shows at most two problems, because the rest follow once these are fixed", function()
+  local _, rows = rendered(Config.withDefaults({}), model({}, {
+    hostCount = 4, usable = false, problems = { "first one", "second one", "third one" },
+    hosts = {} }))
+  local text = {}
+  for _, row in ipairs(rows) do text[#text + 1] = row.text end
+  local joined = table.concat(text, "\n")
+  T.isTrue(joined:find("first one") ~= nil, "first shown")
+  T.isTrue(joined:find("second one") ~= nil, "second shown")
+  T.isFalse(joined:find("third one") ~= nil, "third withheld")
+end)
+
+T.it("the ENABLED legend reflects the config", function()
+  local on = rendered(Config.withDefaults({ enabled = true }), model())
+  T.isTrue(on:find("enabled: YES") ~= nil, "on")
+  local off = rendered(Config.withDefaults({ enabled = false }), model())
+  T.isTrue(off:find("enabled: NO") ~= nil, "off")
+end)
+
+T.it("every row fits the terminal width, at 51 and at 26", function()
+  -- Deliberately awkward content: a long label and six-figure coordinates, which is what a
+  -- beacon far from spawn actually has.
+  local cfg = Config.withDefaults({ label = "a-very-long-beacon-label-indeed",
+                                    position = { x = -123456, y = 200, z = 987654 } })
+  local worst = model({
+    position = cfg.position,
+    selfCheck = { state = "MISMATCH", error = 1234.5,
+                  located = { x = 1, y = 2, z = 3 }, configured = cfg.position },
+    served = 999999,
+  }, {
+    hostCount = 4, usable = false, grade = "UNUSABLE",
+    problems = { "two beacons are configured at the SAME position -- one of them is a copy" },
+    hosts = { { x = -123456, y = 200, z = 987654, label = cfg.label, self_ = true } },
+  })
+
+  for _, width in ipairs({ 51, 26 }) do
+    local rows = Console.render(cfg, worst, width, 19)
+    for _, row in ipairs(rows) do
+      T.isTrue(#row.text <= width, ("width %d: %q is %d"):format(width, row.text, #row.text))
+    end
+    for _, row in ipairs(rows.footer) do
+      T.isTrue(#row.text <= width, ("footer at %d: %q"):format(width, row.text))
+    end
+  end
+end)
+
+-- --------------------------------------------------------- coordinate entry
+
+T.suite("beacon position entry")
+
+--- A reader that hands back canned answers, so the prompt is testable without a keyboard.
+local function reader(answers)
+  local index = 0
+  return function()
+    index = index + 1
+    return answers[index]
+  end
 end
 
-T.it("BUILDS AND UPDATES WITHOUT THROWING -- the crash that shipped", function()
-  local panel = panelRig()
-  panel.update(model())                       -- must not error
-  T.notNil(panel.elements.title, "the panel exists")
+T.it("reads three coordinates and floors them", function()
+  local wanted = Console.readPosition(reader({ "100", "72.6", "-300" }))
+  T.eq(wanted.x, 100)
+  T.eq(wanted.y, 72, "floored")
+  T.eq(wanted.z, -300, "negatives work")
 end)
 
-T.it("the coordinate fields use Basalt's REAL Input API", function()
-  -- setText/getText, from the `text` property. setValue does not exist and fails only at runtime.
-  local panel = panelRig(51, 19, { position = { x = 12, y = 70, z = -34 } })
-  for _, axis in ipairs({ "x", "y", "z" }) do
-    local field = panel.fields[axis]
-    T.eq(type(field.setText), "function", axis .. " has setText")
-    T.eq(type(field.getText), "function", axis .. " has getText")
-    T.isNil(field.setValue, axis .. ": setValue does NOT exist, which is what broke")
-  end
-  T.eq(panel.fields.x:getText(), "12", "and the fields were filled from the config")
-  T.eq(panel.fields.z:getText(), "-34", "including negatives")
+T.it("ALL THREE OR NONE -- a bad axis changes nothing", function()
+  -- Two axes stored is a typo mid-entry, not a position, and would leave the beacon in a state
+  -- its own validator rejects.
+  local wanted, err = Console.readPosition(reader({ "100", "seventy", "-300" }))
+  T.isNil(wanted, "refused")
+  T.isTrue(tostring(err):find("Y is not a number") ~= nil, "names the axis: " .. tostring(err))
+  T.isTrue(tostring(err):find("nothing was changed") ~= nil, "and reassures")
 end)
 
-T.it("shows blank fields when no position is set yet", function()
-  local panel = panelRig()
-  T.eq(panel.fields.x:getText(), "", "nothing to show")
+T.it("a BLANK answer keeps the value already set", function()
+  local wanted = Console.readPosition(reader({ "", "", "" }), { x = 5, y = 6, z = 7 })
+  T.eq(wanted.x, 5, "kept")
+  T.eq(wanted.z, 7)
 end)
 
-T.it("SAVES a typed position, and tells the config", function()
-  local panel, cfg, saves = panelRig()
-  panel.show(panel.pages.edit)
-  panel.fields.x:setText("100")
-  panel.fields.y:setText("72")
-  panel.fields.z:setText("-300")
-  click(panel.elements.title and panel.pages.edit or panel.pages.edit)   -- no-op, keeps shape
-  -- the SAVE button is the first bottom-row button on the edit page
-  local saved = false
-  for _, child in ipairs(panel.pages.edit.getChildren and panel.pages.edit:getChildren() or {}) do
-    if child.getText and child:getText() == "SAVE" then click(child); saved = true end
-  end
-  T.isTrue(saved, "found the SAVE button")
-  T.eq(cfg.position.x, 100, "x stored")
-  T.eq(cfg.position.z, -300, "z stored")
-  T.eq(saves.count, 1, "and written to disk")
-  T.isTrue(panel.pages.home:getVisible(), "returning to the home page")
+T.it("but a blank with nothing set is refused rather than stored as zero", function()
+  local wanted, err = Console.readPosition(reader({ "", "1", "2" }), nil)
+  T.isNil(wanted, "refused")
+  T.isTrue(tostring(err):find("X") ~= nil, "names it: " .. tostring(err))
 end)
 
-T.it("REFUSES a non-numeric coordinate and says which axis", function()
-  local panel, cfg = panelRig()
-  panel.show(panel.pages.edit)
-  panel.fields.x:setText("100")
-  panel.fields.y:setText("seventy")
-  panel.fields.z:setText("-300")
-  for _, child in ipairs(panel.pages.edit:getChildren()) do
-    if child.getText and child:getText() == "SAVE" then click(child) end
-  end
-  T.isTrue(panel.elements.editError:getText():find("Y") ~= nil,
-    "names the axis: " .. panel.elements.editError:getText())
-  T.isNil(cfg.position.x, "and NOTHING was stored -- not two axes out of three")
+T.it("tolerates spaces around a number", function()
+  local wanted = Console.readPosition(reader({ "  100 ", " 72", "-300  " }))
+  T.eq(wanted.x, 100)
+  T.eq(wanted.y, 72)
 end)
 
-T.it("says NO POSITION SET rather than drawing zeros", function()
-  local panel = panelRig()
-  panel.update(model({ position = {} }))
-  T.isTrue(panel.elements.position:getText():find("NO POSITION") ~= nil,
-    "position line: " .. panel.elements.position:getText())
-  T.eq(panel.elements.position:getForeground(), Theme.warning, "and flags it")
-end)
-
-T.it("A SELF-CHECK MISMATCH IS THE LOUDEST LINE ON THE SCREEN", function()
-  local panel = panelRig(51, 19, { position = { x = 1, y = 2, z = 3 } })
-  panel.update(model({ position = { x = 1, y = 2, z = 3 },
-                       selfCheck = { state = "MISMATCH", error = 20.4 } }))
-  local text = panel.elements.check:getText()
-  T.isTrue(text:find("MISMATCH") ~= nil, "named: " .. text)
-  T.isTrue(text:find("20") ~= nil, "with how far off")
-  T.eq(panel.elements.check:getForeground(), Theme.warning, "in the warning colour")
-end)
-
-T.it("a passing self check reads calmly", function()
-  local panel = panelRig(51, 19, { position = { x = 1, y = 2, z = 3 } })
-  panel.update(model({ position = { x = 1, y = 2, z = 3 },
-                       selfCheck = { state = "ok", error = 0.12 } }))
-  T.isTrue(panel.elements.check:getText():find("ok") ~= nil)
-  T.eq(panel.elements.check:getForeground(), Theme.ok)
-end)
-
-T.it("lists this beacon and its peers, marking which one is us", function()
-  local panel = panelRig()
-  panel.update(model({}, { hostCount = 3, usable = false, problems = {}, hosts = {
-    { x = 0, y = 70, z = 0, label = "me", self_ = true },
-    { x = 200, y = 72, z = 0, label = "East" },
-    { x = 0, y = 68, z = 200, label = "South" },
-  } }))
-  T.isTrue(panel.elements.peers[1]:getText():find("this one") ~= nil,
-    "ours is marked: " .. panel.elements.peers[1]:getText())
-  T.isTrue(panel.elements.peers[2]:getText():find("East") ~= nil, "peers named with coordinates")
-  T.isTrue(panel.elements.peers[2]:getText():find("200") ~= nil)
-end)
-
-T.it("shows the count and grade, and the FIRST problem to fix", function()
-  local panel = panelRig()
-  panel.update(model({}, { hostCount = 4, usable = false, grade = "UNUSABLE",
-    problems = { "the beacons are effectively COPLANAR", "something else" }, hosts = {} }))
-  T.isTrue(panel.elements.grade:getText():find("4/4") ~= nil,
-    "count: " .. panel.elements.grade:getText())
-  T.isTrue(panel.elements.grade:getText():find("UNUSABLE") ~= nil, "and the grade")
-  T.eq(panel.elements.grade:getForeground(), Theme.warning, "flagged")
-  T.isTrue(panel.elements.problem:getText():find("COPLANAR") ~= nil,
-    "the first problem, not a wall of them: " .. panel.elements.problem:getText())
-end)
-
-T.it("the ENABLE toggle reflects and flips the config", function()
-  local panel, cfg, saves = panelRig()
-  panel.update(model())
-  T.eq(panel.elements.enable:getText(), "ON", "starts enabled")
-  click(panel.elements.enable)
-  T.isFalse(cfg.enabled, "flipped")
-  T.eq(saves.count, 1, "and saved, so moving a beacon survives a reboot")
-  panel.update(model())
-  T.eq(panel.elements.enable:getText(), "OFF", "and the label follows")
-end)
-
-T.it("CANCEL puts the fields back rather than keeping a half-typed value", function()
-  local panel, cfg = panelRig(51, 19, { position = { x = 5, y = 6, z = 7 } })
-  panel.show(panel.pages.edit)
-  panel.fields.x:setText("999")
-  for _, child in ipairs(panel.pages.edit:getChildren()) do
-    if child.getText and child:getText() == "CANCEL" then click(child) end
-  end
-  T.eq(cfg.position.x, 5, "config untouched")
-  T.eq(panel.fields.x:getText(), "5", "and the field reverted")
-  T.isTrue(panel.pages.home:getVisible(), "back on the home page")
-end)
-
-T.it("changing coordinates INVALIDATES the previous self-check verdict", function()
-  -- Leaving a stale "ok" showing after moving a beacon would be the most misleading thing on
-  -- the screen: the check that passed was for a different position.
-  local panel, cfg, _, _, _ = panelRig(51, 19, { position = { x = 1, y = 2, z = 3 } })
-  local host = Host.new(cfg, quietLog())
-  host.selfCheck = { state = "ok", error = 0.1 }
-  -- rebuild with that host so the panel holds it
-  local monitor = window.create(term.current(), 1, 1, 51, 19, false)
-  monitor.setTextScale = function() end
-  local frame = basalt.createFrame()
-  frame:setTerm(monitor)
-  local p2 = Panel.build(frame, { cfg = cfg, host = host, mesh = Mesh.new(cfg, quietLog()),
-    log = quietLog(), save = function() end })
-  p2.show(p2.pages.edit)
-  p2.fields.x:setText("50")
-  p2.fields.y:setText("60")
-  p2.fields.z:setText("70")
-  for _, child in ipairs(p2.pages.edit:getChildren()) do
-    if child.getText and child:getText() == "SAVE" then click(child) end
-  end
-  T.eq(host.selfCheck.state, "unchecked", "the stale verdict was cleared")
-end)
-
-T.it("fits a standard 51x19 terminal, and a pocket-sized one", function()
-  local wide = panelRig(51, 19)
-  wide.update(model())
-  local small = panelRig(26, 20)
-  small.update(model())          -- must not throw
-  T.notNil(small.elements.grade, "still builds")
+T.it("the header WARNS what a wrong number costs", function()
+  local header = table.concat(Console.positionHeader(), " ")
+  T.isTrue(header:find("F3") ~= nil, "tells you where to read them")
+  T.isTrue(header:find("poisons every fix") ~= nil, "and what a typo does: " .. header)
+  T.isTrue(header:find("self check") ~= nil, "and that only the self check notices")
 end)
 
 return true
