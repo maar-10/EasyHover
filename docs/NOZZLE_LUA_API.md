@@ -124,7 +124,24 @@ This predicts exactly what we see:
 | manual redstone works perfectly | that is a real transmitter pushing a real value |
 | discovery, `getType`, all getters normal | nothing is wrong with the peripheral |
 
-## 5. What we did about it, and what we cannot
+## 5. THE ANSWER: all four sides must have channels
+
+**Found on the craft, not in the source: every one of the four vector redstone links must have a
+frequency assigned.** With any side left blank, `setVector` is accepted and the nozzle does not
+hold it. Assign channels to west, east, down and up on each thruster and Lua vectoring works.
+
+This is the operational fix, and it corrects what section 4 originally reasoned toward. The
+mechanism there is right — the four `VectorRedstoneLinkBehaviour` receivers share the nozzle's
+signal fields with `setVectorCoordinates`, and `initialize()` puts them on a network whether or not
+a frequency was ever set. What was wrong was the conclusion drawn from it: this document previously
+suggested that stopping the receivers joining a network would be the cure. The opposite is true in
+practice. A configured link is what makes the side behave; a blank one is what breaks it.
+
+Worth being plain about how that went: the mechanism was derived from source and the fix was
+guessed from the mechanism. Only the second half was wrong, and only testing on the craft caught
+it.
+
+## 6. What we did about it, and what we cannot
 
 **Mitigation (ours).** Never treat *"I sent it"* as *"it holds it"*. Both the mixer
 (`flight/lib/io/thrusters.lua`) and the pre-flight sweep deduplicated writes against their own
@@ -136,13 +153,14 @@ on disagreement. The getters are free, so this costs nothing but the re-writes t
 **This is a mitigation, not a cure.** We re-assert once per control cycle; the receiver can undo it
 in between. Expect a nozzle that twitches or lags rather than one that holds.
 
-**The cure is mod-side.** A link behaviour with no frequency assigned should not join a network, or
-`setReceivedStrength` should not overwrite a value the block was given through another path. One
-line in `initialize()` decides it.
+**Still worth raising upstream.** A blank link silently overwriting a peripheral-set nozzle, with
+no error and no indication, is very hard to diagnose from in-game — every getter reads normally and
+discovery is unaffected. Either a blank behaviour should not join a network, or the failure should
+be visible. But it is a usability report now, not a blocker: configuring the channels works.
 
-### Worth testing on the build
+### Build requirement, for anyone wiring one of these
 
-Assign a real frequency pair to one thruster's four vector links and drive it from a transmitter
-you control. The network would then push *your* value instead of 0. If that thruster holds a
-computer-set deflection while the others do not, the diagnosis is confirmed from the other
-direction — and it may be a usable workaround for the whole craft.
+**Assign a channel to all four vector link slots on every vector thruster** — west, east, down and
+up. They do not need a transmitter driving them; they need to be configured. A thruster with even
+one blank side will accept `setVector` and not hold it, silently, with every getter and every bit
+of peripheral discovery behaving perfectly normally.

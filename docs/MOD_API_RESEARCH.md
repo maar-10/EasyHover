@@ -447,7 +447,8 @@ nothing else.
 
 ## ⚠️ A vector thruster has a SECOND writer, and it wins
 
-> Full write-up with verified line citations, for sharing outside this project:
+> **RESOLVED: all four vector link sides must have a channel assigned.** A blank side makes the
+> thruster accept `setVector` and not hold it. Full write-up with verified line citations:
 > **[NOZZLE_LUA_API.md](NOZZLE_LUA_API.md)**
 
 Every vector thruster carries four `VectorRedstoneLinkBehaviour` receivers (west/east/down/up).
