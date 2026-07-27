@@ -309,9 +309,34 @@ pilot to `CUT THE ENGINE` — with **no way to comply**, because the reading did
 engine at all. The engine was already off.
 
 **Only kN readouts are used.** `PN` is listed for every thruster too, but mixing units to gain a
-fallback is how an epsilon silently becomes a thousand times too large. If a thruster exposes
-neither kN readout, the throttle is used as a last resort and the message says `throttle` instead
-of `kN`, because guessing "not firing" is the unsafe direction.
+fallback is how an epsilon silently becomes a thousand times too large. There is **no `getPower`
+fallback at all** — falling back to it hands the interlock the flight computer's own command as
+though it were evidence, which is the whole bug.
+
+Verified in the source, not inferred:
+
+- `getCurrentThrustPN()` → `blockEntity.getCurrentThrust()` → `thrusterData.getThrust()`, which
+  `updateThrust` only sets nonzero when `isWorking() && currentPower > 0` **and fuel is actually
+  being consumed**. This is real output.
+- `getCurrentThrustKN()` is that divided by `PropulsionConfig.getThrustUnitsPerKnOrDefault()`.
+- `getDisplayedThrustPN()` → `getDisplayedThrustPnForTooltip()`. **A display figure. Never use it
+  to decide whether a nozzle is firing.**
+
+### ⚠️ Every thruster `@LuaFunction` is `mainThread = true` — getters included
+
+`getPower`, `getCurrentThrustPN/KN`, `getDisplayedThrust*`, `getObstruction`, `getFuelAmountMb`,
+`getFuelCapacityMb` — all of them. `flight/lib/io/thrusters.lua` used to claim "getters are NOT
+mainThread, so this is cheap"; that was wrong, and `readback()` runs over every thruster every
+control cycle. Each call waits on a server tick.
+
+### The engine master does not make the thrusters cold
+
+`ENGINE OFF` on the overhead panel means the **item funnel** is blocked by its relay. The **liquid
+fuel tank feeds the vector thrusters directly**, so with a full tank they are fuelled regardless.
+Combined with `Thrusters:apply` running every cycle whatever the engine state, a parked craft can
+sit there with the altitude loop holding ~20% throttle and the lift nozzles genuinely producing
+tens of kN. Any interlock phrased as "cut the engine" is therefore telling the pilot to operate a
+switch that does not control the thing being measured.
 
 ### The mock had the same confusion
 

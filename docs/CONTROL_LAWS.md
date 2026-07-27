@@ -287,21 +287,52 @@ Three layers, and the sweep itself commands no thrust at all — asserted by a t
 | Layer | What it stops |
 |---|---|
 | `engine.master` must be off | fuel reaching the thrusters at all |
-| no thruster may read **> 0.05 kN of actual thrust** at start | anything genuinely firing |
-| thrust re-checked each second, sweep aborts | thrust appearing mid-run |
+| refuse if **known airborne** and making thrust | silencing a craft holding itself up |
 | `allStop()` once the checks pass | the mixer's last throttle standing for 45 s |
+| thrust surviving a 2.5 s settle aborts the run | fuel reaching a nozzle from elsewhere |
 
 **Actual thrust, not the commanded throttle.** This interlock read `getPower()`, which is the
 read-back of `setPower` — so on a craft parked with the engine off it read the altitude loop's own
 ~20% lift command and told the pilot to cut an engine that was already off. `getPower` is a
 throttle; `getCurrentThrustKN` is physics. See [MOD_API_RESEARCH.md](MOD_API_RESEARCH.md).
 
-**The order matters.** Thrust is checked *before* `allStop()`, never after: silently cutting thrust
-on a craft that is producing it would be the one genuinely dangerous thing this screen could do, so
-a craft making thrust is **refused** rather than quietly silenced. Past that line nothing is
-firing, and since the mixer does not run again until the sweep ends, `allStop()` stops the throttle
-it last commanded from standing for the whole 45 seconds — ready to become real thrust the moment
-someone opens the fuel valve.
+### A commanded throttle is ours to retract
+
+Refusing to run because a thruster reads thrust was **unsatisfiable in the only situation that
+matters.** `Thrusters:apply` runs every control cycle whatever the engine master says, so the
+altitude loop holds the lift thrusters at ~20% on a parked craft — and the fuel **tank** feeds those
+nozzles directly, so the engine master being off does not make them cold. Measured in the harness on
+the pilot's own configuration: engine OFF, throttle 0.2, **24 kN of real thrust**. The reading was
+true; the instruction was useless. There was no action that would clear it.
+
+So the sweep **zeroes the throttles itself** and only then judges:
+
+1. refuse if the craft is **known airborne** *and* making thrust (see below)
+2. refuse if the engine master is on
+3. `allStop()` — retract our own commands
+4. let them fade for `SETTLE_MS` (2.5 s), judging nothing
+5. after that, check each second; thrust that **outlived** the settle is not ours, so abort with
+   `STILL FUELLED` — naming fuel, not an engine switch that does not control the tank
+
+### Never gate on the flight mode
+
+The airborne guard must rest on **evidence**. `groundContact == false` is a laser saying so; `nil`
+is the absence of a sensor, which is not evidence.
+
+The mode is not a usable proxy, and got this wrong in both directions at once:
+
+- **Too lax:** a first attempt listed `FLIGHT/HOVER/REVERSE` and silently omitted `BRAKE`,
+  `DAMPED` and `FAILSAFE` — all airborne.
+- **Too strict:** with no ground sensor *and* no altitude sensor, the mode machine settles on
+  **`BRAKE`**. Every "is it airborne" list counts that as flying, so the sweep became unavailable on
+  precisely the half-configured craft being wired up for the first time — and unsatisfiably so: no
+  laser means the mode never reads `GROUND`, and the thrust is this computer's own command.
+
+The pilot standing next to the craft, reading `GROUND ONLY` on the screen, is a better authority
+than a guess. `App:knownAirborne()` refuses only on positive evidence.
+
+The same defect was in the **identify sweep**, gated on `mode == "GROUND"`; it uses the same
+predicate now.
 
 ## A refusal must not invert when it is truncated
 

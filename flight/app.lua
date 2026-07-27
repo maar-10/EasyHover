@@ -161,6 +161,27 @@ end
 
 -- ---------------------------------------------------------------- one cycle
 
+--- Is the craft POSITIVELY KNOWN to be off the ground?
+---
+--- Only a down-facing laser can answer that, and it is one of the LAST things a pilot assigns --
+--- so `groundContact` is nil on exactly the craft that needs the pre-flight screens most.
+---
+--- THE FLIGHT MODE IS NOT A SUBSTITUTE. With no ground sensor and no altitude sensor the mode
+--- machine settles on BRAKE, which every "is it airborne" list counts as flying. Gating the sweep
+--- on that produced a refusal the pilot could not satisfy from either end: they cannot make the
+--- mode GROUND without fitting the laser, and they cannot stop the thrust because this computer is
+--- the thing commanding it. A previous version of this gate also enumerated FLIGHT/HOVER/REVERSE
+--- and silently omitted BRAKE, DAMPED and FAILSAFE -- so the list was both too strict and too
+--- lax, which is what a proxy for a measurement usually is.
+---
+--- So refuse only on POSITIVE EVIDENCE: `groundContact == false` is a sensor saying we are up.
+--- nil is not evidence, it is the absence of a sensor -- and the pilot, who is standing next to
+--- the craft reading GROUND ONLY on the screen, is a better authority than a guess.
+function App:knownAirborne()
+  local measured = self.state:get("measured") or {}
+  return measured.groundContact == false
+end
+
 function App:devices()
   return {
     controller = self.per.inputs.controller,
@@ -732,7 +753,8 @@ function App:handleCommand(cmd)
       return true, { released = self.axisMap:release("by the pilot") }
     end
     -- Same contract as the self test: it moves the same nozzles, so it wants the same silence.
-    local allowed = not self.engine.master
+    local allowed = (not self.engine.master)
+      and not (self:knownAirborne() and self.selfTest:anyPowered())
     -- One latch at a time, and never while the sweep owns the same nozzles.
     if self.selfTest:isRunning() then
       return false, { error = "the self test is running" }
@@ -747,23 +769,25 @@ function App:handleCommand(cmd)
       local aborted = self.selfTest:abort("aborted by the pilot")
       return true, { running = false, aborted = aborted }
     end
-    -- Decided HERE rather than by the sender: a UI is not a trusted peer.
+    -- Decided HERE rather than by the sender: a UI is not a trusted peer. Two conditions, and
+    -- they guard different things:
     --
-    -- THE ENGINE MASTER MUST BE OFF. This was `GROUND or engine off`, which allowed the test on a
-    -- craft parked with the engine RUNNING as long as no thruster happened to read thrust at the
-    -- instant the button was pressed. The premise of the test is that nothing fires: it checks
-    -- that the slot you assigned is the nozzle that moves, and thrust would move the craft. A
-    -- running engine means fuel is reaching the thrusters, so thrust can appear a tick later --
-    -- the 1 Hz re-check would catch that only after up to a second of sweeping under power.
-    -- Refusing outright removes the race rather than policing it.
+    --   airborne  a down-facing laser positively reporting no ground contact. Combined with a
+    --             real thrust reading by SelfTest:start, because it is being HELD UP BY THRUST
+    --             that makes silencing the throttles unsafe. See App:knownAirborne for why the
+    --             flight mode is not used here.
+    --   engineOn  the engine master feeds the thruster supply, so leaving it on invites thrust to
+    --             appear mid-sweep.
     --
-    -- Gating on the engine rather than on GROUND also keeps the test available to the
-    -- half-configured craft that most needs it: GROUND depends on a down-facing laser being
-    -- assigned, which is one of the things you are still setting up.
-    local allowed = not self.engine.master
+    -- Engine master OFF does NOT mean the thrusters are cold: the fuel TANK feeds the liquid
+    -- thrusters directly. That is why the sweep zeroes the throttles itself rather than refusing
+    -- when it reads thrust -- see SelfTest:start.
+    --
     -- errorShort is the 15-column wording. The craft picks both, because a panel that shortens a
     -- refusal by truncation can invert it: "cut the engine first" became "he engine first".
-    local ok, err, short = self.selfTest:start({ allowed = allowed, now = now })
+    local ok, err, short = self.selfTest:start({
+      airborne = self:knownAirborne(),
+      engineOn = self.engine.master and true or false, now = now })
     return ok, { error = err, errorShort = short }
 
   elseif cmd.cmd == "setAxes" then
@@ -825,8 +849,11 @@ function App:handleCommand(cmd)
     return true, { altitudeTarget = self.modes.altitudeTarget }
 
   elseif cmd.cmd == "identify" then
-    -- Gated on actually being on the ground, not on the sender's say-so.
-    local allowed = (self.state.mode == "GROUND")
+    -- Gated on the craft, not on the sender's say-so -- but on EVIDENCE of being airborne rather
+    -- than on the mode reading GROUND. Same defect as the self test had: with no down-facing laser
+    -- the mode machine settles on BRAKE, so `mode == "GROUND"` made the identify sweep unavailable
+    -- on precisely the craft being wired up for the first time. See App:knownAirborne.
+    local allowed = not (self:knownAirborne() and self.selfTest:anyPowered())
     local ok, err = self.thrusters:startIdentify(cmd.id, { allowed = allowed })
     return ok, { error = err }
 

@@ -66,32 +66,30 @@ local THRUST_EPSILON_KN = 0.05
 
 --- Is any thruster ACTUALLY PRODUCING THRUST? Physics, not the commanded throttle.
 ---
---- THIS READ getPower(), WHICH IS THE READ-BACK OF setPower -- the throttle the flight computer
---- last asked for. It says nothing about whether the thruster is doing anything: a thruster with
---- no fuel reaching it holds its throttle and produces nothing. And `Thrusters:apply` runs every
---- control cycle regardless of the engine master, so on a craft parked with the engine OFF the
---- altitude loop still asks the lift thrusters for about 20%. The interlock read that back and
---- told the pilot to cut an engine that was already off -- with no way to comply, because the
---- reading came from the flight computer's own command, not from the engine.
+--- Used only AFTER the sweep has zeroed the throttles and let them fade, so anything still
+--- reading here is being fed by something other than this computer.
 ---
---- getCurrentThrustKN and getDisplayedThrustKN are the physical output and are documented for
---- every thruster type (docs/MOD_API_RESEARCH.md). Only kN readouts are used: PN is listed too
---- but mixing units to save a fallback is how an epsilon silently becomes a thousand times too
---- large. If a thruster exposes neither, the throttle is used as a LAST RESORT and the message
---- says so, because guessing "not firing" would be the unsafe direction.
+--- getCurrentThrustKN is the physical output: in the Propulsion source it is getCurrentThrustPN
+--- scaled, and getCurrentThrustPN returns thrusterData.getThrust(), which updateThrust only ever
+--- sets nonzero when `isWorking() && currentPower > 0` with fuel actually being consumed.
+---
+--- getDisplayedThrust* is NOT usable here: it returns getDisplayedThrustPnForTooltip(), a display
+--- figure, not what the nozzle is doing now.
+---
+--- Only kN is read. PN exists for every thruster too, but mixing units to gain a fallback is how
+--- an epsilon silently becomes a thousand times too large.
+---
+--- AND NO getPower FALLBACK. getPower is the read-back of our own setPower, so falling back to it
+--- hands the interlock the flight computer's own command as though it were evidence -- the exact
+--- false positive this function exists to avoid. A thruster exposing no thrust readout is covered
+--- by the engine gate and by allStop, both of which run first.
 function SelfTest:anyPowered()
   for _, entry in ipairs(self.per:thrusterList()) do
-    local dev = entry.dev
-    local reader = dev.getCurrentThrustKN or dev.getDisplayedThrustKN
+    local reader = entry.dev.getCurrentThrustKN
     if type(reader) == "function" then
       local ok, kn = pcall(reader)
       if ok and type(kn) == "number" and kn > THRUST_EPSILON_KN then
         return true, entry.id, kn, "kN"
-      end
-    elseif type(dev.getPower) == "function" then
-      local ok, v = pcall(dev.getPower)
-      if ok and type(v) == "number" and v > 0.001 then
-        return true, entry.id, v, "throttle"
       end
     end
   end
@@ -112,33 +110,52 @@ end
 --- opposite of the interlock's meaning. An interlock whose message inverts under truncation is
 --- worse than one with no message, so the wording is now the craft's responsibility, at both
 --- lengths, rather than something the UI improvises with a substring.
+--- How long thrust is given to decay after the throttles go to zero, before a reading counts
+--- against the sweep. A liquid thruster has a fade envelope (AbstractThrusterBlockEntity
+--- getEnvelopePower/fadePower), so it does not stop the tick you stop asking.
+local SETTLE_MS = 2500
+
 function SelfTest:start(opts)
   opts = opts or {}
   if self.run then return false, "a self test is already running", "ALREADY RUNNING" end
-  if not opts.allowed then
-    return false, "on the ground only, with the engine off", "ON GROUND ONLY"
+
+  -- Wording lives HERE rather than in app.lua so both lengths of every refusal stay in one file.
+  --
+  -- WHAT MAKES SILENCING THE THROTTLES UNSAFE is the craft being held up by thrust -- so that is
+  -- what is tested, rather than a list of mode names. Mode alone is not enough in either
+  -- direction: the airborne set is easy to get wrong (BRAKE, DAMPED and FAILSAFE are airborne
+  -- too, and an earlier version of this listed only FLIGHT/HOVER/REVERSE), and requiring GROUND
+  -- denies the test to a craft whose down-facing laser is not assigned yet -- which is exactly
+  -- the half-configured craft that needs it. A craft producing no thrust cannot be holding itself
+  -- up, whatever any sensor believes.
+  if opts.airborne and self:anyPowered() then
+    return false, "not while the craft is flying under thrust", "IN FLIGHT"
   end
-  local powered, id, value, unit = self:anyPowered()
-  if powered then
-    return false,
-      ("%s is making thrust (%.2f %s) -- cut the engine"):format(tostring(id), value,
-        tostring(unit)),
-      "CUT THE ENGINE"
+  if opts.engineOn then
+    return false, "engine master must be off first", "ENGINE IS ON"
   end
 
-  -- NOW take the throttles to zero. After the check, never before: cutting thrust on a craft
-  -- that is producing it would be the one genuinely dangerous thing this screen could do, so a
-  -- craft making thrust is refused rather than quietly silenced. Past this line nothing is
-  -- firing, and the mixer does not run again until the sweep ends -- so without this the
-  -- throttle the mixer last commanded would stand for the whole 45 seconds, ready to become
-  -- real thrust the moment someone opened the fuel valve.
+  -- ---- take OUR OWN throttles to zero, and do it BEFORE judging anything
+  --
+  -- This used to refuse when any thruster read thrust, which was unsatisfiable in the one
+  -- situation that matters. `Thrusters:apply` runs every control cycle whatever the engine master
+  -- says, so the altitude loop holds the lift thrusters at ~20% on a parked craft -- and the fuel
+  -- TANK feeds those nozzles directly, so the engine master being off does not make them cold.
+  -- The pilot was told to "cut the engine" about thrust the flight computer itself had commanded,
+  -- from a source the engine switch does not control. There was no action that would clear it.
+  --
+  -- A commanded throttle is ours to retract, so retract it. What we may NOT do is retract it on a
+  -- craft that is holding itself up -- which is why `flying` is refused above, before this line.
   self.thrusters:allStop()
 
+  local now = opts.now or os.epoch("utc")
   self.run = {
-    startedAt = opts.now or os.epoch("utc"),
+    startedAt = now,
     step = 1,
     findings = {},
-    lastPowerCheck = opts.now or os.epoch("utc"),
+    lastPowerCheck = now,
+    -- Nothing is judged until the fade envelope has had time to reach zero.
+    settleUntil = now + SETTLE_MS,
   }
   self.log:info("self test started")
   self:publish()
@@ -201,14 +218,16 @@ function SelfTest:tick(now)
     return false
   end
 
-  -- Re-check power about once a second. If thrust has appeared, something is feeding the
-  -- thrusters and the craft may be about to move: stop, centre, and say so.
-  if now - self.run.lastPowerCheck >= 1000 then
+  -- Re-check thrust about once a second, but not until the throttles we zeroed at the start have
+  -- had time to fade. Thrust surviving the settle window is not ours: something is feeding those
+  -- nozzles, the craft may be about to move, so stop, centre, and say what is actually wrong --
+  -- which is fuel reaching a thruster, not an engine switch.
+  if now >= (self.run.settleUntil or 0) and now - self.run.lastPowerCheck >= 1000 then
     self.run.lastPowerCheck = now
-    local powered, id = self:anyPowered()
+    local powered, id, value, unit = self:anyPowered()
     if powered then
-      self:abort(("aborted: %s started making thrust"):format(tostring(id)),
-        "THRUST APPEARED")
+      self:abort(("aborted: %s is still making thrust (%.2f %s) -- fuel is reaching it"):format(
+        tostring(id), value or 0, tostring(unit)), "STILL FUELLED")
       return false
     end
   end

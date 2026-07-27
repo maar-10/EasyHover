@@ -204,7 +204,12 @@ end
 
 -- ---------------------------------------------------------------- readback
 
---- Actual hardware state. Getters are NOT mainThread, so this is cheap.
+--- Actual hardware state.
+---
+--- NOT CHEAP. This said "getters are NOT mainThread, so this is cheap" and that is wrong: every
+--- @LuaFunction on ThrusterPeripheral is declared `mainThread = true`, getters included
+--- (getPower, getCurrentThrustPN/KN, getObstruction, the fuel readouts -- all of them), so each
+--- call waits on a server tick. Verified against the Propulsion source, not inferred.
 function Thrusters:readback()
   local out = {}
   for _, entry in ipairs(self.per:thrusterList()) do

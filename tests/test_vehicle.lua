@@ -798,22 +798,67 @@ end
 
 T.it("REFUSES to run on a craft that is flying under power", function()
   local app, path = appRig(fullCraft())
-  app.state.mode = "HOVER"
+  app.state:set("measured", { groundContact = false })
   app.engine.master = true
+  app.per.thrusters["lift_fl"].dev.getCurrentThrustKN = function() return 40.0 end
   local ok, detail = app:handleCommand({ cmd = "selfTest", action = "start" })
   T.isFalse(ok, "refused in the air with the engine running")
-  T.isTrue(tostring((detail or {}).error):find("ground") ~= nil,
+  T.isTrue(tostring((detail or {}).error):find("flying") ~= nil,
     "and says why: " .. tostring((detail or {}).error))
+  fs.delete(path)
+end)
+
+--- THE TRAP THIS GUARD FELL INTO TWICE. What makes silencing the throttles unsafe is the craft
+--- being HELD UP BY THRUST, and the flight MODE is not a usable proxy for that: with no ground
+--- sensor and no altitude sensor the mode machine settles on BRAKE. Gating on the mode therefore
+--- produced a refusal the pilot could not satisfy from either end -- no laser means the mode never
+--- reads GROUND, and the thrust is this computer's own command.
+T.it("a craft with NO ground sensor is not assumed airborne", function()
+  local app, path = appRig(fullCraft())
+  app.engine.master = false
+  for _ = 1, 20 do app:cycle(0.05) end
+  -- exactly the state a craft being wired up for the first time sits in
+  T.eq((app.state:get("measured") or {}).groundContact, nil, "no laser, so no ground reading")
+  T.isFalse(app:knownAirborne(), "absence of a sensor is not evidence of being airborne")
+  T.isTrue((app:handleCommand({ cmd = "selfTest", action = "start" })),
+    "and the sweep runs, whatever the mode machine settled on (" .. tostring(app.state.mode) .. ")")
+  fs.delete(path)
+end)
+
+T.it("a laser POSITIVELY reporting no ground contact does block it, with thrust", function()
+  local app, path = appRig(fullCraft())
+  app.engine.master = false
+  app.state:set("measured", { groundContact = false })
+  app.per.thrusters["lift_fl"].dev.getCurrentThrustKN = function() return 40.0 end
+  local ok, detail = app:handleCommand({ cmd = "selfTest", action = "start" })
+  T.isFalse(ok, "refused on real evidence")
+  T.isTrue(tostring((detail or {}).error):find("flying") ~= nil,
+    "and says why: " .. tostring((detail or {}).error))
+  fs.delete(path)
+end)
+
+T.it("airborne with NO thrust is allowed -- nothing can be held up by nothing", function()
+  local app, path = appRig(fullCraft())
+  app.engine.master = false
+  app.state:set("measured", { groundContact = false })
+  for _, entry in ipairs(app.per:thrusterList()) do
+    if entry.dev.__setFuelled then entry.dev.__setFuelled(false) end
+  end
+  local ok, detail = app:handleCommand({ cmd = "selfTest", action = "start" })
+  T.isTrue(ok, "permitted: " .. tostring((detail or {}).error))
   fs.delete(path)
 end)
 
 T.it("but ALLOWS it with the engine off, whatever the ground sensor believes", function()
   -- GROUND depends on a down-facing laser being assigned. Requiring it would deny the
   -- pre-flight test to exactly the half-configured craft that most needs it -- and a craft
-  -- whose thrusters have no fuel is not holding itself up regardless.
+  -- whose thrusters produce nothing is not holding itself up regardless.
   local app, path = appRig(fullCraft())
-  app.state.mode = "HOVER"
+  app.state:set("measured", { groundContact = false })
   app.engine.master = false
+  for _, entry in ipairs(app.per:thrusterList()) do
+    if entry.dev.__setFuelled then entry.dev.__setFuelled(false) end
+  end
   T.isTrue((app:handleCommand({ cmd = "selfTest", action = "start" })), "permitted")
   fs.delete(path)
 end)
@@ -835,16 +880,43 @@ T.it("refuses on the ground while the engine is RUNNING, even with nothing firin
   fs.delete(path)
 end)
 
-T.it("refuses while a thruster is producing thrust", function()
+--- Thrust on a PARKED craft does not refuse the sweep: the throttle behind it is almost always
+--- this computer's own, and the sweep retracts it with allStop. Thrust that SURVIVES that is being
+--- fed by something else, and only then does the run abort -- with a message naming fuel rather
+--- than an engine switch that does not control the tank.
+T.it("aborts if thrust OUTLIVES the throttles it zeroed, and blames fuel not the engine", function()
   local app, path = appRig(fullCraft())
   app.state.mode = "GROUND"
-  -- ACTUAL thrust, which is what the interlock is about. Stubbing getPower here used to be
-  -- enough, and that was the bug: getPower is the throttle the flight computer last asked for.
+  app.engine.master = false
+  T.isTrue((app:handleCommand({ cmd = "selfTest", action = "start" })), "started")
+
+  -- something keeps feeding it, whatever we commanded
   app.per.thrusters["lift_fl"].dev.getCurrentThrustKN = function() return 12.0 end
-  local ok, detail = app:handleCommand({ cmd = "selfTest", action = "start" })
-  T.isFalse(ok, "refused")
-  T.isTrue(tostring((detail or {}).error):find("thrust") ~= nil,
-    "and says why: " .. tostring((detail or {}).error))
+
+  local started = app.selfTest.run.startedAt
+  -- 1500 ms, NOT 500: the thrust check only runs once a second, so a tick at 500 ms proves
+  -- nothing about the settle window -- it would be skipped either way. This has to land after the
+  -- 1 Hz gate but before the settle deadline, or the test passes with the settle deleted.
+  app.selfTest:tick(started + 1500)
+  T.isTrue(app.selfTest:isRunning(), "not judged during the settle window -- thrust has to fade")
+
+  app.selfTest:tick(started + 4000)
+  T.isFalse(app.selfTest:isRunning(), "aborted once the reading outlived the settle")
+  local st = app.state:get("selfTest")
+  T.isTrue(tostring(st.aborted):find("fuel") ~= nil, "blames fuel: " .. tostring(st.aborted))
+  T.eq(st.abortedShort, "STILL FUELLED", "and has a 15-column form")
+  fs.delete(path)
+end)
+
+T.it("does NOT abort for thrust that fades once the throttles are zeroed", function()
+  local app, path = appRig(fullCraft())
+  app.state.mode = "GROUND"
+  app.engine.master = false
+  for _ = 1, 10 do app:cycle(0.05) end       -- the mixer commands lift, as it always does
+  T.isTrue((app:handleCommand({ cmd = "selfTest", action = "start" })), "started")
+  local started = app.selfTest.run.startedAt
+  for at = 0, 8000, 250 do app.selfTest:tick(started + at) end
+  T.isTrue(app.selfTest:isRunning(), "still sweeping: allStop really did silence them")
   fs.delete(path)
 end)
 
@@ -911,12 +983,12 @@ local NARROW = 15                       -- one monitor block at text scale 0.5
 
 T.it("every self-test refusal carries a form that fits the narrowest monitor", function()
   local cases = {
-    { name = "airborne under power", setup = function(app)
-        app.state.mode = "HOVER"; app.engine.master = true
+    { name = "airborne under thrust", setup = function(app)
+        app.state:set("measured", { groundContact = false })
+        app.per.thrusters["lift_fl"].dev.getCurrentThrustKN = function() return 40.0 end
       end },
-    { name = "a thruster making thrust", setup = function(app)
-        app.state.mode = "GROUND"
-        app.per.thrusters["lift_fl"].dev.getCurrentThrustKN = function() return 9.0 end
+    { name = "engine master on", setup = function(app)
+        app.state.mode = "GROUND"; app.engine.master = true
       end },
   }
   for _, case in ipairs(cases) do
