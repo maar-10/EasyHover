@@ -467,15 +467,15 @@
         },
         {
           ["dst"] = "ui_main/app.lua",
-          ["size"] = 9183,
+          ["size"] = 10057,
           ["src"] = "ui_main/app.lua",
-          ["sum"] = "1c225868",
+          ["sum"] = "cc9e967f",
         },
         {
           ["dst"] = "ui_main/lib/config.lua",
-          ["size"] = 6925,
+          ["size"] = 9221,
           ["src"] = "ui_main/lib/config.lua",
-          ["sum"] = "471a5a18",
+          ["sum"] = "d78dd6d2",
         },
         {
           ["dst"] = "ui_main/lib/link.lua",
@@ -503,9 +503,9 @@
         },
         {
           ["dst"] = "ui_main/ui/nav.lua",
-          ["size"] = 17732,
+          ["size"] = 18684,
           ["src"] = "ui_main/ui/nav.lua",
-          ["sum"] = "9b3a8513",
+          ["sum"] = "3e51e606",
         },
         {
           ["dst"] = "ui_main/ui/overhead.lua",
@@ -521,9 +521,9 @@
         },
         {
           ["dst"] = "ui_main/ui/terminal.lua",
-          ["size"] = 4837,
+          ["size"] = 5373,
           ["src"] = "ui_main/ui/terminal.lua",
-          ["sum"] = "628e710d",
+          ["sum"] = "d9d78715",
         },
         {
           ["dst"] = "ui_main/ui/theme.lua",
@@ -570,5 +570,5 @@
     ["size"] = 36872,
     ["sum"] = "305c58ce",
   },
-  ["version"] = "43e5fb6c",
+  ["version"] = "b34b161c",
 }

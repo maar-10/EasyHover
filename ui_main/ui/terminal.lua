@@ -14,9 +14,13 @@ local UiConfig = require("lib.config")
 
 local Terminal = {}
 
---- opts = { cfg, monitors, log, savePanels }
+--- opts = { cfg, monitors, log, savePanels, panelNames }
 function Terminal.build(frame, opts)
   local cfg, monitors = opts.cfg, opts.monitors
+  -- Only panels that HAVE a builder, so cycling can never park a monitor on a panel nothing
+  -- draws. It used to walk Config.PANEL_ORDER, which meant two of the six stops (pfd and
+  -- autopilot) were guaranteed black screens.
+  local order = opts.panelNames or UiConfig.PANEL_ORDER
   local width, height = frame:getWidth(), frame:getHeight()
   frame:setBackground(Theme.bg)
 
@@ -43,14 +47,17 @@ function Terminal.build(frame, opts)
     entry.button = Theme.button(frame, labelWidth + 2, listStart + i - 1,
       buttonWidth, "", function()
         if entry.name == nil then return end
-        -- none -> overhead -> config -> pfd -> autopilot -> nav -> none
+        -- none -> overhead -> config -> nav -> none, skipping any panel with no builder
         local current = UiConfig.panelFor(cfg, entry.name)
-        local order = UiConfig.PANEL_ORDER
         local nextPanel = order[1]
         if current then
+          local found = false
           for j, panel in ipairs(order) do
-            if panel == current then nextPanel = order[j + 1]; break end   -- nil = unassign
+            if panel == current then nextPanel = order[j + 1]; found = true; break end
           end
+          -- Assigned to a panel this release does not implement (an old config, or one written
+          -- by a newer release). Cycle forward to the first real one rather than sticking.
+          if not found then nextPanel = order[1] end
         end
         if nextPanel == nil then
           UiConfig.unassign(cfg, entry.name)

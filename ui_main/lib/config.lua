@@ -27,10 +27,22 @@ end
 
 function Config.defaults()
   return {
-    version = 1,
+    --- 1 -> 2 re-enables panels that an old release saved as `enabled = false`. See migrate.
+    version = 2,
 
     panelTemplate = panelTemplate(),
 
+    --- EVERY PANEL DEFAULTS TO enabled = true, INCLUDING THE ONES NOT WRITTEN YET.
+    ---
+    --- `enabled` used to carry "is this panel implemented", and pfd/autopilot/nav were shipped
+    --- false. That is a fact about the CODE, and storing it in the operator's config file made
+    --- it impossible to change: config is extend-never-replace, so when nav went live the new
+    --- `enabled = true` default lost to the `false` already saved on the computer. The panel was
+    --- assignable, the monitor was blanked by the detach pass, and no frame was ever built --
+    --- a permanently black screen with nothing in the log. See Config.migrate.
+    ---
+    --- Whether a panel EXISTS is now decided by App's builder table alone (app.lua
+    --- PANEL_BUILDERS), which cannot go stale because it is the same table that builds them.
     panels = {
       -- Above the driver's seat, facing down, 1 wide x 2 high. Engine start/stop, both fuel
       -- gauges, and their configuration in a submenu. MIRRORED to one screen either side.
@@ -40,11 +52,12 @@ function Config.defaults()
       -- in-flight values that are worth having on screen the whole time.
       config = { monitors = {}, textScale = 0.5, enabled = true },
       -- The map and waypoints come later, but the panel is LIVE now: its border carries the
-      -- two pre-flight screens (FCS TEST and SELF TEST), which are needed before a first hover.
+      -- three pre-flight screens (FCS TEST, SELF TEST, AXIS MAP), needed before a first hover.
       nav = { monitors = {}, textScale = 0.5, enabled = true },
-      -- Reserved: built in later phases, declared now so assignments can be made early.
-      pfd = { monitors = {}, textScale = 0.5, enabled = false },
-      autopilot = { monitors = {}, textScale = 0.5, enabled = false },
+      -- Declared so an assignment can be recorded early. Nothing builds them yet, so nothing
+      -- can be assigned to them either -- the terminal only offers panels with a builder.
+      pfd = { monitors = {}, textScale = 0.5, enabled = true },
+      autopilot = { monitors = {}, textScale = 0.5, enabled = true },
     },
 
     comms = {
@@ -63,13 +76,46 @@ function Config.defaults()
   }
 end
 
+--- Repair a config written by an older release.
+---
+--- Extend-never-replace is the right rule and stays: a value the operator set must survive an
+--- update. `panels.*.enabled` was never such a value -- no screen has ever been able to set it,
+--- so a stored `false` cannot represent a choice anybody made. It can only be a leftover of the
+--- release that shipped it, which means overwriting it destroys nothing. That is exactly what
+--- makes this migration safe, and it is the test to apply before adding another one.
+---
+--- Returns cfg, changed.
+function Config.migrate(cfg)
+  local changed = false
+  local from = tonumber(cfg.version) or 1
+
+  if from < 2 then
+    for _, name in ipairs(PANEL_ORDER) do
+      local panel = cfg.panels and cfg.panels[name]
+      if type(panel) == "table" and panel.enabled == false then
+        panel.enabled = true
+        changed = true
+      end
+    end
+  end
+
+  if changed or from < 2 then
+    cfg.version = 2
+    changed = true
+  end
+  return cfg, changed
+end
+
 function Config.withDefaults(loaded)
   local cfg = Util.deepMerge(Config.defaults(), loaded or {})
   local template = cfg.panelTemplate or panelTemplate()
   for _, name in ipairs(PANEL_ORDER) do
     cfg.panels[name] = Util.deepMerge(template, cfg.panels[name] or {})
   end
-  return cfg
+  -- The version in the FILE decides, so this has to run on the merged table using the loaded
+  -- version -- deepMerge has already replaced it with the default otherwise.
+  if loaded and loaded.version ~= nil then cfg.version = loaded.version end
+  return (Config.migrate(cfg))
 end
 
 --- Structural validation. Returns ok, errors, warnings.

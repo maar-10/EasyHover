@@ -425,3 +425,58 @@ which is fast and enough for most assertions. `tap()` dispatches **`monitor_touc
 — the event CC actually delivers — so `BaseFrame`'s peripheral-name routing and its
 `mouse_click(1, x, y)` translation are under test too. The double-click bug above was only
 reachable through `tap()`.
+
+---
+
+## Never store a fact about the code in the operator's config
+
+`panels.*.enabled` carried "is this panel implemented yet", and the first ui_main release shipped
+`nav = { enabled = false }`. Every computer that ran it **saved that into its config file**.
+
+When the nav panel went live, the new `enabled = true` default lost to the `false` already on
+disk — because config here is extend-never-replace, which is correct and is not the bug. The
+result was the worst kind of failure:
+
+- the panel could still be assigned to a monitor, so the assignment screen said `nav`
+- the detach pass **blanked** that monitor
+- `Monitors:sync` skipped the panel, so no frame was ever built
+- nothing was logged, because nothing had gone wrong from the code's point of view
+
+A permanently black screen, indistinguishable from a broken monitor, while every other panel
+worked. It cannot be fixed by editing a default — that is the whole point.
+
+**The rule:** a config file holds what the *operator* chose. Whether a panel exists is a fact
+about the release, so it lives in the release. `app.lua`'s `PANEL_BUILDERS` is now the single
+source of truth: it builds the frames *and* supplies the terminal's cycle list, so the two cannot
+drift.
+
+That fixed a second black-screen path in passing. The terminal cycled through all of
+`Config.PANEL_ORDER`, so two of its six stops — `pfd` and `autopilot` — were panels nothing
+builds. Tapping onto one gave a blank monitor with no explanation. It now offers only panels with
+a builder, and a monitor found parked on one without one cycles forward rather than sticking.
+
+### When a migration is safe
+
+`Config.migrate` overwrites `enabled`, which sounds like it violates extend-never-replace. It
+does not, and the reason is the test to apply before writing another one:
+
+> **No screen has ever been able to set `enabled`.** A stored `false` therefore cannot represent
+> a choice anybody made — it can only be a leftover from the release that shipped it. There is no
+> operator intent to preserve, so there is none to destroy.
+
+The monitor assignments of a re-enabled panel are kept: assigning a screen to a panel before it
+went live *is* a real choice. `withDefaults` reads the version from the **loaded file**, not the
+merged table — `deepMerge` has already replaced it with the current default by then, which would
+make the migration a no-op on exactly the configs that need it.
+
+No `manifest.schema` bump: the layout is unchanged and `Config.load` migrates at every boot, so
+an affected computer heals itself the moment it runs the new code.
+
+## Fit the labels, or stack them
+
+The nav panel's three pre-flight buttons were laid out as three equal thirds of the width. On a
+15-column cockpit monitor that reads `FCS T SELFT AXI`, with the third button hanging past the
+right edge. The widest label is `FCS TEST` at 8, so one row needs `3*8 + 2 = 26` columns; below
+that they stack one per row up the bottom border, and the reserved centre shrinks to match. The
+test asserts full labels and `x + width - 1 <= width` at six widths, because "it fits on my
+screen" is not a property of the screen the pilot has.

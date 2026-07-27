@@ -18,6 +18,7 @@ local ConfigPanel = require("ui.config_panel")
 local Slots = require("ui.slots")
 local Terminal = require("ui.terminal")
 local Nav = require("ui.nav")
+local App = require("app")
 local Theme = require("ui.theme")
 local Log = require("shared.log")
 local basalt = require("basalt")
@@ -134,9 +135,55 @@ T.it("defaults declare every panel, including the reserved ones", function()
     T.notNil(cfg.panels[name], name .. " declared")
     T.eq(type(cfg.panels[name].monitors), "table", name .. " has a monitor list")
   end
-  T.isTrue(cfg.panels.overhead.enabled, "overhead is live")
-  T.isTrue(cfg.panels.nav.enabled, "nav is live -- its border carries the pre-flight tests")
-  T.isFalse(cfg.panels.pfd.enabled, "pfd is reserved for a later phase")
+  -- Every panel is enabled, including the unwritten ones. Whether a panel EXISTS is decided by
+  -- app.lua's builder table, not by a flag in the operator's config file -- see Config.migrate.
+  for _, name in ipairs(UiConfig.PANEL_ORDER) do
+    T.isTrue(cfg.panels[name].enabled, name .. " is enabled; the code decides what is built")
+  end
+end)
+
+--- THE BLACK-SCREEN BUG, exactly as it reached the craft.
+---
+--- The first ui_main release shipped `nav = { enabled = false }`, so every computer that ran it
+--- saved that into its config. When the nav panel went live the new `enabled = true` default
+--- lost to the saved `false` -- because config is extend-never-replace, which is right. The
+--- panel could still be assigned, the detach pass blanked the monitor, and no frame was ever
+--- built: a permanently black screen, no error, every other panel fine.
+T.it("a config saved when nav was reserved gets nav back", function()
+  local onDisk = {
+    version = 1,
+    panels = {
+      overhead = { monitors = { "monitor_0" }, textScale = 0.5, enabled = true },
+      config = { monitors = { "monitor_2" }, textScale = 0.5, enabled = true },
+      nav = { monitors = { "monitor_1" }, textScale = 0.5, enabled = false },
+      pfd = { monitors = {}, textScale = 0.5, enabled = false },
+      autopilot = { monitors = {}, textScale = 0.5, enabled = false },
+    },
+  }
+  local cfg = UiConfig.withDefaults(onDisk)
+  T.isTrue(cfg.panels.nav.enabled, "nav is enabled again, so a frame gets built for it")
+  T.eq(cfg.panels.nav.monitors[1], "monitor_1", "and the assignment it already had survived")
+  T.eq(cfg.panels.overhead.monitors[1], "monitor_0", "every other assignment untouched")
+  T.eq(cfg.version, 2, "and the file records that it has been migrated")
+end)
+
+T.it("migration is idempotent and leaves a current config alone", function()
+  local first = UiConfig.withDefaults({ version = 1, panels = { nav = { enabled = false } } })
+  local again = UiConfig.withDefaults(first)
+  T.isTrue(again.panels.nav.enabled, "still enabled")
+  T.eq(again.version, 2, "still version 2")
+  local _, changed = UiConfig.migrate(again)
+  T.isFalse(changed, "a version 2 config needs no further migration")
+end)
+
+T.it("migration keeps the monitor assignments of a disabled panel", function()
+  -- The reason it re-enables rather than clearing: the operator may have assigned the panel
+  -- BEFORE it went live, and that assignment is a real choice worth keeping.
+  local cfg = UiConfig.withDefaults({
+    version = 1,
+    panels = { autopilot = { monitors = { "monitor_2" }, enabled = false } },
+  })
+  T.eq(cfg.panels.autopilot.monitors[1], "monitor_2", "assignment survived the migration")
 end)
 
 T.it("an old config gains fields added later", function()
@@ -257,10 +304,31 @@ T.it("a disabled panel builds nothing", function()
   mock.reset()
   _G.peripheral = mock.install()
   local cfg = UiConfig.withDefaults({})
-  UiConfig.assign(cfg, "pfd", "monitor_0")       -- pfd is reserved / disabled
+  -- Disabled EXPLICITLY. No panel ships disabled any more: `enabled` is still the mechanism for
+  -- switching a screen off, but it stopped being the marker for "not written yet" -- storing
+  -- that in a config file is what left nav permanently black.
+  UiConfig.assign(cfg, "pfd", "monitor_0")
+  cfg.panels.pfd.enabled = false
   local monitors = Monitors.new(cfg, quietLog(), basalt)
   local instances = monitors:buildPanel("pfd", function() return { update = function() end } end)
-  T.eq(#instances, 0, "nothing built for a reserved panel")
+  T.eq(#instances, 0, "nothing built for a disabled panel")
+  monitors:clear()
+end)
+
+T.it("sync builds a frame for every implemented panel it is given", function()
+  mock.reset()
+  _G.peripheral = mock.install()
+  local cfg = UiConfig.withDefaults({})
+  UiConfig.assign(cfg, "nav", "monitor_0")
+  local monitors = Monitors.new(cfg, quietLog(), basalt)
+  local built = {}
+  local builders = {}
+  for _, name in ipairs(App.implementedPanels()) do
+    builders[name] = function() built[name] = true; return { update = function() end } end
+  end
+  monitors:sync(builders)
+  T.eq(monitors:count("nav"), 1, "nav got its frame -- this is the black-screen regression")
+  T.isTrue(built.nav, "and its builder really ran")
   monitors:clear()
 end)
 
@@ -1076,6 +1144,28 @@ T.it("leaves the middle empty -- the map goes there", function()
     "says so rather than drawing decoration: " .. panel.elements.placeholder:getText())
 end)
 
+--- On a narrow cockpit monitor the three labels do not fit across one row: they came out as
+--- "FCS T SELFT AXI" with the third button hanging past the right edge.
+T.it("the three test buttons stay readable and on-screen at every width", function()
+  for _, size in ipairs({ { 15, 20 }, { 18, 16 }, { 25, 19 }, { 26, 19 }, { 29, 19 }, { 51, 19 } }) do
+    local width = size[1]
+    local panel = navRig(width, size[2])
+    panel.update(navModel())
+    local labels = { ["FCS TEST"] = false, SELFTEST = false, AXISMAP = false }
+    for _, button in ipairs(panel.buttons or {}) do
+      local text = button:getText()
+      T.notNil(labels[text], ("%dx%d: %q is not a full label"):format(width, size[2], text))
+      labels[text] = true
+      local right = button:getX() + button:getWidth() - 1
+      T.isTrue(right <= width,
+        ("%dx%d: %s ends at %d, past the edge"):format(width, size[2], text, right))
+    end
+    for name, seen in pairs(labels) do
+      T.isTrue(seen, ("%dx%d: %s missing"):format(width, size[2], name))
+    end
+  end
+end)
+
 T.it("both pre-flight tests are on the border, and each replaces the nav view", function()
   local panel = navRig()
   panel.update(navModel())
@@ -1367,6 +1457,7 @@ local function terminalRig(width, height)
   local saved = { count = 0 }
   local panel = Terminal.build(frame, {
     cfg = cfg, monitors = monitors, log = quietLog(),
+    panelNames = App.implementedPanels(),
     savePanels = function() saved.count = saved.count + 1 end,
   })
   return panel, cfg, saved
@@ -1399,8 +1490,35 @@ end)
 T.it("cycling past the last panel unassigns", function()
   local panel, cfg = terminalRig()
   panel.refresh()
-  for _ = 1, #UiConfig.PANEL_ORDER + 1 do click(panel.rows[1].button) end
+  for _ = 1, #App.implementedPanels() + 1 do click(panel.rows[1].button) end
   T.isNil(UiConfig.panelFor(cfg, "monitor_0"), "back to unassigned")
+end)
+
+--- The bug this pair exists for: a monitor could be cycled onto `pfd` or `autopilot`, which
+--- nothing builds, and the screen went black with nothing in the log to say why.
+T.it("only ever offers panels that something actually builds", function()
+  local panel, cfg = terminalRig()
+  panel.refresh()
+  local seen = {}
+  for _ = 1, #UiConfig.PANEL_ORDER + 2 do
+    click(panel.rows[1].button)
+    local assigned = UiConfig.panelFor(cfg, "monitor_0")
+    if assigned then seen[assigned] = true end
+  end
+  for _, name in ipairs({ "pfd", "autopilot" }) do
+    T.isNil(seen[name], name .. " has no builder, so it must never be offered")
+  end
+  T.isTrue(seen.nav, "nav does have one, so it must be reachable")
+end)
+
+T.it("a monitor left on an unimplemented panel cycles forward instead of sticking", function()
+  local panel, cfg = terminalRig()
+  -- exactly what an old config, or one from a newer release, leaves behind
+  UiConfig.assign(cfg, "pfd", "monitor_0")
+  panel.refresh()
+  click(panel.rows[1].button)
+  local now = UiConfig.panelFor(cfg, "monitor_0")
+  T.eq(now, App.implementedPanels()[1], "moved to a panel that draws, rather than staying stuck")
 end)
 
 -- ---------------------------------------------------- overhead, config gone

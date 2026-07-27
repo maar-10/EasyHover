@@ -100,6 +100,9 @@ function App:panelOptions()
     monitors = self.monitors,
     log = self.log,
     lastAck = function() return self.link.lastAck end,
+    --- Which panels the terminal may cycle a monitor through. Derived from the builder table,
+    --- never hand-listed.
+    panelNames = App.implementedPanels(),
     savePanels = function()
       local ok, err = UiConfig.save(self.configPath, self.cfg)
       if not ok then self.log:error("could not save panel assignment: %s", tostring(err)) end
@@ -108,14 +111,34 @@ function App:panelOptions()
   }
 end
 
+--- EVERY PANEL THIS RELEASE ACTUALLY IMPLEMENTS. One table, two jobs: it builds the frames,
+--- and it is what the terminal offers when you cycle a monitor. Those must not be allowed to
+--- drift -- a monitor assigned to a panel with no builder here goes black and stays black,
+--- which is indistinguishable from a broken screen. A panel declared in Config.PANEL_ORDER but
+--- absent here is simply not offered.
+local PANEL_BUILDERS = {
+  overhead = Overhead.build,
+  config = ConfigPanel.build,
+  nav = Nav.build,
+}
+
+--- The implemented panels, in PANEL_ORDER order, which is the order the terminal cycles.
+function App.implementedPanels()
+  local out = {}
+  for _, name in ipairs(UiConfig.PANEL_ORDER) do
+    if PANEL_BUILDERS[name] then out[#out + 1] = name end
+  end
+  return out
+end
+
 --- The builder for each live panel.
 function App:builders()
   local options = self:panelOptions()
-  return {
-    overhead = function(frame) return Overhead.build(frame, options) end,
-    config = function(frame) return ConfigPanel.build(frame, options) end,
-    nav = function(frame) return Nav.build(frame, options) end,
-  }
+  local out = {}
+  for name, build in pairs(PANEL_BUILDERS) do
+    out[name] = function(frame) return build(frame, options) end
+  end
+  return out
 end
 
 --- Reconcile the frames against the configured assignment, touching only what changed.

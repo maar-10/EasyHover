@@ -117,16 +117,35 @@ function Nav.build(frame, opts)
   -- The middle is left empty ON PURPOSE: the map and waypoint list land here, and filling it
   -- with placeholder decoration now would only have to be torn out.
   local reservedTop = 3
-  local reservedBottom = height - 2
+  -- The border carries the pre-flight tests. THREE ACROSS ONLY IF THE LABELS FIT: the widest is
+  -- "FCS TEST" at 8, so a single row needs 3*8 + 2 gaps = 26 columns. Below that they stack, one
+  -- per row up the bottom edge. Squeezed onto one row on a 15-wide screen they read
+  -- "FCS T SELFT AXI" and the third one hangs off the right edge -- unreadable, and these three
+  -- buttons are the whole point of the screen before a first flight.
+  local BUTTONS = {
+    { "FCS TEST", function() show(fcsPage) end },
+    { "SELFTEST", function() show(selfPage) end },
+    { "AXISMAP",  function() show(axisPage) end },
+  }
+  local stacked = width < 26
+  local reservedBottom = stacked and (height - #BUTTONS - 1) or (height - 2)
+
   local navPlaceholder = Theme.line(navPage, math.floor((reservedTop + reservedBottom) / 2),
     width, Theme.centre("no nav yet", width), Theme.dim)
 
-  -- the border carries the pre-flight tests: three buttons across the bottom edge
-  local third = math.max(5, math.floor((width - 2) / 3))
-  Theme.button(navPage, 1, height, third, "FCS TEST", function() show(fcsPage) end)
-  Theme.button(navPage, third + 2, height, third, "SELFTEST", function() show(selfPage) end)
-  Theme.button(navPage, third * 2 + 3, height, math.max(5, width - third * 2 - 2), "AXISMAP",
-    function() show(axisPage) end)
+  local testButtons = {}
+  if stacked then
+    for i, entry in ipairs(BUTTONS) do
+      testButtons[i] = Theme.button(navPage, 1, height - #BUTTONS + i, width, entry[1], entry[2])
+    end
+  else
+    local third = math.floor((width - 2) / 3)
+    testButtons[1] = Theme.button(navPage, 1, height, third, BUTTONS[1][1], BUTTONS[1][2])
+    testButtons[2] = Theme.button(navPage, third + 2, height, third, BUTTONS[2][1], BUTTONS[2][2])
+    -- the last one takes the remainder so it ends exactly on the right edge, never past it
+    testButtons[3] = Theme.button(navPage, third * 2 + 3, height, width - third * 2 - 2,
+      BUTTONS[3][1], BUTTONS[3][2])
+  end
 
   -- ---------------------------------------------------------------- FCS test
 
@@ -414,6 +433,8 @@ function Nav.build(frame, opts)
   return {
     update = update,
     show = show,
+    buttons = testButtons,
+    stacked = stacked,
     pages = { nav = navPage, fcs = fcsPage, selfTest = selfPage, axisMap = axisPage },
     axisRows = axisRows,
     bars = bars,
