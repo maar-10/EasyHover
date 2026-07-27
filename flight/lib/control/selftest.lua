@@ -305,12 +305,20 @@ function SelfTest:tick(now)
       local nx = (p.axis == "x") and value or 0
       local ny = (p.axis == "y") and value or 0
 
-      -- SKIP AN UNCHANGED WRITE. setVector is `mainThread = true`, so every call waits on a
-      -- server tick -- and on the quantised grid consecutive samples are usually identical, so
-      -- most of those calls were buying nothing while slowing the loop that drives the sweep.
+      -- SKIP AN UNCHANGED WRITE -- but judge "unchanged" BY ASKING THE BLOCK, not by remembering
+      -- what we sent. setVector is `mainThread = true` and costs a server tick, so skipping is
+      -- worth doing; skipping on the strength of our own memory is not, because the nozzle has
+      -- another writer. Each vector thruster carries four Create redstone-link receivers on the
+      -- blank frequency that re-apply 0 whenever the contraption moves, and a sweep that trusts
+      -- its own record would see no difference and never re-assert -- which is a sweep that
+      -- reports RUNNING while every nozzle sits at zero.
       local key = entry.id
-      local last = self.run.commanded[key]
-      if last == nil or last.nx ~= nx or last.ny ~= ny then
+      local aim = self.thrusters:nozzleAim(key)
+      local heldX = aim and aim.targetX
+      local heldY = aim and aim.targetY
+      local stale = (heldX == nil or heldY == nil
+        or math.abs(heldX - nx) > 0.02 or math.abs(heldY - ny) > 0.02)
+      if stale then
         self.run.commanded[key] = { nx = nx, ny = ny }
         -- Deliberately RAW: the point is to see the nozzle's own axes, not the craft-frame
         -- mapping the mixer would apply. A mirrored mounting is invisible through the mapping.

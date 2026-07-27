@@ -142,10 +142,29 @@ function Thrusters:apply(commands)
 
       -- Vector first: on a craft that is already lifting, changing direction before
       -- changing magnitude is the gentler ordering.
+      --
+      -- COMPARED AGAINST THE BLOCK, NOT AGAINST MEMORY. `last` is what we believe we commanded,
+      -- and believing it is only safe while nothing else writes these nozzles. Something does:
+      -- every vector thruster carries four Create redstone-link RECEIVERS which default to the
+      -- blank frequency and join that network unconditionally, and they re-apply the network
+      -- value -- 0, with no transmitter -- whenever `newPosition` is set, which a moving
+      -- contraption sets constantly. Trusting our own memory there means noticing nothing and
+      -- never re-asserting: the nozzle sits at zero for ever while the log says it was commanded.
+      --
+      -- getTargetVectorX/Y are plain @LuaFunction on the vector peripherals, so asking the block
+      -- what it actually holds costs no server tick.
+      local heldX, heldY = last.nx, last.ny
+      if entry.canVector and type(dev.getTargetVectorX) == "function" then
+        local okX, tx = pcall(dev.getTargetVectorX)
+        local okY, ty = pcall(dev.getTargetVectorY)
+        if okX and type(tx) == "number" then heldX = tx end
+        if okY and type(ty) == "number" then heldY = ty end
+      end
+
       if entry.canVector
-        and (last.nx == nil or last.ny == nil
-          or math.abs(nx - last.nx) > deadband
-          or math.abs(ny - last.ny) > deadband) then
+        and (heldX == nil or heldY == nil
+          or math.abs(nx - heldX) > deadband
+          or math.abs(ny - heldY) > deadband) then
         if callDevice(self, entry.id, dev, "setVector", nx, ny) then
           last.nx, last.ny = nx, ny
           wrote = wrote + 1

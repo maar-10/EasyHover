@@ -442,3 +442,54 @@ is unchanged. An idle link with `Frequency.EMPTY` does not continuously zero wha
 
 Which leaves the path between the computer and the block. `tools/nozzle.lua` tests exactly that and
 nothing else.
+
+---
+
+## ⚠️ A vector thruster has a SECOND writer, and it wins
+
+Every vector thruster carries four `VectorRedstoneLinkBehaviour` receivers (west/east/down/up).
+Reading the source:
+
+```java
+frequencyFirst = Frequency.EMPTY;      // constructor: blank by default
+frequencyLast  = Frequency.EMPTY;
+
+public void initialize() {             // UNCONDITIONAL -- no "is a frequency set?" check
+    Create.REDSTONE_LINK_NETWORK_HANDLER.addToNetwork(getWorld(), this);
+    newPosition = true;
+}
+
+public void setReceivedStrength(int networkPower) {
+    if (!newPosition) return;
+    signalCallback.accept(networkPower);   // -> setSignal(power, side)
+}
+
+public void read(...) {
+    newPosition = positionInTag != positionKey;   // TRUE whenever the BE moved
+}
+```
+
+So **every vector thruster on the craft is a receiver on the shared blank network**, and it
+re-applies that network's value — **0**, with no transmitter — into the same `westSignal` /
+`eastSignal` / `downSignal` / `upSignal` fields that `setVector` writes, whenever `newPosition` is
+set. On a **Create: Simulated contraption the blocks move, so the block entities are re-read at new
+positions constantly**, and `newPosition` keeps coming back true.
+
+Symptoms, all of which matched the craft:
+
+- `setVector` throws nothing and `getTargetVectorX` reads back **0**
+- manual redstone works perfectly — that is a real transmitter pushing a real value
+- discovery, `getType`, config assignment and every getter behave normally
+- it hits every vector thruster at once, because they share one network
+
+### What this means for any computer control
+
+**Never treat "I sent it" as "it holds it".** `flight/lib/io/thrusters.lua` and the self-test sweep
+both deduplicated writes against their own record of the last command, which is only safe while
+nothing else writes the nozzle. With a competing writer it is the worst possible choice: the nozzle
+is zeroed, our record still says "commanded", and we never write again. Both now compare against
+`getTargetVectorX/Y` — the block's own answer — and re-assert when it disagrees. Those getters are
+plain `@LuaFunction`, so asking costs nothing.
+
+That is a mitigation, not a cure: a write can still be undone between one cycle and the next. If
+the receivers can be persuaded not to join the network, that is the real fix and it is mod-side.

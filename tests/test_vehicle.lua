@@ -1025,6 +1025,9 @@ T.it("the self test never commands thrust, only nozzle deflection", function()
     entry.dev.setThrustNormalized = record
     entry.dev.setPower = record
   end
+  -- setVector is deliberately left ALONE: the sweep now decides whether to write by reading the
+  -- block back, so a stub that swallows the write would make every sample look stale and turn
+  -- this into a test of the stub.
   T.isTrue((app:handleCommand({ cmd = "selfTest", action = "start" })), "started")
   local started = app.selfTest.run.startedAt
   for at = 0, 44000, 500 do app.selfTest:tick(started + at) end
@@ -1164,9 +1167,14 @@ T.it("does not re-send a deflection the nozzle is already holding", function()
   app.state.mode = "GROUND"
   app:handleCommand({ cmd = "selfTest", action = "start" })
   local started = app.selfTest.run.startedAt
+  -- Count writes WITHOUT swallowing them: the sweep asks the block what it holds before writing,
+  -- so a stub that drops the write would make every sample stale and defeat the dedupe under test.
   local writes = 0
   for _, entry in ipairs(app.per:thrusterList()) do
-    entry.dev.setVector = function() writes = writes + 1 end
+    local inner = entry.dev.setVector
+    if type(inner) == "function" then
+      entry.dev.setVector = function(x, y) writes = writes + 1; return inner(x, y) end
+    end
   end
   -- 200 ticks across one phase; the pattern holds still for most of it
   for offset = 0, 7400, 37 do app.selfTest:tick(started + offset) end
@@ -1250,6 +1258,31 @@ T.it("reports what the nozzle actually holds, not only what was asked", function
   T.eq(type(st.aimCommanded), "number", "and what it was told")
   T.eq(type(st.aimActual), "number", "and what it reads back")
   T.eq(st.writeFails, 0, "with no refusals on healthy hardware")
+  fs.delete(path)
+end)
+
+--- The sweep needs the same property as the mixer, for the same reason: the redstone-link
+--- receivers on every vector thruster can zero a nozzle at any moment, so a sweep that skips a
+--- write because it REMEMBERS sending one never notices and never re-asserts.
+T.it("the sweep re-asserts a nozzle that was zeroed behind its back", function()
+  local app, path = appRig(fullCraft())
+  app.state.mode = "GROUND"
+  app:handleCommand({ cmd = "selfTest", action = "start" })
+  local started = app.selfTest.run.startedAt
+  -- far enough in to be asking for a real deflection, and settled there
+  for at = 0, 2500, 100 do app.selfTest:tick(started + at) end
+
+  local dev = app.per.thrusters["lift_fl"].dev
+  local held = dev.getTargetVectorX()
+  T.isTrue(math.abs(held) > 0.05, "precondition: the nozzle is deflected (" .. tostring(held) .. ")")
+
+  -- something else centres it
+  dev.setVector(0, 0)
+  T.eq(dev.getTargetVectorX(), 0, "it really was zeroed")
+
+  app.selfTest:tick(started + 2600)
+  T.isTrue(math.abs(dev.getTargetVectorX()) > 0.05,
+    "the sweep put it back: " .. tostring(dev.getTargetVectorX()))
   fs.delete(path)
 end)
 
@@ -1570,10 +1603,15 @@ T.it("a held nozzle does not silently stop the sweep from ever ticking", functio
   -- prove it: the real loop must actually tick it
   local moved = 0
   for _, entry in ipairs(app.per:thrusterList()) do
-    if type(entry.dev.setVector) == "function" then
-      entry.dev.setVector = function() moved = moved + 1 end
+    local inner = entry.dev.setVector
+    if type(inner) == "function" then
+      entry.dev.setVector = function(x, y) moved = moved + 1; return inner(x, y) end
     end
   end
+  -- Far enough in that the pattern is asking for a real deflection: the opening of a phase asks
+  -- for the centre, which a centred nozzle already holds, so nothing needs writing there.
+  local started = app.selfTest.run.startedAt
+  for at = 0, 2500, 100 do app.selfTest:tick(started + at) end
   for _ = 1, 5 do app:cycle(0.05) end
   T.isTrue(app.selfTest:isRunning(), "still running")
   T.isTrue(moved > 0, "and the nozzles were commanded through App:cycle")

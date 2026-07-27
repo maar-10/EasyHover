@@ -140,11 +140,38 @@ T.it("write-on-change: repeating a command costs nothing", function()
   _G.peripheral = mock.install()
   local r = rig()
   local th = Thrusters.new(r.per, r.cfg, r.log, r.state)
-  local cmd = { lift_fl = { thrust = 0.5, defX = 0, defZ = 0 },
-                lift_fr = { thrust = 0.5, defX = 0, defZ = 0 } }
+  -- A NONZERO deflection, so the first apply genuinely has something to say. Asking for the
+  -- centre a nozzle already sits at is not a write worth making, and "unchanged" is now judged
+  -- from the block rather than from our own record -- see the re-assert test below.
+  local cmd = { lift_fl = { thrust = 0.5, defX = 0.4, defZ = 0 },
+                lift_fr = { thrust = 0.5, defX = 0.4, defZ = 0 } }
   local first = th:apply(cmd)
   T.eq(first, 4, "first apply writes vector+thrust for both")
   T.eq(th:apply(cmd), 0, "identical command writes nothing")
+end)
+
+--- THE PROPERTY THAT MATTERS ON THIS CRAFT. Every vector thruster carries four Create
+--- redstone-link RECEIVERS which default to the blank frequency and join that network
+--- unconditionally; they re-apply the network value (0, with no transmitter) whenever
+--- `newPosition` is set, which a moving contraption sets constantly. So a nozzle can be zeroed
+--- behind our back at any moment.
+---
+--- Deduplicating against our own memory of what we sent means never noticing, and never
+--- re-asserting -- the nozzle stays at zero for ever while the log says it was commanded.
+T.it("re-asserts a nozzle that something else zeroed behind our back", function()
+  mock.reset()
+  _G.peripheral = mock.install()
+  local r = rig()
+  local th = Thrusters.new(r.per, r.cfg, r.log, r.state)
+  local cmd = { lift_fl = { thrust = 0.5, defX = 0.4, defZ = 0 } }
+  th:apply(cmd)
+  T.eq(th:apply(cmd), 0, "settled, so nothing is written")
+
+  -- something else writes the nozzle back to centre
+  local dev = r.per.thrusters["lift_fl"].dev
+  dev.setVector(0, 0)
+
+  T.eq(th:apply(cmd), 1, "the SAME command is re-sent, because the block no longer holds it")
 end)
 
 T.it("a sub-step thrust change writes nothing; crossing a step writes", function()
@@ -172,10 +199,15 @@ T.it("invalidate forces a full re-assert after a rescan", function()
   _G.peripheral = mock.install()
   local r = rig()
   local th = Thrusters.new(r.per, r.cfg, r.log, r.state)
-  local cmd = { lift_fl = { thrust = 0.5 } }
+  -- Nonzero, so the vector write is a real one rather than a request for the centre the nozzle
+  -- is already at.
+  local cmd = { lift_fl = { thrust = 0.5, defX = 0.4, defZ = 0 } }
   th:apply(cmd)
   th:invalidate()
-  T.eq(th:apply(cmd), 2, "vector and thrust both re-written")
+  -- The THRUST step is re-asserted from memory, because a plain thruster has no readback to ask.
+  -- The vector is not, because the block still reports the deflection it was given -- and the
+  -- block is now the authority on that.
+  T.eq(th:apply(cmd), 1, "thrust re-written; the nozzle already holds what we want")
 end)
 
 T.it("neutralVectors keeps the thrust step (damped hover, not engine cut)", function()
