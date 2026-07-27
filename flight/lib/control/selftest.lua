@@ -300,6 +300,18 @@ function SelfTest:tick(now)
     end
   end
 
+  -- A HEARTBEAT, once a second, on this computer's own console. Every other signal we have --
+  -- the panel, the telemetry, sinceTick -- has turned out to be ambiguous about whether this
+  -- function is running at all: lastTickAt is also set by start(), so a run that never ticks
+  -- looks identical to one ticking at the loop rate. A line that only tick() can print is not
+  -- ambiguous.
+  self.run.beats = (self.run.beats or 0) + 1
+  if (now - (self.run.lastBeatAt or 0)) >= 1000 then
+    self.run.lastBeatAt = now
+    self.log:info("self test tick %d: step %d, %.0fs left", self.run.beats, p.step,
+      (p.remainingMs or 0) / 1000)
+  end
+
   local step = SelfTest.STEPS[p.step]
   local members = self:groupMembers(step.group)
 

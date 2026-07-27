@@ -1474,6 +1474,42 @@ T.it("a command that throws still answers, with the reason", function()
   fs.delete(path)
 end)
 
+--- THE TESTING GAP THIS SUITE HAD. Every other test calls app:cycle() directly, so nothing
+--- exercised App:run() -- the event loop that decides whether cycle is called at all. A control
+--- loop that never runs is indistinguishable, from every unit test here, from one that runs
+--- perfectly.
+T.it("App:run drives the control cycle AND the sweep", function()
+  local app, path = appRig(fullCraft())
+  app.telemetry.publish = function() return true end
+
+  local armed = 1000
+  local realStart, realPull = os.startTimer, os.pullEvent
+  os.startTimer = function() armed = armed + 1; return armed end
+  local fed = 0
+  os.pullEvent = function()
+    fed = fed + 1
+    if fed == 5 then
+      return "rednet_message", 7, { cmd = "selfTest", action = "start" },
+        app.cfg.comms.commandProtocol
+    end
+    if fed > 30 then return "terminate" end
+    return "timer", armed
+  end
+
+  local ticks = 0
+  local innerTick = app.selfTest.tick
+  app.selfTest.tick = function(self, t) ticks = ticks + 1; return innerTick(self, t) end
+
+  local ok, err = pcall(function() app:run() end)
+  os.startTimer, os.pullEvent = realStart, realPull
+  T.isTrue(ok, "the loop ran without error: " .. tostring(err))
+
+  T.isTrue((app.cycles or 0) > 10, "cycles actually ran: " .. tostring(app.cycles))
+  T.isTrue(app.selfTest:isRunning(), "the sweep was started through the loop")
+  T.isTrue(ticks > 5, "and DRIVEN by it: " .. tostring(ticks) .. " ticks")
+  fs.delete(path)
+end)
+
 T.it("respects each thruster's own maxVector limit", function()
   local cfg = fullCraft()
   cfg.hardware.thrusters[1].maxVector = 0.3
