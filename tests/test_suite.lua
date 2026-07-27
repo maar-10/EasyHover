@@ -38,16 +38,30 @@ T.it("the flight role is released and complete", function()
 end)
 
 T.it("every prepared role declares dirs and configs so it is ready to release", function()
-  local prepared = 0
+  -- No count assertion here on purpose. It used to require "at least 6 prepared", which had to
+  -- be edited DOWN every time a role shipped -- a chore that punishes progress and tells you
+  -- nothing. The invariant below is what actually matters.
+  local prepared, released = 0, 0
   for name, spec in pairs(manifest.roles) do
     if spec.status == "prepared" then
       prepared = prepared + 1
       T.isTrue(#spec.dirs > 0, name .. " declares its directories")
       T.isTrue(#spec.configs > 0, name .. " declares its configs")
       T.eq(#spec.files, 0, name .. " ships nothing yet")
+    elseif spec.status == "released" then
+      released = released + 1
+      T.isTrue(#spec.files > 0, name .. " is released, so it must ship files")
+      T.isTrue(spec.entry ~= nil and spec.entry ~= "",
+        name .. " is released, so it must have an entry point")
     end
   end
-  T.isTrue(prepared >= 6, ("%d prepared roles reserved"):format(prepared))
+  T.isTrue(released > 0, "something is released")
+  T.isTrue(prepared > 0, "and something is still reserved")
+  T.eq(released + prepared, (function()
+    local total = 0
+    for _ in pairs(manifest.roles) do total = total + 1 end
+    return total
+  end)(), "every role is either released or prepared -- no third state")
 end)
 
 T.it("the launcher is installed as startup.lua and only launches", function()

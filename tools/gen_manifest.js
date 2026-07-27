@@ -72,11 +72,16 @@ const ROLES = {
   },
   nav: {
     title: "Navigation computer",
-    blurb: "Waypoints, routes, map UI, position fixing (GPS / radar). Feeds the flight computer.",
-    status: "prepared",
-    dirs: ["nav"],
-    configs: ["/eh_nav_config.tbl", "/eh_waypoints.tbl", "/eh_routes.tbl"],
+    blurb: "Position fixing over GPS, waypoints, and the fix relay onto the craft's cable."
+      + " Needs an ender modem AND a wired one.",
+    status: "released",
+    dirs: ["nav", "shared"],
+    // NO Basalt: the screen has to TYPE things -- a waypoint name and three coordinates -- and a
+    // mouse helps with neither. Plain `term`, keyboard-driven, same as the beacon.
+    launcher: { src: "launchers/nav.lua", dst: "startup.lua" },
+    entry: "nav/startup.lua",
     luaPath: "/nav",
+    configs: ["/eh_nav_config.tbl", "/eh_waypoints.tbl", "/eh_routes.tbl"],
   },
   ui_pfd: {
     title: "Primary flight display",

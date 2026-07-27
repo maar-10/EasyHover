@@ -7,26 +7,13 @@
 
 local Config = {}
 
-local function deepMerge(base, over)
-  if type(base) ~= "table" then return over end
-  if type(over) ~= "table" then return base end
-  local out = {}
-  for k, v in pairs(base) do
-    if type(v) == "table" then
-      out[k] = deepMerge(v, over[k])
-    elseif over[k] ~= nil then
-      -- THE LOADED FILE WINS. Defaults supply the shape; taking base's value here would make
-      -- every saved setting revert on load, silently, which is the opposite of extend-only.
-      out[k] = over[k]
-    else
-      out[k] = v
-    end
-  end
-  for k, v in pairs(over) do
-    if out[k] == nil then out[k] = v end
-  end
-  return out
-end
+--- LISTS ARE REPLACED WHOLESALE, not merged element by element. shared/util.lua already gets
+--- this right, so it is used rather than hand-rolled a third time -- my own version merged them
+--- and therefore could not empty a list at all: `positionSources = {}` in a config silently kept
+--- the default, and a shorter list inherited the tail of the longer default.
+local Util = require("shared.util")
+
+local deepMerge = Util.deepMerge
 
 Config.deepMerge = deepMerge
 

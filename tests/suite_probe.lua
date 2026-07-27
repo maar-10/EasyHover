@@ -232,8 +232,11 @@ elseif phase == "check" then
   check(#noStagingLeftBehind() == 0, "--check staged nothing")
 
 elseif phase == "prepared" then
-  local out = runSuite("nav")
-  check(not fs.exists("/nav"), "a prepared role installs nothing")
+  -- ui_pfd, not nav: nav is RELEASED now, and this phase needs a role that genuinely ships
+  -- nothing. Picking a released one would assert that installing it does nothing, which is the
+  -- opposite of what should happen.
+  local out = runSuite("ui_pfd")
+  check(not fs.exists("/ui_pfd"), "a prepared role installs nothing")
   check(stateField("role") == "flight", "and does not overwrite the current role record",
     tostring(stateField("role")))
 
@@ -301,6 +304,55 @@ elseif phase == "beacon" then
     return a ~= nil
   end)
   check(ok, "the installed modules load and run", tostring(err))
+
+elseif phase == "navrole" then
+  -- The fourth released role, on a BARE computer. The nav computer is its own machine on the
+  -- craft, so nothing about the flight install applies to it.
+  runSuite("nav")
+  check(stateField("role") == "nav", "install record names the role", tostring(stateField("role")))
+  check(fs.exists("/startup.lua"), "launcher installed")
+  check(fs.exists("/nav/app.lua"), "role files installed")
+  check(fs.exists("/nav/lib/geo.lua"), "the geometry")
+  check(fs.exists("/nav/lib/waypoints.lua"), "the waypoint store")
+  check(fs.exists("/nav/lib/fix.lua"), "the fix provider")
+  check(fs.exists("/nav/lib/sources.lua"), "the position sources")
+  check(fs.exists("/nav/lib/relay.lua"), "the wired relay")
+  check(fs.exists("/nav/ui/console.lua"), "and its screen")
+  check(fs.exists("/shared/util.lua"), "the shared tree landed")
+  check(not fs.exists("/basalt.lua"), "and NO Basalt -- the nav screen is plain term too")
+  check(not fs.exists("/flight/app.lua"), "no flight files on a nav computer")
+  check(#noStagingLeftBehind() == 0, "no staging files left behind")
+
+  -- RUNNABLE, not merely present: load the chain the launcher would and exercise the maths.
+  local ok, err = pcall(function()
+    package.path = "/nav/?.lua;/nav/?/init.lua;" .. package.path
+    local Config = require("lib.config")
+    local cfg = Config.withDefaults({})
+    if not (Config.validate(cfg)) then error("default config does not validate") end
+    local Geo = require("lib.geo")
+    if math.abs(Geo.bearing({ x = 0, z = 0 }, { x = 0, z = -10 })) > 1e-6 then
+      error("north is not zero degrees")
+    end
+    local Waypoints = require("lib.waypoints")
+    local store = Waypoints.new("/eh_waypoints.tbl")
+    if not (store:add({ name = "Probe", x = 1, y = 2, z = 3 })) then error("cannot add") end
+    -- SAVE it: the next check is that a repair cannot delete this file, which needs the file to
+    -- exist. Without this the assertion passed or failed for the wrong reason entirely.
+    if not (store:save()) then error("cannot save the waypoint file") end
+    local Console = require("ui.console")
+    local rows = Console.render(cfg, { waypointCount = 1 }, 51, 19)
+    if #rows == 0 then error("the screen rendered nothing") end
+    return true
+  end)
+  check(ok, "the installed modules load and run", tostring(err))
+
+  -- The waypoint file is a PROTECTED path, so a repair must not be able to delete it. Waypoints
+  -- are the operator's own data and painful to retype.
+  check(fs.exists("/eh_waypoints.tbl"), "the waypoint file was written")
+  runSuite("--repair")
+  check(fs.exists("/eh_waypoints.tbl"), "AND SURVIVES A REPAIR")
+  local body = read("/eh_waypoints.tbl") or ""
+  check(body:find("Probe") ~= nil, "with its contents intact")
 
 else
   fail("unknown phase: " .. tostring(phase))

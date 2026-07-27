@@ -56,7 +56,7 @@ lay_out_computer
 # Phases that need a BARE computer rather than the aged one the chain has been building. A
 # second role cannot be tested on top of the first: installing ui_main over flight is a role
 # CHANGE, which is a different operation from the fresh install a pilot actually performs.
-FRESH_PHASES=" uimain beacon "
+FRESH_PHASES=" uimain beacon navrole "
 
 FAILED=0
 run_phase() {
@@ -85,7 +85,7 @@ run_phase() {
 # `install` is a prerequisite for every later phase, so keep it first in any subset.
 # `uimain` is last because it wipes the computer: it is a fresh install of the OTHER released
 # role, which nothing else here covers.
-ALL_PHASES="install current configkeep repair badconfig detect protect check prepared uimain beacon"
+ALL_PHASES="install current configkeep repair badconfig detect protect check prepared uimain beacon navrole"
 PHASES="${EASYHOVER_E2E_PHASES:-$ALL_PHASES}"
 [[ "$PHASES" != "$ALL_PHASES" ]] && echo "(limited to: $PHASES)" && echo ""
 

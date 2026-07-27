@@ -603,4 +603,224 @@ T.it("counts what it published, for the diagnostics page", function()
   T.eq(relay:status().seq, 2, "sequence advances")
 end)
 
+
+-- ------------------------------------------------------------------- config
+
+T.suite("nav config")
+
+local NavConfig = require("lib.config")
+
+T.it("defaults to GPS and a sane fix rate", function()
+  local cfg = NavConfig.withDefaults({})
+  T.eq(cfg.positionSources[1], "gps")
+  T.eq(cfg.navFixProtocol, "eh_navfix",
+    "the name the flight computer has listened for since phase 5")
+  T.isTrue((NavConfig.validate(cfg)), "and it validates")
+end)
+
+T.it("an old config gains fields added later, and keeps mine", function()
+  local cfg = NavConfig.withDefaults({ gpsTimeout = 4, enderModem = "modem_7" })
+  T.eq(cfg.gpsTimeout, 4, "mine survived")
+  T.eq(cfg.enderModem, "modem_7")
+  T.eq(cfg.reckonUsefulMs, 8000, "and new fields appeared")
+end)
+
+T.it("REFUSES a config with no position source", function()
+  local ok, errors = NavConfig.validate(NavConfig.withDefaults({ positionSources = {} }))
+  T.isFalse(ok)
+  T.isTrue(table.concat(errors, " "):find("cannot fix") ~= nil,
+    "and says what it means: " .. table.concat(errors, " "))
+end)
+
+T.it("refuses a fix rate that would block this computer solid", function()
+  -- Each fix BLOCKS for up to gpsTimeout. Asking for one every 100ms would leave the computer
+  -- doing nothing else, ever.
+  T.isFalse((NavConfig.validate(NavConfig.withDefaults({ fixEverySeconds = 0.1 }))))
+  T.isFalse((NavConfig.validate(NavConfig.withDefaults({ gpsTimeout = 0 }))))
+  T.isFalse((NavConfig.validate(NavConfig.withDefaults({ gpsTimeout = 30 }))))
+end)
+
+T.it("WARNS when fixes come slower than they go stale", function()
+  -- Legal, but it means the position reads stale more of the time than it reads fresh, which is
+  -- almost certainly not what anyone intended.
+  local ok, errors, warnings = NavConfig.validate(
+    NavConfig.withDefaults({ fixEverySeconds = 5, fixStaleMs = 1500 }))
+  T.isTrue(ok, "not an error")
+  T.isTrue(table.concat(warnings, " "):find("read stale between fixes") ~= nil,
+    "but warned: " .. table.concat(warnings, " "))
+end)
+
+-- ------------------------------------------------------------------ console
+
+T.suite("nav console")
+
+local Console = require("ui.console")
+
+local function rendered(model, width)
+  local rows = Console.render(NavConfig.withDefaults({}), model or {}, width or 51, 19)
+  local text = {}
+  for _, row in ipairs(rows) do text[#text + 1] = row.text end
+  for _, row in ipairs(rows.footer) do text[#text + 1] = row.text end
+  return table.concat(text, "\n"), rows
+end
+
+T.it("every action is a single keypress", function()
+  T.eq(Console.actionFor("m"), "mark")
+  T.eq(Console.actionFor("a"), "add")
+  T.eq(Console.actionFor("d"), "delete")
+  T.eq(Console.actionFor("l"), "list")
+  T.eq(Console.actionFor("f"), "fixNow")
+  T.eq(Console.actionFor("Q"), "quit", "upper case too")
+  T.isNil(Console.actionFor("z"))
+end)
+
+T.it("says NO FIX YET rather than drawing zeros", function()
+  local text = rendered({})
+  T.isTrue(text:find("NO FIX YET") ~= nil, "named: " .. text:match("[^\n]*NO FIX[^\n]*"))
+end)
+
+T.it("A DEAD-RECKONED POSITION IS LABELLED AS SUCH", function()
+  -- The whole point of carrying the flag. A consumer that cannot tell a fix from a five-second
+  -- guess will act on the guess.
+  local text = rendered({ position = { x = 100, y = 70, z = -200, source = "estimate",
+    quality = 0.4, ageMs = 4200, dead = true } })
+  T.isTrue(text:find("DEAD RECKONED") ~= nil, "shouted in the text")
+  T.isTrue(text:find("estimate") ~= nil, "with its source")
+  T.isTrue(text:find("4%.2s old") ~= nil, "and its age: " .. text:match("[^\n]*old[^\n]*"))
+end)
+
+T.it("a real fix shows its source, age and quality", function()
+  local text = rendered({ position = { x = 1, y = 2, z = 3, source = "gps", quality = 1,
+    ageMs = 120, dead = false } })
+  T.isTrue(text:find("from gps") ~= nil, "source")
+  T.isTrue(text:find("q 1%.00") ~= nil, "quality")
+  T.isFalse(text:find("DEAD RECKONED") ~= nil, "and not flagged")
+end)
+
+T.it("SAYS SO WHEN THERE IS NO HEADING, because reckoning cannot run without one", function()
+  local none = rendered({})
+  T.isTrue(none:find("heading   NONE") ~= nil, "named")
+  T.isTrue(none:find("dead reckoning cannot run") ~= nil, "and what it costs: "
+    .. none:match("[^\n]*heading[^\n]*"))
+
+  local have = rendered({ heading = 90 })
+  T.isTrue(have:find("heading   90  E") ~= nil, "and shows the compass point when there is one")
+end)
+
+T.it("NAMES A MISSING MODEM -- half a nav computer is a specific failure", function()
+  local text = rendered({ link = { wired = nil, wireless = "modem_3", published = 0 } })
+  T.isTrue(text:find("cable MISSING") ~= nil, "the cable: " .. text:match("[^\n]*cable[^\n]*"))
+
+  local both = rendered({ link = { wired = "modem_1", wireless = "modem_3", published = 42 } })
+  T.isTrue(both:find("radio modem_3") ~= nil, "and names them when present")
+  T.isTrue(both:find("published 42") ~= nil, "with the count")
+end)
+
+T.it("shows which source is answering and which is backed off", function()
+  local text = rendered({ stats = { sources = {
+    { name = "gps", ok = 40, bad = 2, backedOff = false },
+    { name = "radar", ok = 0, bad = 5, backedOff = true },
+  } } })
+  T.isTrue(text:find("gps  ok 40  failed 2") ~= nil, "counters")
+  T.isTrue(text:find("radar.*BACKED OFF") ~= nil, "and the backoff is visible")
+end)
+
+T.it("lists the NEAREST waypoints with bearing and range", function()
+  local text = rendered({
+    position = { x = 0, y = 70, z = 0, source = "gps", quality = 1, ageMs = 0 },
+    waypointCount = 2,
+    nearest = {
+      { waypoint = { name = "Home Pad" }, bearing = 0, distance = 50 },
+      { waypoint = { name = "Far Ridge" }, bearing = 135, distance = 900 },
+    },
+  })
+  T.isTrue(text:find("waypoints 2") ~= nil, "the count")
+  T.isTrue(text:find("Home Pad") ~= nil, "nearest named")
+  T.isTrue(text:find("N 0") ~= nil, "with a compass point and bearing")
+  T.isTrue(text:find("50m") ~= nil, "and a range")
+  T.isTrue(text:find("SE 135") ~= nil, "the second one too")
+end)
+
+T.it("wraps a problem rather than truncating it", function()
+  local _, rows = rendered({ problems = {
+    "no WIRELESS modem: gps.locate() has nothing to send on, so this computer cannot fix at all"
+  } })
+  local hits = 0
+  for _, row in ipairs(rows) do
+    T.isTrue(#row.text <= 51, "row fits: " .. row.text)
+    if row.text:find("WIRELESS") or row.text:find("cannot fix") then hits = hits + 1 end
+  end
+  T.isTrue(hits >= 2, "wrapped over rows, got " .. hits)
+end)
+
+T.it("every row fits at 51 and at 26 columns", function()
+  local worst = {
+    position = { x = -1234567, y = 200, z = 9876543, source = "estimate",
+                 quality = 0.123, ageMs = 123456, dead = true },
+    heading = 359,
+    link = { wired = "modem_extremely_long_name", wireless = "another_long_one",
+             published = 999999 },
+    stats = { sources = { { name = "gps", ok = 99999, bad = 99999, backedOff = true } } },
+    waypointCount = 99,
+    nearest = { { waypoint = { name = "a-very-long-waypoint-name" }, bearing = 359,
+                  distance = 123456 } },
+    problems = { "two beacons are configured at the SAME position -- one of them is a copy" },
+  }
+  for _, width in ipairs({ 51, 26 }) do
+    local rows = Console.render(NavConfig.withDefaults({}), worst, width, 19)
+    for _, row in ipairs(rows) do
+      T.isTrue(#row.text <= width, ("width %d: %q is %d"):format(width, row.text, #row.text))
+    end
+    for _, row in ipairs(rows.footer) do
+      T.isTrue(#row.text <= width, ("footer at %d: %q"):format(width, row.text))
+    end
+  end
+end)
+
+-- --------------------------------------------------------------- entry
+
+T.suite("nav waypoint entry")
+
+local function reader(answers)
+  local index = 0
+  return function() index = index + 1; return answers[index] end
+end
+
+T.it("a blank name CANCELS, so a prompt opened by mistake costs nothing", function()
+  local name, why = Console.readName(reader({ "" }))
+  T.isNil(name)
+  T.eq(why, "cancelled")
+end)
+
+T.it("a name is trimmed", function()
+  T.eq(Console.readName(reader({ "  Home Pad  " })), "Home Pad")
+end)
+
+T.it("ALL THREE COORDINATES OR NONE", function()
+  local coords = Console.readCoords(reader({ "100", "70", "-200" }))
+  T.eq(coords.x, 100); T.eq(coords.z, -200)
+
+  local bad, err = Console.readCoords(reader({ "100", "seventy", "-200" }))
+  T.isNil(bad, "refused")
+  T.isTrue(tostring(err):find("Y is not a number") ~= nil, "names the axis")
+  T.isTrue(tostring(err):find("nothing was added") ~= nil, "and reassures")
+end)
+
+T.it("THE PREVIEW MAKES A MIS-TYPED COORDINATE OBVIOUS before it is saved", function()
+  -- The whole reason for typing them here rather than editing a file.
+  local here = { x = 0, y = 70, z = 0 }
+  local text = Console.preview(here, { x = 0, y = 70, z = -100 })
+  T.isTrue(text:find("N 0") ~= nil, "gives a bearing: " .. text)
+  T.isTrue(text:find("100 blocks") ~= nil, "and a distance")
+
+  local typo = Console.preview(here, { x = 0, y = 70, z = -100000 })
+  T.isTrue(typo:find("100000 blocks") ~= nil, "a stray zero shows as an absurd range: " .. typo)
+end)
+
+T.it("the preview copes with no fix, and with the point you are standing on", function()
+  T.isTrue(Console.preview(nil, { x = 1, y = 2, z = 3 }):find("no fix") ~= nil, "no fix")
+  local same = Console.preview({ x = 5, y = 6, z = 7 }, { x = 5, y = 6, z = 7 })
+  T.isTrue(same:find("where you are now") ~= nil, "coincident: " .. same)
+end)
+
 return true

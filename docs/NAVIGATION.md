@@ -169,3 +169,63 @@ its way through every gate.
 - **every abort path fires when provoked** — stale fix, wrong pad block, drift, obstruction;
 - a nav-computer dropout degrades to hold and annunciates, and never produces a control
   transient.
+
+---
+
+## The nav computer, as built
+
+Installed with the Suite as the **nav** role. It needs **two modems**: an ender modem for GPS and
+the beacon mesh, and a wired one for the craft's cable. Half of that is a specific failure the
+screen names, because a nav computer with no radio cannot fix and one with no cable cannot tell
+anyone.
+
+```
+EasyHover NAV
+position  128 82 -344
+  from gps  0.2s old  q 1.00
+heading   47  NE
+---------------------------------------------------
+radio modem_0   cable modem_1
+published 1842 fixes
+  gps  ok 1840  failed 2
+---------------------------------------------------
+waypoints 3
+  Home Pad  SW 214  86m
+  North Ridge  N 4  1240m
+
+[M] mark here                        [A] add coords
+[D] delete                             [L] list all
+[F] fix now                                [Q] quit
+```
+
+**Keyboard-driven, plain `term`, no Basalt.** This screen has to *type* things — a waypoint name
+and three coordinates — and a mouse helps with neither. (The nav computer is advanced, so a mouse
+would work here; it just would not help.)
+
+When GPS drops, the estimate takes over and **says so on its own line**:
+
+```
+position  131 82 -350
+  DEAD RECKONED -- this is an estimate
+  from estimate  3.1s old  q 0.62
+```
+
+That flag was originally appended to the end of the source line, where a 51-column screen
+truncated away the single most important word on the page.
+
+### Heading comes from the flight computer
+
+Over telemetry — this computer has no gimbal. If `attitude.yaw` is absent the screen says
+**`heading NONE -- dead reckoning cannot run`**, because craft-frame velocity cannot be rotated
+into world axes without it and `Fix:reckon` refuses rather than integrating garbage.
+
+### The three waypoint paths, all live
+
+- **[M] mark here** — from the last real *fix*. Refuses a dead-reckoned or stale one: a pad you
+  cannot trust is worse than no pad, because you would fly to it and find open air.
+- **[A] add coords** — typed, with a **preview** before saving. A stray zero shows up as
+  `100000 blocks from here`, which is the whole reason to type them here rather than edit a file.
+- **[L] list all** — nearest first, with bearing and range.
+
+Both `/eh_waypoints.tbl` and `/eh_routes.tbl` are **protected paths**: the Suite never deletes
+them, and the e2e suite asserts a `--repair` leaves them intact with their contents.

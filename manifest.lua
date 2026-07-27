@@ -241,9 +241,9 @@
         },
         {
           ["dst"] = "gps_beacon/lib/config.lua",
-          ["size"] = 4869,
+          ["size"] = 4685,
           ["src"] = "gps_beacon/lib/config.lua",
-          ["sum"] = "b5b06a21",
+          ["sum"] = "55adb091",
         },
         {
           ["dst"] = "gps_beacon/lib/geometry.lua",
@@ -327,7 +327,7 @@
       ["title"] = "Entertainment",
     },
     ["nav"] = {
-      ["blurb"] = "Waypoints, routes, map UI, position fixing (GPS / radar). Feeds the flight computer.",
+      ["blurb"] = "Position fixing over GPS, waypoints, and the fix relay onto the craft's cable. Needs an ender modem AND a wired one.",
       ["configs"] = {
         "/eh_nav_config.tbl",
         "/eh_waypoints.tbl",
@@ -335,11 +335,85 @@
       },
       ["dirs"] = {
         "nav",
+        "shared",
       },
-      ["entry"] = "",
-      ["files"] = {},
+      ["entry"] = "nav/startup.lua",
+      ["files"] = {
+        {
+          ["dst"] = "nav/app.lua",
+          ["size"] = 12293,
+          ["src"] = "nav/app.lua",
+          ["sum"] = "eb6d7d74",
+        },
+        {
+          ["dst"] = "nav/lib/config.lua",
+          ["size"] = 5917,
+          ["src"] = "nav/lib/config.lua",
+          ["sum"] = "0494685e",
+        },
+        {
+          ["dst"] = "nav/lib/fix.lua",
+          ["size"] = 7189,
+          ["src"] = "nav/lib/fix.lua",
+          ["sum"] = "c57c7330",
+        },
+        {
+          ["dst"] = "nav/lib/geo.lua",
+          ["size"] = 5588,
+          ["src"] = "nav/lib/geo.lua",
+          ["sum"] = "c7353e5a",
+        },
+        {
+          ["dst"] = "nav/lib/relay.lua",
+          ["size"] = 4532,
+          ["src"] = "nav/lib/relay.lua",
+          ["sum"] = "092b2f67",
+        },
+        {
+          ["dst"] = "nav/lib/sources.lua",
+          ["size"] = 4165,
+          ["src"] = "nav/lib/sources.lua",
+          ["sum"] = "681106f0",
+        },
+        {
+          ["dst"] = "nav/lib/waypoints.lua",
+          ["size"] = 8156,
+          ["src"] = "nav/lib/waypoints.lua",
+          ["sum"] = "c112eab9",
+        },
+        {
+          ["dst"] = "nav/startup.lua",
+          ["size"] = 510,
+          ["src"] = "nav/startup.lua",
+          ["sum"] = "bbf402d4",
+        },
+        {
+          ["dst"] = "nav/ui/console.lua",
+          ["size"] = 8022,
+          ["src"] = "nav/ui/console.lua",
+          ["sum"] = "66ed3bb2",
+        },
+        {
+          ["dst"] = "shared/log.lua",
+          ["size"] = 2735,
+          ["src"] = "shared/log.lua",
+          ["sum"] = "d5d9781f",
+        },
+        {
+          ["dst"] = "shared/util.lua",
+          ["size"] = 2152,
+          ["src"] = "shared/util.lua",
+          ["sum"] = "29c90f91",
+        },
+        {
+          ["dst"] = "startup.lua",
+          ["size"] = 294,
+          ["src"] = "launchers/nav.lua",
+          ["sum"] = "1d99eddd",
+        },
+      },
       ["luaPath"] = "/nav",
-      ["status"] = "prepared",
+      ["status"] = "released",
       ["title"] = "Navigation computer",
     },
     ["ui_aux"] = {
@@ -496,5 +570,5 @@
     ["size"] = 36872,
     ["sum"] = "305c58ce",
   },
-  ["version"] = "33afc1e0",
+  ["version"] = "43e5fb6c",
 }
