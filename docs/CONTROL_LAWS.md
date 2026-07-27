@@ -478,3 +478,38 @@ Two changes, because "running" and "being run" are not the same thing:
 The state carries `sinceTickMs`, so the panel shows **`STALLED`** rather than counting down over a
 run nothing is advancing. That distinction is worth the line: a countdown that keeps ticking is the
 single most convincing wrong signal this screen can give.
+
+---
+
+## Who owns the thrusters, and when the question is asked
+
+`App:cycle` returns early on `DAMPED` and `FAILSAFE` — stop steering, keep flying, nozzles to
+neutral. Correct for a craft in the air. **Catastrophic when the ownership check sat below it.**
+
+```lua
+if state == "DAMPED" or state == "FAILSAFE" then
+    self.thrusters:neutralVectors()     -- re-centres the nozzles, every cycle
+    return state                         -- ...and never reaches the sweep
+end
+```
+
+`FAILSAFE` means *sensors unhealthy*, which is exactly where a **half-configured craft** sits: the
+gimbal and the down-facing laser are not assigned yet, because assigning them is what the pilot is
+in the middle of doing. That is precisely when the pre-flight sweep is needed, and precisely when
+it could not run. The consequences compounded into something that looked like four unrelated bugs:
+
+- the run was **never ticked**, so it could never finish
+- so every later START was refused — `a self test is already running` — **for ever**
+- while `neutralVectors()` **re-centred the nozzles on every cycle**, cancelling anything the sweep
+  had managed to command
+- and nothing anywhere said why
+
+The ownership question is now asked **first**, above that return. A sweep owns the thrusters
+exclusively in *any* state, because only actual flight (`FLIGHT`, `HOVER`, `REVERSE`) is a reason
+to stop one — `DAMPED` and `FAILSAFE` describe a craft whose sensors this very test exists to help
+set up. An owner returns early, so the mixer never runs and cannot fight it for the same nozzles.
+
+**401 tests passed over this.** Every one exercised `selfTest:tick` directly or drove `App:cycle` on
+a healthy craft, so none ever entered the state where the branch was unreachable. The regression
+tests force `DAMPED` and assert both halves: the sweep is still ticked, and `neutralVectors` is not
+called behind its back.

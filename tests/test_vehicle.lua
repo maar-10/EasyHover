@@ -1395,6 +1395,62 @@ T.it("publishes how long since the run was last driven", function()
   fs.delete(path)
 end)
 
+--- THE BUG 401 TESTS DID NOT SEE. The DAMPED/FAILSAFE branch returns early from App:cycle, and
+--- the sweep was serviced BELOW it. So a craft in either state never ticked its run: it could
+--- never finish, every later START was refused with "a self test is already running" for ever,
+--- and neutralVectors() re-centred the nozzles on every cycle, cancelling whatever the sweep had
+--- managed to command.
+---
+--- FAILSAFE means "sensors unhealthy", which is exactly where a half-configured craft sits --
+--- gimbal and laser not assigned yet, because assigning them is what the pilot is doing. That is
+--- precisely when this test is needed, and precisely when it could not run.
+T.it("the sweep runs in DAMPED, where nothing else steers", function()
+  local app, path = appRig(fullCraft())
+  app.state.mode = "GROUND"
+  T.isTrue((app:handleCommand({ cmd = "selfTest", action = "start" })), "started")
+
+  -- force the damped path: oscillation detected, so the mixer must not steer
+  app.osc.shouldDamp = function() return true end
+
+  local moved = 0
+  for _, entry in ipairs(app.per:thrusterList()) do
+    local inner = entry.dev.setVector
+    if type(inner) == "function" then
+      entry.dev.setVector = function(x, y) moved = moved + 1; return inner(x, y) end
+    end
+  end
+
+  local started = app.selfTest.run.startedAt
+  for at = 0, 3000, 100 do app.selfTest:tick(started + at) end   -- past the ramp
+  for _ = 1, 10 do app:cycle(0.05) end
+
+  T.eq(app.state.mode, "DAMPED", "the craft really is in the damped state")
+  T.isTrue(app.selfTest:isRunning(), "and the sweep is still running")
+  T.isTrue(moved > 0, "and the nozzles were commanded through App:cycle")
+  fs.delete(path)
+end)
+
+T.it("and the damped path does not re-centre a nozzle the sweep owns", function()
+  -- Asserts the MECHANISM rather than a resulting angle: App:cycle ticks the sweep on the real
+  -- clock, so a test that pre-ticks it with synthetic times just finds it back at the start of its
+  -- ramp, commanding zero, and proves nothing about who centred it.
+  local app, path = appRig(fullCraft())
+  app.state.mode = "GROUND"
+  app:handleCommand({ cmd = "selfTest", action = "start" })
+
+  local neutralled = 0
+  local inner = app.thrusters.neutralVectors
+  app.thrusters.neutralVectors = function(...) neutralled = neutralled + 1; return inner(...) end
+
+  app.osc.shouldDamp = function() return true end
+  for _ = 1, 10 do app:cycle(0.05) end
+
+  T.eq(app.state.mode, "DAMPED", "the damped path is the one being taken")
+  T.isTrue(app.selfTest:isRunning(), "the sweep still owns the thrusters")
+  T.eq(neutralled, 0, "and nothing re-centred them behind its back")
+  fs.delete(path)
+end)
+
 T.it("respects each thruster's own maxVector limit", function()
   local cfg = fullCraft()
   cfg.hardware.thrusters[1].maxVector = 0.3

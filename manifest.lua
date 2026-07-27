@@ -27,9 +27,9 @@
       ["files"] = {
         {
           ["dst"] = "flight/app.lua",
-          ["size"] = 43512,
+          ["size"] = 44434,
           ["src"] = "flight/app.lua",
-          ["sum"] = "259ba066",
+          ["sum"] = "17940e9f",
         },
         {
           ["dst"] = "flight/diskmenu.lua",
@@ -594,5 +594,5 @@
     ["size"] = 36872,
     ["sum"] = "305c58ce",
   },
-  ["version"] = "1afa1b8c",
+  ["version"] = "73fe0f82",
 }

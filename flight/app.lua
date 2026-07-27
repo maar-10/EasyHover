@@ -277,6 +277,50 @@ function App:cycle(dt)
   })
   self.state.mode = state
 
+  -- ---- WHO OWNS THE THRUSTERS?
+  --
+  -- Asked BEFORE the DAMPED/FAILSAFE return below, and that ordering is the whole point.
+  --
+  -- A pre-flight sweep owns the thrusters exclusively while it runs, and it has to be serviced in
+  -- ANY flight state -- FAILSAFE above all. FAILSAFE means "sensors unhealthy", which is exactly
+  -- where a half-configured craft sits: the gimbal and the laser are not assigned yet, because
+  -- assigning them is what the pilot is in the middle of doing. That is precisely when the sweep
+  -- is needed, and it was precisely when it could not run.
+  --
+  -- With this branch below the early return, a craft in FAILSAFE never ticked its sweep. The run
+  -- could therefore never finish, so every later START was refused with "a self test is already
+  -- running" -- for ever -- while neutralVectors() re-centred the nozzles on every single cycle,
+  -- cancelling any deflection the sweep managed to command. Nothing moved, nothing could be
+  -- started, and nothing said why.
+  --
+  -- Applying the mixer's commands as well would have the attitude loop fighting the sweep for the
+  -- same nozzles: both spoils the test and is the one thing this vehicle must never do. So an
+  -- owner returns early, and the mixer does not run at all.
+  local activelyFlying = (state == "FLIGHT" or state == "HOVER" or state == "REVERSE")
+  if self.axisMap:isHolding() then
+    if activelyFlying then
+      self.axisMap:release("the craft is flying")
+    else
+      self.axisMap:tick(now, (self.state:get("pilot") or {}).pressedCodes)
+    end
+    self:publish(measured, capability, dt, overrun)
+    return state
+  elseif self.selfTest:isRunning() then
+    -- Only ACTIVE flight aborts. DAMPED and FAILSAFE are not flight -- they are a craft whose
+    -- sensors this test exists to help set up.
+    if activelyFlying then
+      self.selfTest:abort("aborted: the craft is flying")
+    else
+      self.selfTest:tick(now)
+    end
+    self:publish(measured, capability, dt, overrun)
+    return state
+  elseif self.thrusters:isIdentifying() then
+    self.thrusters:tickIdentify()
+    self:publish(measured, capability, dt, overrun)
+    return state
+  end
+
   -- DAMPED / FAILSAFE: stop steering, keep flying. Vectors to neutral, thrust untouched.
   if state == "DAMPED" or state == "FAILSAFE" then
     self.thrusters:neutralVectors()
@@ -364,33 +408,7 @@ function App:cycle(dt)
     allowPrecision = demand.allowPrecision or (self.modes.lateral == "precision"),
   })
 
-  -- The self test and the identify sweep each OWN the thrusters while they run. Applying the
-  -- mixer's commands as well would have the attitude loop fighting the sweep for the same
-  -- nozzles, which would both spoil the test and be the one thing this vehicle must never do.
-  if self.axisMap:isHolding() then
-    local flying = (self.state.mode == "FLIGHT" or self.state.mode == "HOVER"
-      or self.state.mode == "REVERSE")
-    if flying then
-      self.axisMap:release("the craft is flying")
-    else
-      self.axisMap:tick(now, (self.state:get("pilot") or {}).pressedCodes)
-    end
-  elseif self.selfTest:isRunning() then
-    -- Only ACTIVE flight aborts. GROUND depends on a down-facing laser being assigned, so
-    -- demanding it here would make the pre-flight test unavailable on a half-configured craft.
-    -- The sweep's own power interlock is the guarantee that nothing is holding the craft up.
-    local flying = (self.state.mode == "FLIGHT" or self.state.mode == "HOVER"
-      or self.state.mode == "REVERSE")
-    if flying then
-      self.selfTest:abort("aborted: the craft is flying")
-    else
-      self.selfTest:tick(now)
-    end
-  elseif self.thrusters:isIdentifying() then
-    self.thrusters:tickIdentify()
-  else
-    self.thrusters:apply(commands)
-  end
+  self.thrusters:apply(commands)
 
   self:publish(measured, capability, dt, overrun)
   return state
