@@ -351,3 +351,44 @@ The UI test for this was **initially a false green**: it asserted the displayed 
 "cut", and the tail of the shortened long form happens to contain "cut", so restoring the old
 `fitEnd` still passed. It now asserts the text *equals* the craft's short form — pin the mechanism,
 not a keyword that a broken implementation can satisfy by accident.
+
+---
+
+## The sweep holds; it does not glide
+
+The SELF TEST swept each nozzle with a **sine**, and the pilot watched it run with nothing moving.
+Two causes, compounding:
+
+1. **Nozzle aim is a 15-step grid** (`Math.round(x * 15)` into four redstone signals — see
+   [MOD_API_RESEARCH.md](MOD_API_RESEARCH.md)). A sine leaving the origin spends its opening
+   moments below 1/30 of full scale, which stores as **zero**. Measured through the real loop, the
+   sweep was commanding `0.0005` — exactly nothing.
+2. **A sine spends most of its life away from its extremes**, and this control loop is slow (every
+   thruster `@LuaFunction` is `mainThread`, so each call waits a server tick). The handful of
+   samples landing in a 7.5 s phase were therefore mostly small deflections. Small, quantised,
+   invisible.
+
+So the pattern **ramps to full deflection and holds it** — 40% of each phase is spent at a limit,
+where a nozzle is unmistakable from across the bay and cannot quantise away:
+
+```
+  t(s)   commanded   signal
+   0.5     0.2667      4
+   1.5     0.6000      9   <- hold
+   2.5     0.6000      9
+   4.0    -0.6000     -9   <- hold the other way
+   5.0    -0.6000     -9
+   6.5     0.0000      0   <- centred before the next axis
+```
+
+The full range is still covered, which is what a sweep is for — it is *where the time is spent*
+that changed.
+
+Two things fall out of the same finding:
+
+- **Commands are quantised to the grid before sending**, so what is commanded is what happens —
+  and **toward zero, never nearest**, because rounding up turned a `maxVector` of 0.30 into 0.33
+  and broke a configured authority limit.
+- **An unchanged aim is not re-sent.** On the quantised grid consecutive samples are usually
+  identical, and every `setVector` costs a server tick — the sweep was slowing the very loop that
+  advances it. One phase went from ~600 writes to 20.

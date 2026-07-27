@@ -8,6 +8,8 @@ local Peripherals = require("lib.peripherals")
 local Engine = require("lib.io.engine")
 local Disk = require("lib.io.disk")
 local Fuel = require("lib.io.fuel")
+local Thrusters = require("lib.io.thrusters")
+local SelfTest = require("lib.control.selftest")
 
 local mock = dofile("/tests/mocks/peripherals.lua")
 
@@ -1090,6 +1092,86 @@ T.it("sweeps the FULL range of an axis, both directions", function()
   for _, v in ipairs(seenX) do lo = math.min(lo, v); hi = math.max(hi, v) end
   T.isTrue(hi > 0.5, "reached a positive deflection: " .. tostring(hi))
   T.isTrue(lo < -0.5, "and a negative one: " .. tostring(lo))
+  fs.delete(path)
+end)
+
+--- WHY THE PILOT SAW NOTHING MOVE. The mod stores nozzle aim as four redstone signals via
+--- `Math.round(x * 15)`, so aim lives on a 15-step grid and anything under 1/30 of full scale
+--- rounds to ZERO. The sweep was a sine leaving the origin, so its opening samples commanded
+--- literal nothing -- and a sine spends most of its life away from the extremes, which on a slow
+--- control loop (every thruster @LuaFunction is mainThread) is most of the samples you get.
+T.it("commands a deflection the mod can actually represent, not one that rounds to zero", function()
+  local app, path = appRig(fullCraft())
+  app.state.mode = "GROUND"
+  app:handleCommand({ cmd = "selfTest", action = "start" })
+  local started = app.selfTest.run.startedAt
+
+  local seen = {}
+  for _, entry in ipairs(app.per:thrusterList()) do
+    local id = entry.id
+    entry.dev.setVector = function(x, y)
+      if id == "lift_fl" then seen[#seen + 1] = math.max(math.abs(x), math.abs(y)) end
+    end
+  end
+  for offset = 0, 7400, 100 do app.selfTest:tick(started + offset) end
+
+  T.isTrue(#seen > 0, "the nozzle was commanded at all")
+  local visible, zeroish = 0, 0
+  for _, v in ipairs(seen) do
+    -- one grid step is 1/15; below half of one the mod stores nothing at all
+    if v * 15 >= 1 then visible = visible + 1 end
+    if v > 0 and v * 15 < 0.5 then zeroish = zeroish + 1 end
+  end
+  T.eq(zeroish, 0, "no command that the mod would round away to zero")
+  T.isTrue(visible > 0, "and real, representable deflections were commanded")
+  fs.delete(path)
+end)
+
+--- A sine spends most of its time near the middle. A pilot standing in the bay needs the nozzle
+--- to GO somewhere and STAY there long enough to see which one moved and which way.
+T.it("holds full deflection rather than passing through it", function()
+  local held = 0
+  for i = 0, 100 do
+    if math.abs(SelfTest.waveAt(i / 100)) > 0.999 then held = held + 1 end
+  end
+  T.isTrue(held >= 30,
+    ("only %d%% of the phase is at full deflection"):format(held))
+  -- and it still covers the whole range, which is what a sweep is for
+  local lo, hi = 1, -1
+  for i = 0, 100 do
+    local v = SelfTest.waveAt(i / 100)
+    lo = math.min(lo, v); hi = math.max(hi, v)
+  end
+  T.isTrue(hi > 0.999, "reaches the positive extreme")
+  T.isTrue(lo < -0.999, "and the negative one")
+  T.eq(SelfTest.waveAt(1), 0, "and ends centred, so the next axis starts from a known place")
+end)
+
+T.it("quantising never exceeds what was asked for", function()
+  -- Rounding to NEAREST turned a maxVector of 0.30 into 0.33 and broke a configured limit.
+  for _, v in ipairs({ 0.3, 0.6, 0.99, 0.05, 1.0, -0.3, -0.99, 0 }) do
+    local q = Thrusters.quantiseVector(v)
+    T.isTrue(math.abs(q) <= math.abs(v) + 1e-9,
+      ("%s quantised UP to %s"):format(tostring(v), tostring(q)))
+    T.eq(q * 15, math.floor(q * 15 + 0.5), tostring(v) .. " landed off the grid: " .. tostring(q))
+  end
+end)
+
+--- Every setVector is mainThread and costs a server tick, so the sweep was slowing the very loop
+--- that advances it -- while re-sending values the mod already had.
+T.it("does not re-send a deflection the nozzle is already holding", function()
+  local app, path = appRig(fullCraft())
+  app.state.mode = "GROUND"
+  app:handleCommand({ cmd = "selfTest", action = "start" })
+  local started = app.selfTest.run.startedAt
+  local writes = 0
+  for _, entry in ipairs(app.per:thrusterList()) do
+    entry.dev.setVector = function() writes = writes + 1 end
+  end
+  -- 200 ticks across one phase; the pattern holds still for most of it
+  for offset = 0, 7400, 37 do app.selfTest:tick(started + offset) end
+  T.isTrue(writes > 0, "it did command the nozzles")
+  T.isTrue(writes < 200, "but did not write on every tick: " .. tostring(writes))
   fs.delete(path)
 end)
 

@@ -172,6 +172,29 @@ end
 --- Only the self test uses this, and only on the ground. The mapping is exactly what is under
 --- test there: pushing a sweep through mapVector() would hide a mirrored or rotated mounting,
 --- because the wrong mapping would cancel against itself and look correct.
+--- Nozzle aim resolution. The mod does NOT store a float: `setVectorCoordinates` converts the
+--- pair into four redstone signals with `Math.round(x * 15)`, so aim lives on a 15-step grid per
+--- direction. Commanding 0.0005 therefore commands exactly zero, which is how a sine sweep leaving
+--- the origin can move nothing at all.
+Thrusters.VECTOR_STEPS = 15
+
+--- Put a deflection on the grid the mod will store anyway, so what is commanded is what happens --
+--- and so two consecutive samples landing on the same step can be recognised as one write and
+--- skipped. Every setVector is `mainThread = true` and costs a server tick.
+---
+--- TOWARDS ZERO, NOT NEAREST. Rounding to nearest turned a maxVector of 0.30 into 0.33 and
+--- silently exceeded a configured authority limit -- and because the mod rounds too, the limit is
+--- only ever achievable at a grid point, so the choice is which side to miss it on. Under. Always
+--- under: maxVector exists to leave the attitude loop room, and the caller asked for "no more
+--- than this".
+function Thrusters.quantiseVector(v)
+  if type(v) ~= "number" then return 0 end
+  v = math.max(-1, math.min(1, v))
+  local steps = Thrusters.VECTOR_STEPS
+  local sign = v < 0 and -1 or 1
+  return sign * math.floor(math.abs(v) * steps) / steps
+end
+
 function Thrusters:setVectorRaw(id, nx, ny)
   local entry = self.per.thrusters[id]
   if not entry then return false, "no such thruster: " .. tostring(id) end

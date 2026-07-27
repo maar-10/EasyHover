@@ -347,3 +347,39 @@ thrust readouts return 0 while the throttle keeps its value — which is what an
 really does.
 
 A fix for a physical-semantics bug is not verified until the mock can express the physics.
+
+---
+
+## ⚠️ Nozzle aim is 15 discrete steps, stored as four redstone signals
+
+`setVector(x, y)` does **not** store a float. `VectorThrusterBlockEntity.setVectorCoordinates`:
+
+```java
+westSignal = x > 0 ? Math.round(x * 15) : 0;
+eastSignal = x < 0 ? Math.round(-x * 15) : 0;
+downSignal = y > 0 ? Math.round(y * 15) : 0;
+upSignal   = y < 0 ? Math.round(-y * 15) : 0;
+```
+
+and `tick()` recomputes the target from those signals every tick:
+
+```java
+targetVectorX = clamp((westSignal - eastSignal) / 15.0f, -1, 1);
+```
+
+Consequences, all of which bit:
+
+- **Anything below 1/30 of full scale commands exactly zero.** A sweep ramping out of the origin
+  moves nothing at all until it clears that. This is why a sine sweep "ran" with no nozzle moving.
+- **A limit cannot be honoured exactly.** `maxVector = 0.30` is not on the grid; the reachable
+  neighbours are `4/15 = 0.267` and `5/15 = 0.333`. Round toward zero, always — rounding to nearest
+  silently exceeds a configured authority limit.
+- **Consecutive commands often land on the same step**, so re-sending is pure cost. Every
+  `setVector` is `mainThread = true` and waits on a server tick.
+
+`currentVector` tweens toward the target every tick **unconditionally** — it does not require the
+thruster to be powered or fuelled. So zeroing the throttle does not freeze the nozzles.
+
+The four `VectorRedstoneLinkBehaviour` receivers write the same signals, but only via
+`setReceivedStrength` when Create's redstone-link network updates — not every tick — so a computer's
+`setVector` is not continuously overwritten by an idle link.

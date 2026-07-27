@@ -17,6 +17,7 @@
 ]]
 
 local Util = require("lib.util")
+local Thrusters = require("lib.io.thrusters")
 
 local SelfTest = {}
 SelfTest.__index = SelfTest
@@ -33,6 +34,38 @@ SelfTest.STEPS = {
 
 local STEP_MS = 15000
 local PHASES = { { axis = "x", label = "X sweep" }, { axis = "y", label = "Y sweep" } }
+
+--- The deflection pattern across one phase, as a fraction of the nozzle's authority limit.
+---
+--- THIS WAS A SINE, AND THE PILOT SAW NOTHING MOVE. Two reasons, and they compound:
+---
+---   * The mod stores nozzle aim as FOUR REDSTONE SIGNALS. `setVectorCoordinates` does
+---     `Math.round(x * 15)`, so aim lives on a 15-step grid and anything under 1/30 of full
+---     scale rounds to ZERO. A sine leaving the origin spends its first moments below that,
+---     commanding literal nothing.
+---   * A sine spends most of its time away from its extremes, so on a slow control loop -- and
+---     this loop is slow, because every thruster @LuaFunction is mainThread -- the few samples
+---     that land in a 7.5 s phase are mostly small deflections. Small, quantised, invisible.
+---
+--- So: RAMP TO FULL DEFLECTION AND HOLD IT. A held extreme is unmistakable from across the bay,
+--- it cannot quantise away, and it does not care where in the phase the loop happens to sample.
+--- The full range is still covered, which is what the sweep is for.
+---
+---   0.00-0.15  ramp out to +1
+---   0.15-0.35  HOLD +1
+---   0.35-0.50  ramp back through 0 to -1
+---   0.50-0.70  HOLD -1
+---   0.70-0.85  ramp back to 0
+---   0.85-1.00  rest at 0, so the next axis starts from a known centre
+function SelfTest.waveAt(fraction)
+  fraction = math.max(0, math.min(1, fraction or 0))
+  if fraction < 0.15 then return fraction / 0.15 end
+  if fraction < 0.35 then return 1 end
+  if fraction < 0.50 then return 1 - ((fraction - 0.35) / 0.15) * 2 end
+  if fraction < 0.70 then return -1 end
+  if fraction < 0.85 then return -1 + ((fraction - 0.70) / 0.15) end
+  return 0
+end
 
 function SelfTest.new(thrusters, peripherals, cfg, log, state)
   local self = setmetatable({}, SelfTest)
@@ -156,6 +189,8 @@ function SelfTest:start(opts)
     lastPowerCheck = now,
     -- Nothing is judged until the fade envelope has had time to reach zero.
     settleUntil = now + SETTLE_MS,
+    -- Last quantised aim per thruster, so an unchanged write is skipped.
+    commanded = {},
   }
   self.log:info("self test started")
   self:publish()
@@ -255,20 +290,27 @@ function SelfTest:tick(now)
     end
   end
 
-  -- One full sine cycle across the phase: 0 -> + -> 0 -> - -> 0. That covers the whole range
-  -- of the axis and, because a sine passes through zero, it is obvious which way it went first.
-  local fraction = p.intoPhaseMs / p.phaseMs
-  local wave = math.sin(fraction * 2 * math.pi)
+  local wave = SelfTest.waveAt(p.intoPhaseMs / p.phaseMs)
 
   for _, entry in ipairs(members) do
     if entry.canVector then
       local limit = Util.clamp(entry.spec.maxVector or 0.6, 0, 1)
-      local value = wave * limit
+      -- Quantised to the grid the mod actually stores, so what is commanded is what happens.
+      local value = Thrusters.quantiseVector(wave * limit)
       local nx = (p.axis == "x") and value or 0
       local ny = (p.axis == "y") and value or 0
-      -- Deliberately RAW: the point is to see the nozzle's own axes, not the craft-frame
-      -- mapping the mixer would apply. A mirrored mounting is invisible through the mapping.
-      self.thrusters:setVectorRaw(entry.id, nx, ny)
+
+      -- SKIP AN UNCHANGED WRITE. setVector is `mainThread = true`, so every call waits on a
+      -- server tick -- and on the quantised grid consecutive samples are usually identical, so
+      -- most of those calls were buying nothing while slowing the loop that drives the sweep.
+      local key = entry.id
+      local last = self.run.commanded[key]
+      if last == nil or last.nx ~= nx or last.ny ~= ny then
+        self.run.commanded[key] = { nx = nx, ny = ny }
+        -- Deliberately RAW: the point is to see the nozzle's own axes, not the craft-frame
+        -- mapping the mixer would apply. A mirrored mounting is invisible through the mapping.
+        self.thrusters:setVectorRaw(entry.id, nx, ny)
+      end
     end
   end
 
