@@ -150,7 +150,19 @@ local SETTLE_MS = 2500
 
 function SelfTest:start(opts)
   opts = opts or {}
-  if self.run then return false, "a self test is already running", "ALREADY RUNNING" end
+  local now = opts.now or os.epoch("utc")
+  if self.run then
+    -- A run that is not being ticked cannot finish on its own, so refusing here would lock the
+    -- screen out permanently. Pressing START is an unambiguous instruction: take the stalled run
+    -- over rather than defend it.
+    if self:isStalled(now) then
+      self.log:warn("self test: taking over a stalled run (no tick for %.1fs)",
+        (now - (self.run.lastTickAt or now)) / 1000)
+      self:abort("aborted: the previous run stalled", "PREV STALLED")
+    else
+      return false, "a self test is already running", "ALREADY RUNNING"
+    end
+  end
 
   -- Wording lives HERE rather than in app.lua so both lengths of every refusal stay in one file.
   --
@@ -189,6 +201,8 @@ function SelfTest:start(opts)
     lastPowerCheck = now,
     -- Nothing is judged until the fade envelope has had time to reach zero.
     settleUntil = now + SETTLE_MS,
+    -- When tick() last ran. A run that is not being driven is not a run.
+    lastTickAt = now,
     -- Last quantised aim per thruster, so an unchanged write is skipped.
     commanded = {},
   }
@@ -245,9 +259,27 @@ function SelfTest:progress(now)
 end
 
 --- Drive one loop's worth. Returns true while the test owns the thrusters.
+--- Longer than any plausible control-loop period, short enough that a pilot notices. The loop
+--- runs many times a second; three seconds without a tick is not slowness, it is stopped.
+local STALL_MS = 3000
+
+--- Is a run nominally in progress but not actually being driven?
+---
+--- THE TRAP THIS EXISTS FOR: a run is held in `self.run` and finishes only when tick() carries it
+--- past its own duration. If nothing ever calls tick() -- App:cycle taking a different branch, the
+--- loop wedged, a reboot mid-run leaving a saved intent -- the run never ends, and every later
+--- START is refused with "a self test is already running". For ever. The one screen meant to
+--- diagnose the craft becomes the thing that needs diagnosing.
+function SelfTest:isStalled(now)
+  if not self.run then return false end
+  now = now or os.epoch("utc")
+  return (now - (self.run.lastTickAt or self.run.startedAt or now)) > STALL_MS
+end
+
 function SelfTest:tick(now)
   if not self.run then return false end
   now = now or os.epoch("utc")
+  self.run.lastTickAt = now
   local p = self:progress(now)
   if p.elapsedMs >= p.totalMs then
     self:finish()
@@ -387,6 +419,9 @@ function SelfTest:publish(progress)
       phase = p.phase,
       moving = current and #(current.vectoring or {}) or nil,
       groupCount = current and current.count or nil,
+      -- How long since this run was last driven. The panel turns a large value into STALLED --
+      -- "running" and "being run" are not the same thing and the difference is the whole bug.
+      sinceTickMs = math.max(0, (os.epoch("utc")) - (self.run.lastTickAt or self.run.startedAt)),
       -- Commanded vs achieved, from the witness nozzle. Feedback, not intention.
       witness = self.run.witness,
       aimCommanded = self.run.aimCommanded,

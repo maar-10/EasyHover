@@ -1348,6 +1348,53 @@ T.it("publishes a countdown for the step AND for the whole run", function()
   fs.delete(path)
 end)
 
+--- THE TRAP THE PILOT HIT: "ALREADY RUNNING", for ever. A run lives in self.run and ends only
+--- when tick() carries it past its own duration. If nothing ever drives it -- App:cycle taking
+--- another branch, the loop wedged, a reboot leaving a saved intent -- it never ends, and every
+--- later START is refused BY IT. The screen meant to diagnose the craft becomes the thing that
+--- needs diagnosing.
+T.it("START takes over a stalled run instead of being refused by it", function()
+  local app, path = appRig(fullCraft())
+  app.state.mode = "GROUND"
+  T.isTrue((app:handleCommand({ cmd = "selfTest", action = "start" })), "first run starts")
+
+  -- nothing drives it: no tick at all
+  local runAt = app.selfTest.run.startedAt
+  app.selfTest.run.lastTickAt = runAt - 30000        -- half a minute with no tick
+  T.isTrue(app.selfTest:isStalled(), "it is stalled, not running")
+
+  local ok, detail = app:handleCommand({ cmd = "selfTest", action = "start" })
+  T.isTrue(ok, "START takes it over: " .. tostring((detail or {}).error))
+  T.isFalse(app.selfTest:isStalled(), "and the new run is live")
+  fs.delete(path)
+end)
+
+T.it("but a run that IS being driven is still protected", function()
+  local app, path = appRig(fullCraft())
+  app.state.mode = "GROUND"
+  app:handleCommand({ cmd = "selfTest", action = "start" })
+  -- Ticked WELL PAST the stall window, so this only passes if each tick records that it ran.
+  -- Ticking at +100ms would pass even with the timestamp never updated, since the run would still
+  -- be within STALL_MS of its own start.
+  local started = app.selfTest.run.startedAt
+  for at = 0, 8000, 500 do app.selfTest:tick(started + at) end
+  T.isFalse(app.selfTest:isStalled(started + 8200), "being ticked, 8 s in")
+  local ok, detail = app:handleCommand({ cmd = "selfTest", action = "start" })
+  T.isFalse(ok, "a healthy run is not interrupted")
+  T.eq((detail or {}).errorShort, "ALREADY RUNNING", "and says so")
+  fs.delete(path)
+end)
+
+T.it("publishes how long since the run was last driven", function()
+  local app, path = appRig(fullCraft())
+  app.state.mode = "GROUND"
+  app:handleCommand({ cmd = "selfTest", action = "start" })
+  app.selfTest:tick(app.selfTest.run.startedAt + 100)
+  local st = app.state:get("selfTest")
+  T.eq(type(st.sinceTickMs), "number", "so the panel can say STALLED rather than count down")
+  fs.delete(path)
+end)
+
 T.it("respects each thruster's own maxVector limit", function()
   local cfg = fullCraft()
   cfg.hardware.thrusters[1].maxVector = 0.3

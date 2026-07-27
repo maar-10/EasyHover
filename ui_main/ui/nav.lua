@@ -511,7 +511,12 @@ function Nav.build(frame, opts)
       -- NOTHING TO SWEEP is the most useful thing this screen can say, and it was buried in a
       -- "lif 0/4" findings line that only parsed if you already knew what it meant. A group whose
       -- thrusters are all thrust-only has no nozzle to move, so the countdown means nothing.
-      if st.moving == 0 then
+      if (st.sinceTickMs or 0) > 3000 then
+        -- Nominally running, not actually being driven. Without this the screen counts down over
+        -- a run nothing is advancing, and every later START is refused by it.
+        selfStatus:setText(Theme.fit("STALLED", width))
+        selfStatus:setForeground(Theme.warning)
+      elseif st.moving == 0 then
         selfStatus:setText(Theme.fit(("NO NOZZLE: %d THR"):format(st.groupCount or 0), width))
         selfStatus:setForeground(Theme.warning)
       else

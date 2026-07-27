@@ -457,3 +457,24 @@ which is correct during a sweep and wrong at the end of one: a readback that lie
 writer caught mid-revert, would leave a nozzle hard over with nothing scheduled to correct it.
 Finishing a test is the moment to command the safe state rather than reason about whether it is
 already held. Both `finish()` and `abort()` use it.
+
+---
+
+## "ALREADY RUNNING", for ever
+
+A run lives in `self.run` and ends only when `tick()` carries it past its own duration. If nothing
+ever drives it — `App:cycle` taking a different branch, the loop wedged, a reboot leaving a saved
+intent — **it never ends, and every later START is refused by it.** The screen meant to diagnose the
+craft becomes the thing that needs diagnosing, and there is no way out from the cockpit.
+
+Two changes, because "running" and "being run" are not the same thing:
+
+- every `tick()` records `lastTickAt`, and `isStalled()` is true after **3 s** without one — far
+  longer than any plausible control-loop period, short enough that a pilot notices
+- **START takes a stalled run over** instead of being refused by it. Pressing START is an
+  unambiguous instruction; defending a run that nothing is advancing serves nobody. A run that *is*
+  being ticked is still protected, and still answers `ALREADY RUNNING`.
+
+The state carries `sinceTickMs`, so the panel shows **`STALLED`** rather than counting down over a
+run nothing is advancing. That distinction is worth the line: a countdown that keeps ticking is the
+single most convincing wrong signal this screen can give.

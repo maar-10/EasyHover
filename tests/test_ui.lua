@@ -1387,6 +1387,16 @@ T.it("counts down the step AND the whole run, at every width", function()
   end
 end)
 
+T.it("says STALLED rather than counting down over a run nothing is driving", function()
+  local panel = navRig(15, 10)
+  panel.update(navModel(nil, { running = true, step = 1, steps = 3, label = "LIFT THRUSTERS",
+    phase = "X sweep", stepRemainingMs = 9000, remainingMs = 30000, moving = 4, groupCount = 4,
+    writeFails = 0, sinceTickMs = 12000 }))
+  T.eq(panel.elements.status:getText(), Theme.fit("STALLED", 15),
+    "got: " .. panel.elements.status:getText())
+  T.eq(panel.elements.status:getForeground(), Theme.warning, "flagged")
+end)
+
 T.it("says an aborted run was aborted, and why", function()
   local panel = navRig()
   panel.update(navModel(nil, { running = false, aborted = "aborted: the craft is flying" }))
