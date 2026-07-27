@@ -82,6 +82,7 @@ function Link:onMessage(sender, message, protocol)
   elseif protocol == self.cfg.comms.commandProtocol then
     if type(message) == "table" and message.ack ~= nil then
       self.lastAck = message
+      self.pending = nil
       if not message.ack then
         self.log:warn("command rejected: %s", textutils.serialise(message.detail or message.error or {}))
       end
@@ -116,8 +117,15 @@ end
 
 --- Send a command to the flight computer. Broadcast when we have not seen it yet, so the very
 --- first command does not have to wait for a telemetry frame.
+--- THE PREVIOUS ANSWER IS NOT THIS ANSWER. lastAck was set on arrival and never cleared, so one
+--- refusal stayed on screen in red indefinitely -- long after the condition behind it had gone.
+--- A pilot pressing a button then reads the fossil of an older press and concludes the craft
+--- refused THIS one, which sends the diagnosis somewhere unrelated. Ask again, and the screen
+--- must go quiet until the craft answers.
 function Link:send(cmd)
   if not self.modem then return false, "link not open" end
+  self.lastAck = nil
+  self.pending = { cmd = cmd.cmd, at = os.epoch("utc") }
   local ok
   if self.flightId then
     ok = pcall(rednet.send, self.flightId, cmd, self.cfg.comms.commandProtocol)

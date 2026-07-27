@@ -1631,6 +1631,28 @@ end)
 
 -- ------------------------------------------------------------ terminal panel
 
+--- THE FOSSIL REFUSAL. lastAck was set on arrival and never cleared, so one "ALREADY RUNNING"
+--- stayed on screen in red indefinitely -- long after the run behind it had ended. A pilot
+--- pressing START then reads the fossil of an older press as the answer to this one, which is how
+--- a working command and a refused one became indistinguishable.
+T.it("sending a command clears the previous answer", function()
+  local link = Link.new(UiConfig.withDefaults({}), quietLog())
+  link.modem = "modem_0"
+  local proto = link.cfg.comms.commandProtocol
+
+  link:onMessage(7, { ack = false, cmd = "selfTest", error = "a self test is already running" },
+    proto)
+  T.notNil(link.lastAck, "the refusal was recorded")
+
+  link:send({ cmd = "selfTest", action = "start" })
+  T.isNil(link.lastAck, "and asking again clears it -- the screen goes quiet until the craft answers")
+  T.eq(link.pending.cmd, "selfTest", "while recording what we are waiting on")
+
+  link:onMessage(7, { ack = true, cmd = "selfTest" }, proto)
+  T.isTrue(link.lastAck.ack, "the NEW answer lands")
+  T.isNil(link.pending, "and nothing is outstanding")
+end)
+
 T.suite("build stamp")
 
 --- "The Suite says it updated and nothing changed" has two causes that look identical from the

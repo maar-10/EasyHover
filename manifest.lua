@@ -503,9 +503,9 @@
         },
         {
           ["dst"] = "ui_main/lib/link.lua",
-          ["size"] = 4793,
+          ["size"] = 5322,
           ["src"] = "ui_main/lib/link.lua",
-          ["sum"] = "9cb2b5e3",
+          ["sum"] = "518eba99",
         },
         {
           ["dst"] = "ui_main/lib/monitors.lua",
@@ -594,5 +594,5 @@
     ["size"] = 36872,
     ["sum"] = "305c58ce",
   },
-  ["version"] = "2bf66320",
+  ["version"] = "802210a0",
 }
