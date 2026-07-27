@@ -27,9 +27,9 @@
       ["files"] = {
         {
           ["dst"] = "flight/app.lua",
-          ["size"] = 42935,
+          ["size"] = 43512,
           ["src"] = "flight/app.lua",
-          ["sum"] = "3b5bd7e7",
+          ["sum"] = "259ba066",
         },
         {
           ["dst"] = "flight/diskmenu.lua",
@@ -212,6 +212,12 @@
           ["sum"] = "609afac6",
         },
         {
+          ["dst"] = "shared/install.lua",
+          ["size"] = 1978,
+          ["src"] = "shared/install.lua",
+          ["sum"] = "4e1b5714",
+        },
+        {
           ["dst"] = "startup.lua",
           ["size"] = 541,
           ["src"] = "launchers/flight.lua",
@@ -274,6 +280,12 @@
           ["size"] = 7590,
           ["src"] = "gps_beacon/ui/console.lua",
           ["sum"] = "a81e02b3",
+        },
+        {
+          ["dst"] = "shared/install.lua",
+          ["size"] = 1978,
+          ["src"] = "shared/install.lua",
+          ["sum"] = "4e1b5714",
         },
         {
           ["dst"] = "shared/log.lua",
@@ -394,6 +406,12 @@
           ["sum"] = "66ed3bb2",
         },
         {
+          ["dst"] = "shared/install.lua",
+          ["size"] = 1978,
+          ["src"] = "shared/install.lua",
+          ["sum"] = "4e1b5714",
+        },
+        {
           ["dst"] = "shared/log.lua",
           ["size"] = 2735,
           ["src"] = "shared/log.lua",
@@ -446,6 +464,12 @@
           ["size"] = 305968,
           ["src"] = "vendor/basalt-full.lua",
           ["sum"] = "96ae5255",
+        },
+        {
+          ["dst"] = "shared/install.lua",
+          ["size"] = 1978,
+          ["src"] = "shared/install.lua",
+          ["sum"] = "4e1b5714",
         },
         {
           ["dst"] = "shared/log.lua",
@@ -521,9 +545,9 @@
         },
         {
           ["dst"] = "ui_main/ui/terminal.lua",
-          ["size"] = 5373,
+          ["size"] = 5826,
           ["src"] = "ui_main/ui/terminal.lua",
-          ["sum"] = "d9d78715",
+          ["sum"] = "cc3ec34a",
         },
         {
           ["dst"] = "ui_main/ui/theme.lua",
@@ -570,5 +594,5 @@
     ["size"] = 36872,
     ["sum"] = "305c58ce",
   },
-  ["version"] = "0dbc39f7",
+  ["version"] = "2bf66320",
 }

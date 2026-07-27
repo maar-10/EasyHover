@@ -98,6 +98,17 @@ end
 -- ---------------------------------------------------------------- boot
 
 function App:boot()
+  -- SAID FIRST, before anything else can go wrong. Lua loads at boot, so this is the record as it
+  -- stood when THIS code was loaded -- if it lags the release, the files updated and this computer
+  -- was never restarted, and nothing else in the log means what it appears to.
+  do
+    local okInstall, Install = pcall(require, "shared.install")
+    if okInstall and Install then
+      local record = Install.read()
+      self.log:info("EasyHover %s build %s (installed %s)", tostring(record.role),
+        tostring(record.version), tostring(record.at or "?"))
+    end
+  end
   self.log:info("EasyHover flight computer booting (config %s)",
     self.configExisted and "loaded" or "defaults")
   self.per:scan()

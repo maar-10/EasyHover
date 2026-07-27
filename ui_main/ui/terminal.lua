@@ -11,6 +11,13 @@
 
 local Theme = require("ui.theme")
 local UiConfig = require("lib.config")
+local Install = require("shared.install")
+
+--- Read ONCE, when this file is first loaded, so it reports the record as it stood when the
+--- RUNNING code was loaded. Compare it against the release: equal means the new code is running
+--- and any remaining fault is in the code; older means the files updated and this computer was
+--- never restarted. Those two look identical from the pilot's seat and need opposite fixes.
+local BUILD = Install.stamp()
 
 local Terminal = {}
 
@@ -25,7 +32,7 @@ function Terminal.build(frame, opts)
   frame:setBackground(Theme.bg)
 
   Theme.line(frame, 1, width, Theme.centre("EasyHover UI", width), Theme.accent)
-  Theme.line(frame, 2, width, "which screen shows what", Theme.dim)
+  Theme.line(frame, 2, width, Theme.fitEnd(BUILD, width), Theme.dim)
   Theme.rule(frame, 3, width)
 
   local listStart = 4

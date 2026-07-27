@@ -38,6 +38,10 @@ const ROLES = {
     blurb: "Thrusters, sensors, pilot inputs, PID loops. One per craft. No UI.",
     status: "released",
     dirs: ["flight"],
+    // The flight role keeps its own lib/, so it does not ship shared/ wholesale -- but the build
+    // stamp has to be readable HERE too, or the flight computer cannot say which build it is
+    // running. Named explicitly rather than pulling in the whole directory.
+    extraFiles: [{ src: "shared/install.lua", dst: "shared/install.lua" }],
     launcher: { src: "launchers/flight.lua", dst: "startup.lua" },
     entry: "flight/startup.lua",
     luaPath: "/flight",

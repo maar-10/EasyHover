@@ -217,6 +217,28 @@ restarts, it keeps executing what it loaded, however new the files on disk are. 
 updates and reboots independently** — the flight computer and the UI computer are separate installs,
 and a change may live in either or both.
 
+### Which build is ACTUALLY running
+
+The UI computer's own terminal now shows it on line 2, and the flight computer logs it as its
+first line at boot:
+
+```
+        EasyHover UI
+ui_main 2bf66320
+```
+
+**It is read once, when the program loads.** That is the entire point — it reports the record as it
+stood when the running code started, not as it stands now. Compare it against the release
+(`node tools/gen_manifest.js` prints the version; `easyhover_suite.lua --check` reports it too):
+
+| | |
+|---|---|
+| stamp **==** release | the new code is running — any remaining fault is in the code |
+| stamp **<** release | the files updated and this program never restarted |
+
+Without it, those two are indistinguishable from the pilot's seat, and debugging can go several
+rounds into the wrong one. It costs one line on a screen that had a decorative subtitle there.
+
 ### And a third thing that is neither
 
 A screen can look unchanged because the state it would show has not been reached. The SELF TEST

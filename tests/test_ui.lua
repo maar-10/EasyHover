@@ -1631,6 +1631,42 @@ end)
 
 -- ------------------------------------------------------------ terminal panel
 
+T.suite("build stamp")
+
+--- "The Suite says it updated and nothing changed" has two causes that look identical from the
+--- pilot's seat and need opposite fixes: the new code is running and the fault is in the code, or
+--- the files updated and the program was never restarted. Lua loads at boot, so a running program
+--- is unaffected by files changing under it. The stamp is read AT LOAD TIME, which is what makes
+--- it able to tell those apart.
+T.it("reads the install record", function()
+  local Install = require("shared.install")
+  local path = "/test_install_record.txt"
+  local h = fs.open(path, "w")
+  -- A long string: the record really is multi-line, and writing it this way keeps the test
+  -- readable without escape sequences.
+  h.write([[version=a30a9d88
+schema=1
+role=ui_main
+at=2026-07-28T10:00:00
+]])
+  h.close()
+  local record = Install.read(path)
+  T.eq(record.version, "a30a9d88", "version")
+  T.eq(record.role, "ui_main", "role")
+  T.eq(record.schema, 1, "schema")
+  T.eq(Install.stamp(record), "ui_main a30a9d88", "and a stamp that fits a narrow footer")
+  fs.delete(path)
+end)
+
+T.it("never throws on a missing or unreadable record", function()
+  -- A diagnostic that can crash the program it is diagnosing is worse than no diagnostic.
+  local Install = require("shared.install")
+  local record = Install.read("/definitely_not_here.txt")
+  T.eq(record.version, "?", "unknown, not an error")
+  T.eq(record.role, "?", "same for the role")
+  T.notNil(Install.stamp(record), "and it still produces a stamp")
+end)
+
 T.suite("terminal monitor assignment")
 
 local function terminalRig(width, height)
