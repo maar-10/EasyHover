@@ -19,6 +19,13 @@
 
 local Theme = require("ui.theme")
 local Util = require("shared.util")
+local Install = require("shared.install")
+
+--- Read WHEN THIS FILE LOADS, so it names the build that is actually executing rather than the
+--- one on disk. It sits on the SELF TEST page because that is the page that gets photographed
+--- when something is wrong -- a diagnostic nobody has to be asked for is worth more than a better
+--- one that has to be requested four times.
+local BUILD = Install.read().version or "?" 
 
 local Nav = {}
 
@@ -241,6 +248,13 @@ function Nav.build(frame, opts)
   Theme.button(selfPage, abortX, height - 1, 7, "ABORT",
     function() actions.selfTest("abort") end)
   Theme.button(selfPage, 1, height, math.min(6, width), "BACK", function() show(navPage) end)
+  -- The bottom row is otherwise empty to the right of BACK. addLabel directly, because Theme.line
+  -- always starts at x = 1 and this has to sit at the right-hand end.
+  if width >= 15 then
+    local stampWidth = math.min(#BUILD, width - 8)
+    selfPage:addLabel({ x = width - stampWidth + 1, y = height, width = stampWidth,
+      background = Theme.bg, foreground = Theme.dim }):setText(BUILD:sub(1, stampWidth))
+  end
 
   -- --------------------------------------------------------------- axis map
 
