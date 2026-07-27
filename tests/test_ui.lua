@@ -1353,6 +1353,40 @@ T.it("never truncates a refusal into its own opposite", function()
   end
 end)
 
+--- "LIFT THRUSTERS" names the group but never says a test is under way, so a stopped screen and a
+--- running one read almost the same.
+T.it("SAYS it is testing, and which of the three", function()
+  for _, size in ipairs({ { 15, 10 }, { 29, 19 }, { 51, 19 } }) do
+    local panel = navRig(size[1], size[2])
+    panel.update(navModel(nil, { running = true, step = 2, steps = 3, label = "LATERAL THRUSTERS",
+      phase = "X sweep", stepRemainingMs = 9000, remainingMs = 24000, moving = 4, groupCount = 4,
+      writeFails = 0 }))
+    local text = panel.elements.status:getText()
+    T.isTrue(text:find("TESTING") ~= nil, ("%dx%d: %q"):format(size[1], size[2], text))
+    T.isTrue(text:find("2/3") ~= nil, "and which step: " .. text)
+    T.isTrue(#text <= size[1], "within the width")
+  end
+end)
+
+T.it("counts down the step AND the whole run, at every width", function()
+  for _, size in ipairs({ { 15, 10 }, { 29, 19 }, { 51, 19 } }) do
+    local panel = navRig(size[1], size[2])
+    local function at(stepMs, allMs)
+      panel.update(navModel(nil, { running = true, step = 1, steps = 3, label = "LIFT THRUSTERS",
+        phase = "X sweep", stepRemainingMs = stepMs, remainingMs = allMs, moving = 4,
+        groupCount = 4, writeFails = 0 }))
+      return panel.elements.timer:getText()
+    end
+    local first = at(12000, 42000)
+    local later = at(6000, 36000)
+    T.isTrue(#first <= size[1], ("%dx%d overflows: %q"):format(size[1], size[2], first))
+    T.isTrue(first ~= later, "the countdown changes as time passes")
+    -- BOTH numbers survive: a countdown truncated to one cannot say whether the run is nearly over
+    T.isTrue(first:find("12") ~= nil, "step seconds shown: " .. first)
+    T.isTrue(first:find("42") ~= nil, "total seconds shown: " .. first)
+  end
+end)
+
 T.it("says an aborted run was aborted, and why", function()
   local panel = navRig()
   panel.update(navModel(nil, { running = false, aborted = "aborted: the craft is flying" }))

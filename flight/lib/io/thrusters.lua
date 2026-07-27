@@ -257,6 +257,31 @@ function Thrusters:nozzleAim(id)
   return out
 end
 
+--- Put every nozzle back to centre, UNCONDITIONALLY.
+---
+--- Not apply(): that decides whether to write by comparing against what the block reports, which
+--- is right during a sweep and wrong at the end of one. Finishing a test is the moment to command
+--- the safe state outright rather than to reason about whether it is already held -- a readback
+--- that lies, or a competing writer mid-revert, would otherwise leave a nozzle hard over with
+--- nothing scheduled to correct it.
+---
+--- The cached deflection is dropped so the mixer re-evaluates from scratch on its next pass; the
+--- thrust step is left alone, because this centres nozzles and does not touch thrust.
+function Thrusters:centreNozzles()
+  local wrote = 0
+  for _, entry in ipairs(self.per:thrusterList()) do
+    if entry.canVector == nil then
+      entry.canVector = type(entry.dev.setVector) == "function"
+    end
+    if entry.canVector then
+      if callDevice(self, entry.id, entry.dev, "setVector", 0, 0) then wrote = wrote + 1 end
+      local last = self.last[entry.id]
+      if last then last.nx, last.ny = nil, nil end
+    end
+  end
+  return wrote
+end
+
 function Thrusters:neutralVectors()
   local commands = {}
   for _, entry in ipairs(self.per:thrusterList()) do

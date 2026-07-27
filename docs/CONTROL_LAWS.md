@@ -430,3 +430,30 @@ on the vector peripherals — see [MOD_API_RESEARCH.md](MOD_API_RESEARCH.md).
 AXIS MAP screen let the sweep start, report `RUNNING`, and never once be ticked. `vectorHold`
 already refused while a sweep ran; this was the missing half of that guard. Starting a sweep now
 releases the latch — the pilot pressing SELF TEST is the newer instruction.
+
+---
+
+## What the SELF TEST screen says while it runs
+
+```
+|TESTING 2/3    |   states that a test is under way, and which
+|fl -0.60>-0.57 |   commanded -> achieved, read back from the block
+|Y 6s all 21s   |   this step, and the whole run
+```
+
+Three things it did not do before:
+
+**It says it is testing.** The status line showed the group name — `LIFT THRUSTERS` — which names
+what is being tested but never states that anything is happening. A stopped screen and a running
+one read almost identically, so the only reliable signal was the START button changing to RUNNING.
+
+**Both countdowns.** The step timer alone cannot tell you whether the run is nearly over, so the
+total is carried too, and the short form keeps *both* numbers when the long one will not fit —
+truncating a countdown to one figure loses the half you were watching for.
+
+**The nozzles are centred outright when a run ends**, by `Thrusters:centreNozzles()` rather than
+through `apply()`. `apply` decides whether to write by comparing against what the block reports,
+which is correct during a sweep and wrong at the end of one: a readback that lies, or a competing
+writer caught mid-revert, would leave a nozzle hard over with nothing scheduled to correct it.
+Finishing a test is the moment to command the safe state rather than reason about whether it is
+already held. Both `finish()` and `abort()` use it.

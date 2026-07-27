@@ -515,11 +515,26 @@ function Nav.build(frame, opts)
         selfStatus:setText(Theme.fit(("NO NOZZLE: %d THR"):format(st.groupCount or 0), width))
         selfStatus:setForeground(Theme.warning)
       else
-        selfStatus:setText(Theme.fit(tostring(st.label or ""), width))
-        selfStatus:setForeground(Theme.fg)
+        -- SAYS IT IS TESTING, and which of the three. The label alone ("LIFT THRUSTERS") names
+        -- the group but never states that a test is under way, so a stopped screen and a running
+        -- one read almost the same.
+        local testing = ("TESTING %d/%d"):format(st.step or 1, st.steps or 3)
+        local label = tostring(st.label or "")
+        if #testing + 1 + #label <= width then testing = testing .. " " .. label end
+        selfStatus:setText(Theme.fit(testing, width))
+        selfStatus:setForeground(Theme.accent)
       end
-      selfTimer:setText(Theme.fit(("%s  %.0fs left"):format(tostring(st.phase or ""),
-        (st.stepRemainingMs or 0) / 1000), width))
+      -- THE COUNTDOWN, for this step and for the whole run. Built to the width: the long form
+      -- names the axis being swept, the short one keeps both numbers, because a countdown that
+      -- has been truncated to one number cannot tell you whether the run is nearly over.
+      local stepLeft = math.max(0, (st.stepRemainingMs or 0) / 1000)
+      local allLeft = math.max(0, (st.remainingMs or 0) / 1000)
+      local long = ("%s  %.0fs left  %.0fs total"):format(tostring(st.phase or ""), stepLeft,
+        allLeft)
+      local short = ("%s %.0fs all %.0fs"):format(tostring(st.phase or ""):sub(1, 1), stepLeft,
+        allLeft)
+      selfTimer:setText(Theme.fit(#long <= width and long or short, width))
+      selfTimer:setForeground(Theme.accent)
       -- COMMANDED -> ACHIEVED, from the craft. If a nozzle is not moving, this is the line that
       -- says whose fault it is: no arrow at all means the write was refused, a commanded value
       -- with a flat readback means the block took it and did not move.

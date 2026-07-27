@@ -1286,6 +1286,68 @@ T.it("the sweep re-asserts a nozzle that was zeroed behind its back", function()
   fs.delete(path)
 end)
 
+--- THE NOZZLES END WHERE THEY STARTED. Commanded outright rather than through apply(), which
+--- decides by comparing against the block: right during a sweep, wrong at the end of one. A
+--- readback that lies, or a competing writer caught mid-revert, would otherwise leave a nozzle
+--- hard over with nothing scheduled to correct it.
+T.it("centres every nozzle when the run finishes", function()
+  local app, path = appRig(fullCraft())
+  app.state.mode = "GROUND"
+  app:handleCommand({ cmd = "selfTest", action = "start" })
+  local started = app.selfTest.run.startedAt
+  for at = 0, 2500, 100 do app.selfTest:tick(started + at) end
+  T.isTrue(math.abs(app.per.thrusters["lift_fl"].dev.getTargetVectorX()) > 0.05,
+    "precondition: deflected mid-run")
+
+  for at = 0, 46000, 500 do app.selfTest:tick(started + at) end
+  T.isFalse(app.selfTest:isRunning(), "the run finished")
+  for _, entry in ipairs(app.per:thrusterList()) do
+    local n = entry.dev._nozzle
+    if n then
+      T.eq(n.tx, 0, entry.id .. " X centred")
+      T.eq(n.ty, 0, entry.id .. " Y centred")
+    end
+  end
+  fs.delete(path)
+end)
+
+T.it("centres them even if something insists they are already centred", function()
+  -- apply() would skip the write here; centreNozzles must not.
+  local app, path = appRig(fullCraft())
+  app.state.mode = "GROUND"
+  app:handleCommand({ cmd = "selfTest", action = "start" })
+  local started = app.selfTest.run.startedAt
+  for at = 0, 2500, 100 do app.selfTest:tick(started + at) end
+
+  local dev = app.per.thrusters["lift_fl"].dev
+  dev.getTargetVectorX = function() return 0 end       -- lies: says already centred
+  dev.getTargetVectorY = function() return 0 end
+  local wrote = false
+  local inner = dev.setVector
+  dev.setVector = function(x, y) wrote = true; return inner(x, y) end
+
+  app:handleCommand({ cmd = "selfTest", action = "abort" })
+  T.isTrue(wrote, "the centring command was sent regardless of the readback")
+  fs.delete(path)
+end)
+
+T.it("publishes a countdown for the step AND for the whole run", function()
+  local app, path = appRig(fullCraft())
+  app.state.mode = "GROUND"
+  app:handleCommand({ cmd = "selfTest", action = "start" })
+  local started = app.selfTest.run.startedAt
+  app.selfTest:tick(started + 3000)
+  local a = app.state:get("selfTest")
+  T.eq(type(a.stepRemainingMs), "number", "step countdown published")
+  T.eq(type(a.remainingMs), "number", "whole-run countdown published")
+
+  app.selfTest:tick(started + 9000)
+  local b = app.state:get("selfTest")
+  T.isTrue(b.remainingMs < a.remainingMs, "and it ticks DOWN")
+  T.isTrue(b.step >= a.step, "advancing through the steps")
+  fs.delete(path)
+end)
+
 T.it("respects each thruster's own maxVector limit", function()
   local cfg = fullCraft()
   cfg.hardware.thrusters[1].maxVector = 0.3

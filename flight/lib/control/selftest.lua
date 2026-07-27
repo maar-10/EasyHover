@@ -200,8 +200,9 @@ end
 --- `short` is the 15-column form, for the same reason as the refusals in start().
 function SelfTest:abort(reason, short)
   if not self.run then return false end
-  -- Centre everything we touched, whatever else happens.
-  self.thrusters:neutralVectors()
+  -- Centre everything we touched, whatever else happens -- and command it outright rather than
+  -- letting the write be skipped because something believes it is already centred.
+  self.thrusters:centreNozzles()
   self.log:info("self test %s", reason or "aborted")
   self.run.abortedShort = short
   self.run.aborted = reason or "aborted"
@@ -360,7 +361,8 @@ end
 
 function SelfTest:finish()
   if not self.run then return false end
-  self.thrusters:neutralVectors()
+  -- The nozzles end the run where they started: centred, unconditionally.
+  self.thrusters:centreNozzles()
   self.run.finishedAt = os.epoch("utc")
   self.run.complete = true
   local finished = self.run
