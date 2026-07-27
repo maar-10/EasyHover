@@ -250,10 +250,16 @@ function Nav.build(frame, opts)
   Theme.button(selfPage, 1, height, math.min(6, width), "BACK", function() show(navPage) end)
   -- The bottom row is otherwise empty to the right of BACK. addLabel directly, because Theme.line
   -- always starts at x = 1 and this has to sit at the right-hand end.
+  local stampLabel = nil
   if width >= 15 then
-    local stampWidth = math.min(#BUILD, width - 8)
-    selfPage:addLabel({ x = width - stampWidth + 1, y = height, width = stampWidth,
-      background = Theme.bg, foreground = Theme.dim }):setText(BUILD:sub(1, stampWidth))
+    -- Sized for a VERSION, not for whatever string this computer happens to hold. Sizing it from
+    -- #BUILD meant a computer with no install record ("?") got a one-character label, into which
+    -- the craft's eight-character build then would not fit.
+    local stampWidth = math.max(1, math.min(8, width - 8))
+    stampLabel = selfPage:addLabel({ x = width - stampWidth + 1, y = height, width = stampWidth,
+      background = Theme.bg, foreground = Theme.dim })
+    stampLabel:setText(BUILD:sub(1, stampWidth))
+    stampLabel.eh_width = stampWidth
   end
 
   -- --------------------------------------------------------------- axis map
@@ -504,6 +510,18 @@ function Nav.build(frame, opts)
       sourceLine:setForeground(#parts > 0 and Theme.dim or Theme.warning)
     end
 
+    -- THE BUILD THAT MATTERS HERE IS THE CRAFT'S. This page drives a flight-computer function, and
+    -- nav.lua runs on the UI computer -- so the stamp beside BACK was answering the wrong
+    -- question. Show the craft's build when it is reporting one, and flag a mismatch: two
+    -- computers on different builds is a state worth seeing rather than deducing.
+    if stampLabel then
+      local craft = model.telemetry and model.telemetry.build
+      if type(craft) == "string" and craft ~= "" then
+        stampLabel:setText(craft:sub(1, stampLabel.eh_width))
+        stampLabel:setForeground(craft == BUILD and Theme.dim or Theme.warning)
+      end
+    end
+
     -- ---- self test
     local st = live.selfTest
     local STEP_LABELS = { "1 LIFT THR", "2 LATERAL THR", "3 ACCEL THR" }
@@ -634,6 +652,7 @@ function Nav.build(frame, opts)
   return {
     update = update,
     show = show,
+    buildStamp = stampLabel,
     buttons = testButtons,
     stacked = stacked,
     pages = { nav = navPage, fcs = fcsPage, selfTest = selfPage, axisMap = axisPage },

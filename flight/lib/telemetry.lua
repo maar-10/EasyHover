@@ -19,6 +19,14 @@
 local Util = require("lib.util")
 
 local Telemetry = {}
+
+--- Read once, when this file loads, so it names the build that is executing.
+Telemetry.BUILD = (function()
+  local ok, Install = pcall(require, "shared.install")
+  if not ok or not Install then return "?" end
+  local okRead, record = pcall(Install.read)
+  return (okRead and record and record.version) or "?"
+end)()
 Telemetry.__index = Telemetry
 
 --- The command surface. `nil` means the field is optional; anything else is a required type.
@@ -205,6 +213,10 @@ function Telemetry:build(extra, includeSlow)
 
   local payload = {
     proto = "eh1",
+    -- WHICH BUILD IS FLYING. The flight computer's boot log scrolls away in seconds, and the
+    -- stamp on the cockpit's SELF TEST page belongs to the UI computer -- nav.lua runs there. So
+    -- the one build that governs the sweep was the one nobody could read. It rides in every frame.
+    build = Telemetry.BUILD,
     seq = self.seq,
     t = os.epoch("utc"),
     role = "flight",

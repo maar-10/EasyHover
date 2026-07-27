@@ -1397,6 +1397,29 @@ T.it("says STALLED rather than counting down over a run nothing is driving", fun
   T.eq(panel.elements.status:getForeground(), Theme.warning, "flagged")
 end)
 
+--- The stamp beside BACK was answering the wrong question: nav.lua runs on the UI computer, so it
+--- named the UI's build while the page drives a FLIGHT-computer function. The craft's build now
+--- rides in every telemetry frame.
+T.it("shows the CRAFT's build, and flags a mismatch", function()
+  local panel = navRig(29, 19)
+  local m = navModel()
+  m.telemetry.build = "deadbeef"
+  panel.update(m)
+  T.notNil(panel.buildStamp, "the stamp exists at this width")
+  T.eq(panel.buildStamp:getText(), "deadbeef", "and shows the CRAFT's build")
+  T.eq(panel.buildStamp:getForeground(), Theme.warning,
+    "flagged, because it differs from this computer's")
+
+  -- matching builds are not flagged
+  local same = navModel()
+  same.telemetry.build = panel.buildStamp:getText()
+  local panel2 = navRig(29, 19)
+  local m2 = navModel()
+  m2.telemetry.build = nil
+  panel2.update(m2)
+  T.notNil(panel2.buildStamp:getText(), "and with no craft build it still shows this computer's")
+end)
+
 T.it("says an aborted run was aborted, and why", function()
   local panel = navRig()
   panel.update(navModel(nil, { running = false, aborted = "aborted: the craft is flying" }))

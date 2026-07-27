@@ -195,9 +195,9 @@
         },
         {
           ["dst"] = "flight/lib/telemetry.lua",
-          ["size"] = 16642,
+          ["size"] = 17281,
           ["src"] = "flight/lib/telemetry.lua",
-          ["sum"] = "845b675d",
+          ["sum"] = "c647fe37",
         },
         {
           ["dst"] = "flight/lib/util.lua",
@@ -527,9 +527,9 @@
         },
         {
           ["dst"] = "ui_main/ui/nav.lua",
-          ["size"] = 30658,
+          ["size"] = 31707,
           ["src"] = "ui_main/ui/nav.lua",
-          ["sum"] = "72f14ebf",
+          ["sum"] = "9afde5ce",
         },
         {
           ["dst"] = "ui_main/ui/overhead.lua",
@@ -594,5 +594,5 @@
     ["size"] = 36872,
     ["sum"] = "305c58ce",
   },
-  ["version"] = "cfa21171",
+  ["version"] = "2d2887b0",
 }
