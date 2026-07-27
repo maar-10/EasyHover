@@ -965,7 +965,21 @@ function App:onMessage(sender, message, protocol)
     self.telemetry:reply(sender, { ack = false, error = err })
     return true
   end
-  local ok, detail = self:handleCommand(cmd)
+  -- A COMMAND THAT THROWS MUST STILL ANSWER. onMessage is pcall'd by the run loop, so an error in
+  -- handleCommand was swallowed there: no reply went back, the cockpit showed nothing at all, and
+  -- whatever the handler had already changed stayed changed. Press a button, nothing happens,
+  -- press it again and the craft says the thing you asked for is already under way -- with the
+  -- reason never leaving this computer.
+  --
+  -- Now it is caught here, reported to the pilot as a refusal, and logged with the message.
+  local caught, ok, detail = pcall(self.handleCommand, self, cmd)
+  if not caught then
+    local message = tostring(ok)
+    self.log:error("command %s FAILED: %s", tostring(cmd.cmd), message)
+    self.telemetry:reply(sender, { ack = false, cmd = cmd.cmd,
+      detail = { error = message, errorShort = "CMD ERROR" } })
+    return true
+  end
   self.telemetry:reply(sender, { ack = ok, cmd = cmd.cmd, detail = detail })
   return true
 end

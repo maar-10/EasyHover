@@ -1451,6 +1451,29 @@ T.it("and the damped path does not re-centre a nozzle the sweep owns", function(
   fs.delete(path)
 end)
 
+--- SILENCE IS THE WORST ANSWER. onMessage is pcall'd by the run loop, so an error thrown inside
+--- handleCommand went nowhere: no reply reached the cockpit, the pilot saw NOTHING happen, and
+--- anything the handler had already changed stayed changed. Press again and the craft reports the
+--- action as already under way, while the reason never left the flight computer.
+T.it("a command that throws still answers, with the reason", function()
+  local app, path = appRig(fullCraft())
+  app.state.mode = "GROUND"
+  local replied = nil
+  app.telemetry.reply = function(_, _, payload) replied = payload end
+  -- reply(sender, payload) -- capture whichever argument carries the table
+  app.telemetry.reply = function(_, a, b) replied = (type(a) == "table") and a or b end
+
+  app.selfTest.start = function() error("boom inside the handler") end
+  app:onMessage(7, { cmd = "selfTest", action = "start" }, app.cfg.comms.commandProtocol)
+
+  T.notNil(replied, "the cockpit got an answer rather than silence")
+  T.isFalse(replied.ack, "reported as a refusal")
+  T.isTrue(tostring((replied.detail or {}).error):find("boom") ~= nil,
+    "carrying the real reason: " .. tostring((replied.detail or {}).error))
+  T.eq((replied.detail or {}).errorShort, "CMD ERROR", "and a form that fits a narrow monitor")
+  fs.delete(path)
+end)
+
 T.it("respects each thruster's own maxVector limit", function()
   local cfg = fullCraft()
   cfg.hardware.thrusters[1].maxVector = 0.3
