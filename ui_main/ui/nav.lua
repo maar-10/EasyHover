@@ -224,9 +224,13 @@ function Nav.build(frame, opts)
 
   if selfSpare >= 5 then Theme.rule(selfPage, takeSelf(), width) end
   local selfStatus = Theme.line(selfPage, takeSelf(), width, "", Theme.fg)
-  local selfTimer = optionalLine(selfPage, selfSpare >= 2 and takeSelf() or nil, "", Theme.accent)
-  local selfResult = optionalLine(selfPage, selfSpare >= 3 and takeSelf() or nil, "", Theme.dim)
-  local selfWatch = optionalLine(selfPage, selfSpare >= 4 and takeSelf() or nil, "", Theme.dim)
+  -- selfWatch OUTRANKS THE TIMER. It carries commanded-against-achieved for the witness nozzle,
+  -- which is the answer to "it says running and nothing is moving" -- and on a 10-row monitor it
+  -- was the first row dropped, so the one screen that could have answered the question showed a
+  -- countdown instead. How long is left only matters once something is known to be happening.
+  local selfWatch = optionalLine(selfPage, selfSpare >= 2 and takeSelf() or nil, "", Theme.dim)
+  local selfTimer = optionalLine(selfPage, selfSpare >= 3 and takeSelf() or nil, "", Theme.accent)
+  local selfResult = optionalLine(selfPage, selfSpare >= 4 and takeSelf() or nil, "", Theme.dim)
 
   -- START stops one column short of ABORT. They used to be `min(9, width)` and `width - 6`,
   -- which on a 15-wide screen both claimed column 9: the labels happened not to collide, but a
@@ -516,7 +520,22 @@ function Nav.build(frame, opts)
       end
       selfTimer:setText(Theme.fit(("%s  %.0fs left"):format(tostring(st.phase or ""),
         (st.stepRemainingMs or 0) / 1000), width))
-      selfWatch:setText(Theme.fit("watch: " .. tostring(st.watch or ""), width))
+      -- COMMANDED -> ACHIEVED, from the craft. If a nozzle is not moving, this is the line that
+      -- says whose fault it is: no arrow at all means the write was refused, a commanded value
+      -- with a flat readback means the block took it and did not move.
+      if (st.writeFails or 0) > 0 then
+        selfWatch:setText(Theme.fit(("WRITE FAILED x%d"):format(st.writeFails), width))
+        selfWatch:setForeground(Theme.warning)
+      elseif type(st.aimCommanded) == "number" then
+        local shown = tostring(st.witness or "?"):gsub("^%a+[_:]", "")
+        local actual = type(st.aimActual) == "number" and ("%+.2f"):format(st.aimActual) or "--"
+        selfWatch:setText(Theme.fit(("%s %+.2f>%s"):format(shown, st.aimCommanded, actual), width))
+        selfWatch:setForeground(type(st.aimActual) == "number"
+          and math.abs((st.aimActual or 0) - st.aimCommanded) < 0.25 and Theme.ok or Theme.caution)
+      else
+        selfWatch:setText(Theme.fit("watch: " .. tostring(st.watch or ""), width))
+        selfWatch:setForeground(Theme.dim)
+      end
       startButton:setText("RUNNING")
       startButton:setBackground(Theme.caution)
       startButton:setForeground(colours.black)

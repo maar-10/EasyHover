@@ -105,9 +105,9 @@
         },
         {
           ["dst"] = "flight/lib/control/selftest.lua",
-          ["size"] = 16161,
+          ["size"] = 17826,
           ["src"] = "flight/lib/control/selftest.lua",
-          ["sum"] = "5053b348",
+          ["sum"] = "ac14159b",
         },
         {
           ["dst"] = "flight/lib/input/bindings.lua",
@@ -165,9 +165,9 @@
         },
         {
           ["dst"] = "flight/lib/io/thrusters.lua",
-          ["size"] = 15961,
+          ["size"] = 17315,
           ["src"] = "flight/lib/io/thrusters.lua",
-          ["sum"] = "1e361b51",
+          ["sum"] = "67f67e44",
         },
         {
           ["dst"] = "flight/lib/log.lua",
@@ -503,9 +503,9 @@
         },
         {
           ["dst"] = "ui_main/ui/nav.lua",
-          ["size"] = 27061,
+          ["size"] = 28436,
           ["src"] = "ui_main/ui/nav.lua",
-          ["sum"] = "75936d5d",
+          ["sum"] = "3ebb6bfa",
         },
         {
           ["dst"] = "ui_main/ui/overhead.lua",
@@ -570,5 +570,5 @@
     ["size"] = 36872,
     ["sum"] = "305c58ce",
   },
-  ["version"] = "589d3f6e",
+  ["version"] = "51cf1a04",
 }

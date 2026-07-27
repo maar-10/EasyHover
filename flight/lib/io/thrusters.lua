@@ -204,9 +204,38 @@ function Thrusters:setVectorRaw(id, nx, ny)
   local entry = self.per.thrusters[id]
   if not entry then return false, "no such thruster: " .. tostring(id) end
   if type(entry.dev.setVector) ~= "function" then return false, "no nozzle" end
-  callDevice(self, id, entry.dev, "setVector", nx, ny)
-  self.last[id] = nil          -- our cached belief no longer holds
+  -- THE RESULT IS PROPAGATED. This called callDevice and then returned `true` regardless, so a
+  -- device that threw on every write was invisible to the caller -- and the self test, which also
+  -- discarded the return, counted down over a craft where nothing could move. Two layers each
+  -- dropping the same error is how a fault becomes a mystery.
+  local ok = callDevice(self, id, entry.dev, "setVector", nx, ny)
+  self.last[id] = nil          -- our cached belief no longer holds, successful or not
+  if not ok then return false, "the thruster refused setVector" end
   return true
+end
+
+--- What one nozzle is ACTUALLY doing: target (what the block accepted) and current (where the
+--- nozzle has slewed to). Both getters are plain @LuaFunction on the vector peripherals, so this
+--- costs no server tick and can run every cycle.
+---
+--- Exists so a sweep can prove itself. Commanding a nozzle and never reading it back is how
+--- "RUNNING" and "nothing is moving" coexist for an hour.
+function Thrusters:nozzleAim(id)
+  local entry = self.per.thrusters[id]
+  if not entry then return nil end
+  local dev = entry.dev
+  local out = {}
+  local function read(method, key)
+    local fn = dev[method]
+    if type(fn) ~= "function" then return end
+    local ok, v = pcall(fn)
+    if ok and type(v) == "number" then out[key] = v end
+  end
+  read("getTargetVectorX", "targetX")
+  read("getTargetVectorY", "targetY")
+  read("getVectorX", "actualX")
+  read("getVectorY", "actualY")
+  return out
 end
 
 function Thrusters:neutralVectors()

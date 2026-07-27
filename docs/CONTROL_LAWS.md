@@ -392,3 +392,41 @@ Two things fall out of the same finding:
 - **An unchanged aim is not re-sent.** On the quantised grid consecutive samples are usually
   identical, and every `setVector` costs a server tick — the sweep was slowing the very loop that
   advances it. One phase went from ~600 writes to 20.
+
+---
+
+## A sweep must prove itself
+
+`RUNNING` with nothing moving went unexplained for three rounds of fixes, because **every layer
+that could have reported the failure discarded it**:
+
+- `Thrusters:setVectorRaw` called `callDevice` and then `return true` — regardless of whether the
+  device had thrown.
+- The sweep called `setVectorRaw` and ignored its return value entirely.
+- The panel showed a countdown built from elapsed time, which advances whether or not a single
+  nozzle ever moved.
+
+So the cockpit could not distinguish a working test from a completely dead one. All three are
+fixed, and the screen now shows **commanded against achieved** for a witness nozzle each step —
+read back from the block, not echoed from what was asked:
+
+```
+|fl +0.60>+0.58 |   working: the block took it and slewed
+|fl +0.60>+0.00 |   accepted the command and did not move
+|WRITE FAILED x7|   the block refused the write
+|NO NOZZLE: 4 TH|   nothing in this group has a nozzle at all
+```
+
+That line **outranks the timer** in the row budget. On a 10-row monitor it was the first row
+dropped, so the one line that could answer "why is nothing moving" was replaced by a countdown.
+How long is left only matters once something is known to be happening.
+
+Reading back costs nothing here: `getVectorX/Y` and `getTargetVectorX/Y` are plain `@LuaFunction`
+on the vector peripherals — see [MOD_API_RESEARCH.md](MOD_API_RESEARCH.md).
+
+### A held nozzle outranks the sweep
+
+`App:cycle` checks `axisMap:isHolding()` before `selfTest:isRunning()`, so a latch left from the
+AXIS MAP screen let the sweep start, report `RUNNING`, and never once be ticked. `vectorHold`
+already refused while a sweep ran; this was the missing half of that guard. Starting a sweep now
+releases the latch — the pilot pressing SELF TEST is the newer instruction.

@@ -1221,6 +1221,38 @@ T.it("forgets the slow cache when the hardware set changes", function()
   fs.delete(path)
 end)
 
+--- A SWEEP MUST PROVE ITSELF. setVectorRaw returns false with a reason and the sweep used to
+--- discard it, so a run whose every write was refused still counted down and reported RUNNING
+--- while nothing moved -- indistinguishable, from the cockpit, from a working test.
+T.it("counts writes the hardware refused instead of discarding them", function()
+  local app, path = appRig(fullCraft())
+  app.state.mode = "GROUND"
+  app:handleCommand({ cmd = "selfTest", action = "start" })
+  -- every nozzle refuses
+  for _, entry in ipairs(app.per:thrusterList()) do
+    entry.dev.setVector = function() error("nope") end
+  end
+  local started = app.selfTest.run.startedAt
+  for at = 0, 3000, 250 do app.selfTest:tick(started + at) end
+  local st = app.state:get("selfTest")
+  T.isTrue((st.writeFails or 0) > 0, "the refusals were counted, not swallowed")
+  fs.delete(path)
+end)
+
+T.it("reports what the nozzle actually holds, not only what was asked", function()
+  local app, path = appRig(fullCraft())
+  app.state.mode = "GROUND"
+  app:handleCommand({ cmd = "selfTest", action = "start" })
+  local started = app.selfTest.run.startedAt
+  for at = 0, 2000, 250 do app.selfTest:tick(started + at) end
+  local st = app.state:get("selfTest")
+  T.notNil(st.witness, "a witness nozzle is named")
+  T.eq(type(st.aimCommanded), "number", "and what it was told")
+  T.eq(type(st.aimActual), "number", "and what it reads back")
+  T.eq(st.writeFails, 0, "with no refusals on healthy hardware")
+  fs.delete(path)
+end)
+
 T.it("respects each thruster's own maxVector limit", function()
   local cfg = fullCraft()
   cfg.hardware.thrusters[1].maxVector = 0.3

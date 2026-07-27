@@ -314,7 +314,34 @@ function SelfTest:tick(now)
         self.run.commanded[key] = { nx = nx, ny = ny }
         -- Deliberately RAW: the point is to see the nozzle's own axes, not the craft-frame
         -- mapping the mixer would apply. A mirrored mounting is invisible through the mapping.
-        self.thrusters:setVectorRaw(entry.id, nx, ny)
+        --
+        -- AND THE RESULT IS CHECKED. setVectorRaw returns false with a reason, and this used to
+        -- throw it away -- so a sweep whose every write failed still counted down happily and
+        -- reported RUNNING while nothing moved.
+        local ok, reason = self.thrusters:setVectorRaw(entry.id, nx, ny)
+        if not ok then
+          self.run.writeFails = (self.run.writeFails or 0) + 1
+          self.log:throttled("sweepwrite:" .. key, 3000, "error",
+            "self test: %s would not take a nozzle command: %s", key, tostring(reason))
+        end
+      end
+
+      -- The FIRST vectoring thruster of the step is the witness: read back what the block
+      -- actually holds, so the screen can show commanded against achieved rather than only what
+      -- was asked for. Cheap: these getters are not mainThread on a vector thruster.
+      if self.run.witness == nil or self.run.witnessStep ~= p.step then
+        self.run.witness = entry.id
+        self.run.witnessStep = p.step
+      end
+      if self.run.witness == entry.id then
+        self.run.aimCommanded = (p.axis == "x") and nx or ny
+        local aim = self.thrusters:nozzleAim(entry.id)
+        if aim then
+          self.run.aimTarget = (p.axis == "x") and aim.targetX or aim.targetY
+          self.run.aimActual = (p.axis == "x") and aim.actualX or aim.actualY
+        else
+          self.run.aimTarget, self.run.aimActual = nil, nil
+        end
       end
     end
   end
@@ -350,6 +377,12 @@ function SelfTest:publish(progress)
       phase = p.phase,
       moving = current and #(current.vectoring or {}) or nil,
       groupCount = current and current.count or nil,
+      -- Commanded vs achieved, from the witness nozzle. Feedback, not intention.
+      witness = self.run.witness,
+      aimCommanded = self.run.aimCommanded,
+      aimTarget = self.run.aimTarget,
+      aimActual = self.run.aimActual,
+      writeFails = self.run.writeFails or 0,
       stepRemainingMs = p.stepRemainingMs,
       remainingMs = p.remainingMs,
       findings = self.run.findings,
