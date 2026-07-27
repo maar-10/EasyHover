@@ -28,8 +28,20 @@ App.__index = App
 
 local CONFIG_PATH = "/eh_ui_main_config.tbl"
 
---- How often to re-evaluate staleness when the craft has gone quiet.
-local STALE_POLL_SECONDS = 0.5
+--- How often the panels are redrawn. THIS IS THE ONLY THING THAT DRAWS.
+---
+--- Telemetry arrives at telemetryHz -- 10 a second by default -- and each frame used to trigger a
+--- full model refresh across every assigned monitor. If one of those refreshes takes longer than
+--- the gap between frames, events arrive faster than they are consumed, CC's 256-event queue
+--- fills, and it starts DISCARDING events. What the pilot sees is a cockpit where a button needs
+--- two to five presses and the panels show state from several seconds ago -- which is exactly the
+--- failure the timer-storm note below describes, reached by a different road.
+---
+--- Redrawing on a timer instead makes the two rates independent: messages are absorbed as fast as
+--- they arrive because absorbing one is nearly free, and drawing happens at a rate the computer
+--- can actually sustain. The timer is re-armed AFTER the redraw, never before, so a slow frame
+--- delays the next one rather than queueing another behind it.
+local RENDER_POLL_SECONDS = 0.2
 
 function App.new(opts)
   opts = opts or {}
@@ -193,8 +205,20 @@ function App:onTimer(id)
   if id ~= self.staleTimer then return false end
   if self.rebuildPending then self:syncPanels() end
   self:refresh()
-  self.staleTimer = os.startTimer(STALE_POLL_SECONDS)
+  -- Re-armed AFTER the redraw. A slow frame therefore delays the next one instead of stacking a
+  -- second timer behind it, so the draw rate degrades to whatever the computer can sustain rather
+  -- than running the event queue out of room.
+  self.staleTimer = os.startTimer(RENDER_POLL_SECONDS)
   return true
+end
+
+--- ABSORB, DO NOT DRAW. Feeding the link is nearly free; drawing every monitor is not, and doing
+--- it here would tie the redraw rate to whatever rate the craft chooses to talk at -- which at
+--- telemetryHz 10, across three monitors, is how the event queue fills and touches get dropped.
+---
+--- Returns the message kind, so the caller can tell telemetry from an ack without re-parsing.
+function App:onTelemetry(sender, message, protocol)
+  return self.link:onMessage(sender, message, protocol)
 end
 
 --- Push the latest model into every panel, including the terminal fallback.
@@ -231,8 +255,7 @@ function App:run()
   basalt.setRenderThrottleTime(1 / math.max(self.cfg.ui.refreshHz, 1))
 
   basalt.onEvent("rednet_message", function(sender, message, protocol)
-    local kind = self.link:onMessage(sender, message, protocol)
-    if kind then self:refresh() end
+    self:onTelemetry(sender, message, protocol)
   end)
 
   -- A heartbeat, so "NO DATA" appears when the flight computer goes quiet rather than the
@@ -243,7 +266,7 @@ function App:run()
   basalt.onEvent("peripheral", function() self.rebuildPending = true end)
   basalt.onEvent("peripheral_detach", function() self.rebuildPending = true end)
 
-  self.staleTimer = os.startTimer(STALE_POLL_SECONDS)
+  self.staleTimer = os.startTimer(RENDER_POLL_SECONDS)
   basalt.run()
 end
 

@@ -531,3 +531,30 @@ afterwards. `Theme.fit` cuts from the end, and the end is usually where the answ
 START was `min(9, width)` and ABORT was at `width - 6`. At 15 columns both claimed column 9. The
 labels happened not to collide, so it looked right — but a tap on that column hit whichever button
 drew last. START now stops one column short of ABORT by construction.
+
+---
+
+## Never draw on the message that arrives
+
+**Symptom: every button needed two to five presses, and the panels showed state from seconds ago.**
+
+Telemetry arrives at `telemetryHz` — **10 frames a second** — and each one triggered a full model
+refresh across every assigned monitor. When a refresh takes longer than the gap between frames,
+events arrive faster than they are consumed, CC's **256-event queue** fills, and it begins
+**discarding events**. `monitor_touch` is among them. So is the next telemetry frame.
+
+That is the same failure the timer-storm bug produced, reached by a different road, and it is worth
+naming as a general rule for this codebase:
+
+> **The rate something arrives at is not the rate you may do work at.**
+
+The fix is to make the two independent:
+
+- `App:onTelemetry` **absorbs and returns**. Feeding the link is nearly free.
+- One timer draws, at `RENDER_POLL_SECONDS` (0.2 s), and is **re-armed after the draw completes**,
+  never before — so a slow frame delays the next one instead of stacking a second timer behind it.
+  The draw rate degrades to whatever the computer can sustain; the queue never runs out of room.
+
+The trap this hid: a self test that **had** started looked exactly like one that never did, because
+the panel was rendering a model from before the run began. Chasing that cost several rounds of
+looking in the wrong place — the panel was not lying about the craft, it was lying about *when*.

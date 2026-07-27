@@ -467,9 +467,9 @@
         },
         {
           ["dst"] = "ui_main/app.lua",
-          ["size"] = 10057,
+          ["size"] = 11688,
           ["src"] = "ui_main/app.lua",
-          ["sum"] = "cc9e967f",
+          ["sum"] = "d11ef2fc",
         },
         {
           ["dst"] = "ui_main/lib/config.lua",
@@ -570,5 +570,5 @@
     ["size"] = 36872,
     ["sum"] = "305c58ce",
   },
-  ["version"] = "ae8509fe",
+  ["version"] = "b0d3ec1f",
 }

@@ -1848,6 +1848,31 @@ local function timerRig()
   return app, function() return refreshes end
 end
 
+--- THE COCKPIT THAT NEEDED TWO TO FIVE PRESSES PER BUTTON. Telemetry arrives at telemetryHz --
+--- 10 a second -- and every frame used to trigger a full redraw of every assigned monitor. When a
+--- redraw takes longer than the gap between frames, events arrive faster than they are consumed,
+--- CC's 256-event queue fills, and it discards events: monitor_touch among them. The panels then
+--- show state from seconds ago, so a test that HAD started looked like one that never did.
+T.it("absorbing telemetry does NOT draw -- drawing is the timer's job alone", function()
+  local App = require("app")
+  local draws = 0
+  local parsed = 0
+  local app = setmetatable({
+    staleTimer = os.startTimer(9999),
+    rebuildPending = false,
+    link = { onMessage = function() parsed = parsed + 1; return "telemetry" end },
+    refresh = function() draws = draws + 1 end,
+    syncPanels = function() end,
+  }, { __index = App })
+
+  for _ = 1, 40 do app:onTelemetry(1, {}, "eh_telemetry") end
+  T.eq(parsed, 40, "every frame was absorbed")
+  T.eq(draws, 0, "and not one of them drew")
+
+  app:onTimer(app.staleTimer)
+  T.eq(draws, 1, "the timer draws, once")
+end)
+
 T.it("IGNORES a timer that is not its own -- the cockpit-wide sluggishness bug", function()
   -- Basalt runs timers of its own: a lazy-element pass every 0.2 s and a sleep(0.1) after
   -- EVERY monitor_touch. An unguarded handler re-arms itself on each of them, so every stray
