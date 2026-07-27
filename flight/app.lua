@@ -731,26 +731,40 @@ function App:handleCommand(cmd)
     if cmd.action == "release" then
       return true, { released = self.axisMap:release("by the pilot") }
     end
-    local allowed = (self.state.mode == "GROUND") or (not self.engine.master)
+    -- Same contract as the self test: it moves the same nozzles, so it wants the same silence.
+    local allowed = not self.engine.master
     -- One latch at a time, and never while the sweep owns the same nozzles.
     if self.selfTest:isRunning() then
       return false, { error = "the self test is running" }
     end
     if self.axisMap:isHolding() then self.axisMap:release("switching nozzle") end
-    local ok, err = self.axisMap:latch(cmd.id, cmd.axis, cmd.sign, { allowed = allowed, now = now })
-    return ok, { error = err }
+    local ok, err, short = self.axisMap:latch(cmd.id, cmd.axis, cmd.sign,
+      { allowed = allowed, now = now })
+    return ok, { error = err, errorShort = short }
 
   elseif cmd.cmd == "selfTest" then
     if cmd.action == "abort" then
       local aborted = self.selfTest:abort("aborted by the pilot")
       return true, { running = false, aborted = aborted }
     end
-    -- Decided HERE rather than by the sender: a UI is not a trusted peer. On the ground, or
-    -- with the engine master off -- a craft with no fuel reaching its thrusters cannot be
-    -- airborne, and that covers the craft whose ground sensor is not configured yet.
-    local allowed = (self.state.mode == "GROUND") or (not self.engine.master)
-    local ok, err = self.selfTest:start({ allowed = allowed, now = now })
-    return ok, { error = err }
+    -- Decided HERE rather than by the sender: a UI is not a trusted peer.
+    --
+    -- THE ENGINE MASTER MUST BE OFF. This was `GROUND or engine off`, which allowed the test on a
+    -- craft parked with the engine RUNNING as long as no thruster happened to read thrust at the
+    -- instant the button was pressed. The premise of the test is that nothing fires: it checks
+    -- that the slot you assigned is the nozzle that moves, and thrust would move the craft. A
+    -- running engine means fuel is reaching the thrusters, so thrust can appear a tick later --
+    -- the 1 Hz re-check would catch that only after up to a second of sweeping under power.
+    -- Refusing outright removes the race rather than policing it.
+    --
+    -- Gating on the engine rather than on GROUND also keeps the test available to the
+    -- half-configured craft that most needs it: GROUND depends on a down-facing laser being
+    -- assigned, which is one of the things you are still setting up.
+    local allowed = not self.engine.master
+    -- errorShort is the 15-column wording. The craft picks both, because a panel that shortens a
+    -- refusal by truncation can invert it: "cut the engine first" became "he engine first".
+    local ok, err, short = self.selfTest:start({ allowed = allowed, now = now })
+    return ok, { error = err, errorShort = short }
 
   elseif cmd.cmd == "setAxes" then
     local target

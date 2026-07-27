@@ -261,3 +261,49 @@ other half of the code**, and each was verified to fail when its fix is reverted
 > the same translation demand and are strong enough to mask a lift-vectoring sign error in a
 > whole-craft figure. The assertions now isolate the lift group. A net number is not evidence
 > about a part.
+
+---
+
+## The pre-flight sweeps run cold
+
+Both the **SELF TEST** (sweep each group's nozzles) and the **AXIS MAP** (latch one nozzle at full
+deflection) exist to answer one question: *is the thruster you assigned to a slot the thruster that
+actually moves?* Nothing about that needs thrust, and thrust would move the craft while you are
+stood next to it looking at a nozzle.
+
+**The gate is `not engine.master`.** It used to be `GROUND or engine off`, which allowed the test
+on a craft parked with the engine **running**, so long as no thruster happened to read thrust at
+the instant the button was pressed. A running engine means fuel is reaching the thrusters, so
+thrust can appear a tick later — the 1 Hz power re-check would catch that only after up to a second
+of sweeping under power. Refusing outright removes the race instead of policing it.
+
+Gating on the engine rather than on `GROUND` also keeps the test available to the half-configured
+craft that most needs it: `GROUND` depends on a down-facing laser being assigned, which is one of
+the things you are still setting up when you run these.
+
+Three layers, and the sweep itself commands no thrust at all — asserted by a test that stubs
+`setThrust`/`setThrustNormalized`/`setPower` on every thruster and drives all 45 seconds:
+
+| Layer | What it stops |
+|---|---|
+| `engine.master` must be off | fuel reaching the thrusters at all |
+| no thruster may read power > 0.001 at start | residual thrust from before |
+| power re-checked each second, sweep aborts | thrust appearing mid-run |
+
+## A refusal must not invert when it is truncated
+
+`<id> is producing thrust (0.40) -- cut the engine first` tail-fitted to a 15-column monitor
+arrived as **`he engine first`** — which reads as an instruction to *start* the engine, the exact
+opposite of the interlock, on a test that must run cold. The pilot read it that way, which is the
+only evidence that matters.
+
+So **every refusal returns three values: `ok, long, short`**, and the short form fits 15 columns.
+The wording is the craft's responsibility at both lengths; the panel picks a whole string and never
+composes one with a substring. `tests/test_vehicle.lua` asserts this for every refusal
+`SelfTest:start` and `AxisMap:latch` can produce, so a new one without a short form fails there
+rather than shipping and inverting itself in the field.
+
+The UI test for this was **initially a false green**: it asserted the displayed text contained
+"cut", and the tail of the shortened long form happens to contain "cut", so restoring the old
+`fitEnd` still passed. It now asserts the text *equals* the craft's short form — pin the mechanism,
+not a keyword that a broken implementation can satisfy by accident.

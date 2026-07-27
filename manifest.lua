@@ -27,9 +27,9 @@
       ["files"] = {
         {
           ["dst"] = "flight/app.lua",
-          ["size"] = 38274,
+          ["size"] = 39265,
           ["src"] = "flight/app.lua",
-          ["sum"] = "7cdf55a5",
+          ["sum"] = "8ad977c9",
         },
         {
           ["dst"] = "flight/diskmenu.lua",
@@ -63,9 +63,9 @@
         },
         {
           ["dst"] = "flight/lib/control/axismap.lua",
-          ["size"] = 11456,
+          ["size"] = 11972,
           ["src"] = "flight/lib/control/axismap.lua",
-          ["sum"] = "88735ea4",
+          ["sum"] = "48288464",
         },
         {
           ["dst"] = "flight/lib/control/brake.lua",
@@ -105,9 +105,9 @@
         },
         {
           ["dst"] = "flight/lib/control/selftest.lua",
-          ["size"] = 8814,
+          ["size"] = 9600,
           ["src"] = "flight/lib/control/selftest.lua",
-          ["sum"] = "4442cfca",
+          ["sum"] = "3904a7df",
         },
         {
           ["dst"] = "flight/lib/input/bindings.lua",
@@ -503,9 +503,9 @@
         },
         {
           ["dst"] = "ui_main/ui/nav.lua",
-          ["size"] = 25348,
+          ["size"] = 26576,
           ["src"] = "ui_main/ui/nav.lua",
-          ["sum"] = "b4e0226d",
+          ["sum"] = "02679c69",
         },
         {
           ["dst"] = "ui_main/ui/overhead.lua",
@@ -570,5 +570,5 @@
     ["size"] = 36872,
     ["sum"] = "305c58ce",
   },
-  ["version"] = "2c9cab65",
+  ["version"] = "5a78defe",
 }

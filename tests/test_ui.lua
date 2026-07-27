@@ -1313,14 +1313,44 @@ T.it("reports which thrusters could actually be swept", function()
 end)
 
 T.it("SHOWS THE CRAFT'S REFUSAL -- only it knows whether it is airborne", function()
-  local panel = navRig()
+  local panel = navRig(51, 19)
   panel.update(navModel())
   navAck = { ack = false, cmd = "selfTest",
-             detail = { error = "the self test only runs on the ground, with the engine off" } }
+             detail = { error = "on the ground only, with the engine off",
+                        errorShort = "ON GROUND ONLY" } }
   panel.update(navModel())
   T.isTrue(panel.elements.status:getText():find("engine off") ~= nil,
-    "the craft's own words: " .. panel.elements.status:getText())
+    "the craft's own words where they fit: " .. panel.elements.status:getText())
   T.eq(panel.elements.status:getForeground(), Theme.warning, "flagged as a refusal")
+end)
+
+--- THE ONE THAT REACHED THE CRAFT. Tail-fitting "<id> is producing thrust (0.40) -- cut the
+--- engine first" to a 15-column monitor produced "he engine first", which reads as an instruction
+--- to START the engine -- the exact opposite of the interlock, on a test that must run with the
+--- engine off and no thrust at all. A refusal that inverts under truncation is worse than none.
+T.it("never truncates a refusal into its own opposite", function()
+  for _, size in ipairs({ { 15, 10 }, { 22, 12 }, { 29, 19 }, { 51, 19 } }) do
+    local panel = navRig(size[1], size[2])
+    panel.update(navModel())
+    navAck = { ack = false, cmd = "selfTest",
+               detail = { error = "lift_fl is making thrust (0.40) -- cut the engine",
+                          errorShort = "CUT THE ENGINE" } }
+    panel.update(navModel())
+    local long = "lift_fl is making thrust (0.40) -- cut the engine"
+    local text = panel.elements.status:getText()
+    T.isTrue(#text <= size[1], ("%dx%d: %q overflows"):format(size[1], size[2], text))
+    -- PIN THE MECHANISM, not a keyword. Asserting `text:find("cut")` passed even with the old
+    -- tail-fit restored, because the tail of this particular sentence happens to contain "cut" --
+    -- a false green that hid the regression it was written for. When the long form does not fit,
+    -- the text must be the craft's SHORT form, never a substring of the long one.
+    if #long > size[1] then
+      T.eq(text, Theme.fit("CUT THE ENGINE", size[1]),
+        ("%dx%d: showed a cut of the long form instead of the short one"):format(
+          size[1], size[2]))
+    else
+      T.eq(text, Theme.fit(long, size[1]), "it fits, so show all of it")
+    end
+  end
 end)
 
 T.it("says an aborted run was aborted, and why", function()
@@ -1531,10 +1561,22 @@ end)
 
 T.it("shows the craft's refusal instead of pretending it latched", function()
   local panel = axisNavRig({ holding = false,
-    error = "lift_fl has no nozzle -- nothing to point" })
+    error = "lift_fl has no nozzle -- nothing to point" }, nil, 51, 19)
   T.isTrue(panel.elements.axisHolding:getText():find("nothing to point") ~= nil,
     "the craft's own words: " .. panel.elements.axisHolding:getText())
   T.eq(panel.elements.axisHolding:getForeground(), Theme.warning, "flagged")
+end)
+
+--- Same inversion as the self test: "nozzle mapping only runs on the ground, with the engine off"
+--- tail-fitted to 15 columns read "with the engine".
+T.it("keeps the ground-only refusal readable on a narrow screen", function()
+  local panel = axisNavRig({ holding = false,
+    error = "on the ground only, with the engine off",
+    errorShort = "ON GROUND ONLY" }, nil, 15, 10)
+  local text = panel.elements.axisHolding:getText()
+  T.isTrue(#text <= 15, ("%q overflows"):format(text))
+  T.eq(text, Theme.fit("ON GROUND ONLY", 15),
+    "the craft's short form, not a cut of the long one: " .. text)
 end)
 
 T.it("says so when no thrusters are assigned yet", function()

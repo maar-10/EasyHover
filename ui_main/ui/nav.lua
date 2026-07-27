@@ -427,7 +427,11 @@ function Nav.build(frame, opts)
       axisRelease:setForeground(Theme.buttonFg)
     end
     if held.error then
-      axisHolding:setText(Theme.fitEnd(tostring(held.error), width))
+      -- Head-fit with the craft's short form, never a tail cut: "nozzle mapping only runs on
+      -- the ground, with the engine off" tail-fitted read "with the engine".
+      local long = tostring(held.error)
+      axisHolding:setText(Theme.fit(
+        #long <= width and long or tostring(held.errorShort or long), width))
       axisHolding:setForeground(Theme.warning)
     end
   end
@@ -515,7 +519,13 @@ function Nav.build(frame, opts)
       startButton:setBackground(Theme.buttonBg)
       startButton:setForeground(Theme.buttonFg)
       if st.aborted then
-        selfStatus:setText(Theme.fit(tostring(st.aborted), width))
+        -- Same rule as a refusal: the craft supplies the short wording. "aborted: lift_fl
+        -- started producing thrust" head-fitted to 15 columns reads "aborted: lift_", which
+        -- says a thing happened but not the one thing worth knowing -- that thrust appeared.
+        local long = tostring(st.aborted)
+        local text = long
+        if #text > width then text = tostring(st.abortedShort or long) end
+        selfStatus:setText(Theme.fit(text, width))
         selfStatus:setForeground(Theme.warning)
       elseif st.complete then
         selfStatus:setText("complete")
@@ -543,10 +553,19 @@ function Nav.build(frame, opts)
     end
 
     -- A refusal has to be visible; the craft is the only thing that knows it is airborne.
+    --
+    -- THE SHORT FORM COMES FROM THE CRAFT, and this used to be Theme.fitEnd. Tail-fitting
+    -- "<id> is producing thrust (0.40) -- cut the engine first" to 15 columns produced
+    -- "he engine first", which reads as "start the engine" -- the exact opposite of what the
+    -- interlock wants, and it would talk a pilot into powering up for a test that must run cold.
+    -- Truncation is never allowed to decide what a refusal means.
     local ack = opts.lastAck and opts.lastAck()
     if ack and ack.cmd == "selfTest" and ack.ack == false then
       local detail = ack.detail or {}
-      selfStatus:setText(Theme.fitEnd(tostring(detail.error or "REFUSED"), width))
+      local long = tostring(detail.error or "REFUSED")
+      local text = long
+      if #text > width then text = tostring(detail.errorShort or long) end
+      selfStatus:setText(Theme.fit(text, width))
       selfStatus:setForeground(Theme.warning)
     end
   end

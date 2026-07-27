@@ -818,6 +818,23 @@ T.it("but ALLOWS it with the engine off, whatever the ground sensor believes", f
   fs.delete(path)
 end)
 
+--- The pilot's premise, stated plainly: neither the engine nor the thrusters may be active. This
+--- used to be allowed -- `GROUND or engine off` passed a craft parked with the engine RUNNING so
+--- long as no thruster happened to read thrust at the instant the button was pressed.
+T.it("refuses on the ground while the engine is RUNNING, even with nothing firing", function()
+  local app, path = appRig(fullCraft())
+  app.state.mode = "GROUND"
+  app.engine.master = true
+  for _, entry in pairs(app.per.thrusters) do
+    entry.dev.getPower = function() return 0 end     -- idle: the old gate let this through
+  end
+  local ok, detail = app:handleCommand({ cmd = "selfTest", action = "start" })
+  T.isFalse(ok, "refused: a running engine can put thrust on a nozzle a tick later")
+  T.isTrue(tostring((detail or {}).error):find("engine") ~= nil,
+    "and says why: " .. tostring((detail or {}).error))
+  fs.delete(path)
+end)
+
 T.it("refuses while a thruster is producing thrust", function()
   local app, path = appRig(fullCraft())
   app.state.mode = "GROUND"
@@ -826,6 +843,63 @@ T.it("refuses while a thruster is producing thrust", function()
   T.isFalse(ok, "refused")
   T.isTrue(tostring((detail or {}).error):find("thrust") ~= nil,
     "and says why: " .. tostring((detail or {}).error))
+  fs.delete(path)
+end)
+
+--- THE BUG THAT REACHED THE CRAFT, pinned where the wording is produced.
+---
+--- The panel tail-fitted the refusal, so "<id> is producing thrust (0.40) -- cut the engine
+--- first" arrived on a 15-column monitor as "he engine first" -- which reads as an instruction to
+--- START the engine, the exact opposite of an interlock for a test that must run cold. The UI
+--- tests could not catch it alone: they asserted hand-written strings, which is how a UI test
+--- passes against wording the craft never sends.
+---
+--- So the contract lives here: EVERY refusal returns a third value, and it fits the narrowest
+--- monitor that exists. A new refusal without one fails this test rather than shipping and
+--- inverting itself in the field.
+local NARROW = 15                       -- one monitor block at text scale 0.5
+
+T.it("every self-test refusal carries a form that fits the narrowest monitor", function()
+  local cases = {
+    { name = "airborne under power", setup = function(app)
+        app.state.mode = "HOVER"; app.engine.master = true
+      end },
+    { name = "a thruster making thrust", setup = function(app)
+        app.state.mode = "GROUND"
+        app.per.thrusters["lift_fl"].dev.getPower = function() return 0.4 end
+      end },
+  }
+  for _, case in ipairs(cases) do
+    local app, path = appRig(fullCraft())
+    case.setup(app)
+    local ok, detail = app:handleCommand({ cmd = "selfTest", action = "start" })
+    T.isFalse(ok, case.name .. " is refused")
+    local short = (detail or {}).errorShort
+    T.notNil(short, case.name .. " has a short form")
+    T.isTrue(#short <= NARROW,
+      ("%s: %q is %d columns, over %d"):format(case.name, short, #short, NARROW))
+    -- and it must not be a prefix-free fragment: the reader has to be able to act on it
+    T.isTrue(short:find("%a") ~= nil, case.name .. ": short form says something")
+    fs.delete(path)
+  end
+end)
+
+T.it("the self test never commands thrust, only nozzle deflection", function()
+  -- The whole premise: it checks that the slot you assigned is the thruster that moves. Thrust
+  -- would make the craft move, which is why the interlock demands the engine off -- so the sweep
+  -- itself must never ask for any.
+  local app, path = appRig(fullCraft())
+  app.state.mode = "GROUND"
+  local thrustAsked = {}
+  for id, entry in pairs(app.per.thrusters) do
+    entry.dev.setThrust = function(v) thrustAsked[#thrustAsked + 1] = id .. "=" .. tostring(v) end
+    entry.dev.setThrustNormalized = entry.dev.setThrust
+    entry.dev.setPower = entry.dev.setThrust
+  end
+  T.isTrue((app:handleCommand({ cmd = "selfTest", action = "start" })), "started")
+  local started = app.selfTest.run.startedAt
+  for at = 0, 44000, 500 do app.selfTest:tick(started + at) end
+  T.eq(#thrustAsked, 0, "no thrust was ever commanded: " .. table.concat(thrustAsked, " "))
   fs.delete(path)
 end)
 
@@ -1154,6 +1228,39 @@ local function axisRig()
   app.state.mode = "GROUND"
   return app, path
 end
+
+T.it("every nozzle-mapping refusal carries a form that fits the narrowest monitor", function()
+  local cases = {
+    { name = "airborne", id = "lift_fl", axis = "x", prep = function(app)
+        app.state.mode = "HOVER"; app.engine.master = true
+      end },
+    { name = "bad axis", id = "lift_fl", axis = "q" },
+    { name = "unknown id", id = "no_such_thruster", axis = "x" },
+    { name = "no nozzle", id = "main_1", axis = "x" },
+  }
+  for _, case in ipairs(cases) do
+    local app, path = axisRig()
+    if case.prep then case.prep(app) end
+    local ok, detail = app:handleCommand({ cmd = "vectorHold", action = "latch",
+      id = case.id, axis = case.axis, sign = 1 })
+    T.isFalse(ok, case.name .. " is refused")
+    local short = (detail or {}).errorShort
+    T.notNil(short, case.name .. " has a short form")
+    T.isTrue(#short <= 15,
+      ("%s: %q is %d columns"):format(case.name, tostring(short), #tostring(short)))
+    fs.delete(path)
+  end
+end)
+
+T.it("nozzle mapping refuses with the engine running, same as the sweep", function()
+  local app, path = axisRig()
+  app.state.mode = "GROUND"
+  app.engine.master = true
+  local ok = app:handleCommand({ cmd = "vectorHold", action = "latch", id = "lift_fl",
+    axis = "x", sign = 1 })
+  T.isFalse(ok, "it moves the same nozzles, so it wants the same silence")
+  fs.delete(path)
+end)
 
 T.it("latching HOLDS the nozzle at its full deflection", function()
   local app, path = axisRig()

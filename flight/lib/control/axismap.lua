@@ -109,8 +109,12 @@ function AxisMap.assign(spec, nozzleAxis, sign, craftAxis, craftSign)
   local isInPlane = false
   for _, axis in ipairs(plane) do if axis == craftAxis then isInPlane = true end end
   if not isInPlane then
+    -- Short forms exist because a cockpit monitor can be 15 columns wide and the panel used to
+    -- TAIL-fit these. "nozzle mapping only runs on the ground, with the engine off" cut to 15
+    -- became "with the engine", which reads as a demand to turn it ON -- the opposite of the
+    -- interlock. What a refusal means must never depend on where a substring happens to fall.
     return false, ("a %s thruster's nozzle cannot point along %s"):format(
-      tostring(spec.group), tostring(craftAxis))
+      tostring(spec.group), tostring(craftAxis)), "WRONG AXIS"
   end
 
   local other = (plane[1] == craftAxis) and plane[2] or plane[1]
@@ -153,18 +157,18 @@ end
 function AxisMap:latch(id, nozzleAxis, sign, opts)
   opts = opts or {}
   if not opts.allowed then
-    return false, "nozzle mapping only runs on the ground, with the engine off"
+    return false, "on the ground only, with the engine off", "ON GROUND ONLY"
   end
   if nozzleAxis ~= "x" and nozzleAxis ~= "y" then
-    return false, "nozzle axis must be x or y"
+    return false, "nozzle axis must be x or y", "BAD AXIS"
   end
   local entry = self.per.thrusters[id]
-  if not entry then return false, "no such thruster: " .. tostring(id) end
+  if not entry then return false, "no such thruster: " .. tostring(id), "UNKNOWN ID" end
   if entry.canVector == nil then
     entry.canVector = type(entry.dev.setVector) == "function"
   end
   if not entry.canVector then
-    return false, ("%s has no nozzle -- nothing to point"):format(id)
+    return false, ("%s has no nozzle -- nothing to point"):format(id), "NO NOZZLE"
   end
 
   self.hold = {
@@ -238,7 +242,7 @@ function AxisMap:handleKeys(spec, pressed)
 
     if down and not was then
       if target then
-        local ok, err = AxisMap.assign(spec, self.hold.axis, self.hold.sign,
+        local ok, err, short = AxisMap.assign(spec, self.hold.axis, self.hold.sign,
           target.axis, target.sign)
         if ok then
           self.hold.assigned = AxisMap.believedDirection(spec, self.hold.axis, self.hold.sign)
@@ -247,6 +251,7 @@ function AxisMap:handleKeys(spec, pressed)
           if self.onAssigned then self.onAssigned(self.hold.id) end
         else
           self.hold.error = err
+          self.hold.errorShort = short
           self.log:warn("axis map: %s", tostring(err))
         end
       end
@@ -288,6 +293,7 @@ function AxisMap:publish()
     group = spec and spec.group or nil,
     legend = legend,
     error = self.hold.error,
+    errorShort = self.hold.errorShort,
     remainingMs = math.max(0, self.timeoutMs - (os.epoch("utc") - self.hold.startedAt)),
   })
 end

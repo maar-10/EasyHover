@@ -80,16 +80,23 @@ end
 --- `groundContact`, which depends on a down-facing laser being assigned. Gating solely on that
 --- would make the pre-flight test unavailable on exactly the half-configured craft that needs
 --- it most. So power is re-checked while the sweep runs, and the sweep stops if any appears.
+--- Every refusal returns ok, long, SHORT. The short form exists because a cockpit monitor can be
+--- 15 columns wide, and the panel used to tail-fit the long one: "... cut the engine first"
+--- arrived as "he engine first", which reads as an instruction to START the engine -- the exact
+--- opposite of the interlock's meaning. An interlock whose message inverts under truncation is
+--- worse than one with no message, so the wording is now the craft's responsibility, at both
+--- lengths, rather than something the UI improvises with a substring.
 function SelfTest:start(opts)
   opts = opts or {}
-  if self.run then return false, "a self test is already running" end
+  if self.run then return false, "a self test is already running", "ALREADY RUNNING" end
   if not opts.allowed then
-    return false, "the self test only runs on the ground, with the engine off"
+    return false, "on the ground only, with the engine off", "ON GROUND ONLY"
   end
   local powered, id, value = self:anyPowered()
   if powered then
-    return false, ("%s is producing thrust (%.2f) -- cut the engine first"):format(
-      tostring(id), value)
+    return false,
+      ("%s is making thrust (%.2f) -- cut the engine"):format(tostring(id), value),
+      "CUT THE ENGINE"
   end
 
   self.run = {
@@ -103,11 +110,13 @@ function SelfTest:start(opts)
   return true
 end
 
-function SelfTest:abort(reason)
+--- `short` is the 15-column form, for the same reason as the refusals in start().
+function SelfTest:abort(reason, short)
   if not self.run then return false end
   -- Centre everything we touched, whatever else happens.
   self.thrusters:neutralVectors()
   self.log:info("self test %s", reason or "aborted")
+  self.run.abortedShort = short
   self.run.aborted = reason or "aborted"
   self.run.finishedAt = os.epoch("utc")
   local finished = self.run
@@ -163,7 +172,8 @@ function SelfTest:tick(now)
     self.run.lastPowerCheck = now
     local powered, id = self:anyPowered()
     if powered then
-      self:abort(("aborted: %s started producing thrust"):format(tostring(id)))
+      self:abort(("aborted: %s started producing thrust"):format(tostring(id)),
+        "THRUST APPEARED")
       return false
     end
   end
@@ -244,6 +254,7 @@ function SelfTest:publish(progress)
       running = false,
       complete = last and last.complete or false,
       aborted = last and last.aborted or nil,
+      abortedShort = last and last.abortedShort or nil,
       findings = last and last.findings or nil,
     })
   end
