@@ -403,3 +403,42 @@ thruster to be powered or fuelled. So zeroing the throttle does not freeze the n
 The four `VectorRedstoneLinkBehaviour` receivers write the same signals, but only via
 `setReceivedStrength` when Create's redstone-link network updates — not every tick — so a computer's
 `setVector` is not continuously overwritten by an idle link.
+
+---
+
+## Settled: a vector nozzle moves cold
+
+Read end to end in the Propulsion source, because "maybe they just do not move without fuel" had
+to be ruled out before anything else was worth chasing.
+
+`setVector(x, y)` → `VectorThrusterBlockEntity.setVectorCoordinates` → writes the four redstone
+signals → `updateMappedTargets()` derives `targetVectorX/Y` from them. Then, in `tick()`:
+
+```java
+public void tick() {
+    updateMappedTargets();
+    currentVectorX = tweenTowards(currentVectorX, targetVectorX);   // TWEEN_SPEED = 0.2
+    currentVectorY = tweenTowards(currentVectorY, targetVectorY);
+    targetFlapProgress = (float) getThrottle();                     // flaps only
+    ...
+}
+```
+
+**No gate.** Not on power, not on fuel, not on `isWorking()`, not on `ControlMode`. The tween runs
+every tick regardless, and the renderer tilts the model by
+`interpolatedVector * MAX_VISUAL_TILT_DEGREES` — **30°** — again with no throttle term. Throttle
+drives `flapProgress`, which opens and closes the four flaps; it is a *separate* visual.
+
+So a healthy vector thruster tilts ~18° for a commanded 0.6 on an unfuelled, unpowered, cold craft.
+`TWEEN_SPEED = 0.2` puts it there in about 1.5 s.
+
+**`ControlMode` is throttle-only.** `NORMAL` reads `redstoneInput`, `PERIPHERAL` reads
+`digitalInput`, and `ThrusterComputerHelpers` flips to `PERIPHERAL` on any `setThrust`/`setPower`.
+Vectoring bypasses it completely — there is no mode in which `setVector` is ignored.
+
+**The redstone links do not fight it either.** `VectorRedstoneLinkBehaviour.setReceivedStrength` is
+called by Create's link-network handler, not per tick, and `setSignal` early-returns when the value
+is unchanged. An idle link with `Frequency.EMPTY` does not continuously zero what a computer wrote.
+
+Which leaves the path between the computer and the block. `tools/nozzle.lua` tests exactly that and
+nothing else.
