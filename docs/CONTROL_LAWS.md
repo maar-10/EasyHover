@@ -598,3 +598,38 @@ still printed a row of `cycle error: Terminated`, one per press, instead of stop
 now re-raised from `callDevice`, from the cycle, and from the message handler. With the swallow put
 back, the test does not merely fail: CraftOS kills the loop with *"Too long without yielding"*,
 which is the runaway the pilot was looking at.
+
+---
+
+## The twitching nozzle, and why it cost the whole loop
+
+The pilot's observation was the diagnosis: *"one nozzle is twitching ALL THE TIME while the flight
+pc is running, others hold random angles, and they revert to centre when I shut it down."*
+
+The mixer runs every cycle, in every state, and it was writing nozzles that could not move:
+
+- nozzle aim is stored as `round(v * 15)` — **steps of 0.0667**
+- `apply` compared against a deadband of **0.01**
+
+So PID jitter of 0.02 — well above the deadband, far below a step — triggered a `setVector` that
+**changed nothing in the block**. A `mainThread` call, a server tick, for no effect. Twelve
+thrusters doing that every cycle **is** the 600 ms loop period.
+
+Quantising the comparison is necessary but not sufficient: a demand sitting *on* a step boundary
+flips between two steps under the smallest noise, and **that flip is the twitch**. So there is
+hysteresis too — the raw demand must move **half a step** from the value at the last write.
+
+```
+parked craft, engine off, 100 control cycles
+  device writes : 0.16 per cycle     (was: one per thruster, every cycle)
+  mainThread cost: 8 ms per cycle     (was: ~600 ms)
+```
+
+**Hysteresis must never block a re-assert.** If the block no longer holds what *we* last wrote,
+something else moved it, and re-asserting is exactly the case that must not be damped. Only our own
+jitter is suppressed — a change made by anything else writes immediately.
+
+> Introduced while writing this: a local named `step`, shadowing the **thrust** step a few lines
+> below, which silently handed `setThrust` a nozzle-grid fraction. Eleven tests caught it at once.
+> It is the exact class of fault this sweep was called to find, so it is worth recording that the
+> sweep produced one as well as finding them.

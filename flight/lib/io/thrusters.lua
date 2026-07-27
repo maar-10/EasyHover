@@ -167,10 +167,46 @@ function Thrusters:apply(commands)
         if okY and type(ty) == "number" then heldY = ty end
       end
 
-      if entry.canVector
-        and (heldX == nil or heldY == nil
-          or math.abs(nx - heldX) > deadband
-          or math.abs(ny - heldY) > deadband) then
+      -- COMPARED ON THE GRID THE BLOCK ACTUALLY STORES. The deadband is 0.01, but nozzle aim is
+      -- kept as round(v * 15) -- steps of 0.0667. So any PID jitter above 0.01 and below a step
+      -- triggered a write that changed NOTHING in the block: a mainThread call, a server tick,
+      -- for no effect. With twelve thrusters doing that every cycle it is the entire loop budget,
+      -- and on the craft it showed as a nozzle twitching continuously while parked.
+      --
+      -- Quantising alone is not enough: a demand sitting ON a step boundary flips between two
+      -- steps under the smallest noise, and that flip IS the twitch. So the demand must move by
+      -- most of a step before it is worth a write -- hysteresis on the RAW value, remembered from
+      -- the last write rather than from the last cycle.
+      --
+      -- The readback still overrides it. If something else moved the nozzle, we re-assert
+      -- whatever the demand is, however small the change: that is the case hysteresis must not
+      -- suppress.
+      local qx, qy = Thrusters.quantiseVector(nx), Thrusters.quantiseVector(ny)
+      -- NOT `step`: that name is already the THRUST step a few lines below, and shadowing it
+      -- silently handed setThrust a nozzle-grid fraction instead.
+      -- NOT `step`: that name is already the THRUST step a few lines below, and shadowing it
+      -- silently handed setThrust a nozzle-grid fraction instead.
+      local vectorStep = 1 / Thrusters.VECTOR_STEPS
+      -- HALF A STEP. Anything the block cannot represent as a different number is noise; half a
+      -- step is the classic hysteresis width and it still passes a genuine one-step move.
+      local movedEnough = last.rawX == nil or last.rawY == nil
+        or math.abs(nx - last.rawX) >= vectorStep * 0.5
+        or math.abs(ny - last.rawY) >= vectorStep * 0.5
+
+      local qHeldX = (heldX ~= nil) and Thrusters.quantiseVector(heldX) or nil
+      local qHeldY = (heldY ~= nil) and Thrusters.quantiseVector(heldY) or nil
+      local blockDisagrees = (qHeldX == nil or qHeldY == nil)
+        or math.abs(qx - qHeldX) > 1e-6 or math.abs(qy - qHeldY) > 1e-6
+
+      -- HYSTERESIS MUST NOT BLOCK A RE-ASSERT. If the block no longer holds what WE last wrote,
+      -- something else moved it -- and re-asserting is exactly what must not be suppressed, no
+      -- matter how still our own demand has been. Only OUR jitter is damped.
+      local movedByOther = (last.nx ~= nil and qHeldX ~= nil and math.abs(qHeldX - last.nx) > 1e-6)
+        or (last.ny ~= nil and qHeldY ~= nil and math.abs(qHeldY - last.ny) > 1e-6)
+
+      if entry.canVector and blockDisagrees and (movedEnough or movedByOther) then
+        last.rawX, last.rawY = nx, ny
+        nx, ny = qx, qy
         if callDevice(self, entry.id, dev, "setVector", nx, ny) then
           last.nx, last.ny = nx, ny
           wrote = wrote + 1

@@ -165,9 +165,9 @@
         },
         {
           ["dst"] = "flight/lib/io/thrusters.lua",
-          ["size"] = 20148,
+          ["size"] = 22743,
           ["src"] = "flight/lib/io/thrusters.lua",
-          ["sum"] = "6ada824a",
+          ["sum"] = "b44169ab",
         },
         {
           ["dst"] = "flight/lib/log.lua",
@@ -594,5 +594,5 @@
     ["size"] = 36872,
     ["sum"] = "305c58ce",
   },
-  ["version"] = "7608b817",
+  ["version"] = "7331579c",
 }

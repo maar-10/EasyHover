@@ -216,6 +216,39 @@ T.it("a sub-step thrust change writes nothing; crossing a step writes", function
   T.eq(th:apply({ lift_fl = { thrust = 0.27 } }), 1, "step 4, one write")
 end)
 
+--- THE TWITCHING NOZZLE. Nozzle aim is stored as round(v * 15) -- steps of 0.0667 -- while the
+--- deadband was 0.01. Any PID jitter between those two numbers triggered a write that changed
+--- NOTHING in the block: a mainThread call, a server tick, for no effect. Twelve thrusters doing
+--- that every cycle is the whole loop budget, and on the craft it looked like a nozzle twitching
+--- continuously while parked, with the others frozen at odd angles.
+T.it("jitter too small to move the nozzle costs nothing", function()
+  mock.reset()
+  _G.peripheral = mock.install()
+  local r = rig()
+  local th = Thrusters.new(r.per, r.cfg, r.log, r.state)
+  th:apply({ lift_fl = { thrust = 0.5, defX = 0.40, defZ = 0 } })
+
+  local writes = 0
+  for i = 1, 40 do
+    -- PID noise around the same grid step: 0.40 +/- 0.02, well above the 0.01 deadband and far
+    -- below the 0.0667 the block can actually represent
+    local jitter = 0.40 + ((i % 2 == 0) and 0.02 or -0.02)
+    writes = writes + th:apply({ lift_fl = { thrust = 0.5, defX = jitter, defZ = 0 } })
+  end
+  T.eq(writes, 0, "40 cycles of jitter, zero writes: " .. tostring(writes))
+end)
+
+T.it("but a demand that crosses a step is still written", function()
+  mock.reset()
+  _G.peripheral = mock.install()
+  local r = rig()
+  local th = Thrusters.new(r.per, r.cfg, r.log, r.state)
+  th:apply({ lift_fl = { thrust = 0.5, defX = 0.40, defZ = 0 } })
+  -- 0.40 -> 6/15; 0.55 -> 8/15. A real move.
+  local wrote = th:apply({ lift_fl = { thrust = 0.5, defX = 0.55, defZ = 0 } })
+  T.isTrue(wrote > 0, "a change the nozzle can actually make is commanded")
+end)
+
 T.it("vector deadband suppresses noise but not real movement", function()
   mock.reset()
   _G.peripheral = mock.install()
