@@ -62,6 +62,11 @@ end
 -- hardware holds, and after a detach that belief is void.
 function Thrusters:invalidate()
   self.last = {}
+  -- The slow readout cache is keyed by thruster id, and a rebuild can put a DIFFERENT block
+  -- behind the same id. A stale obstruction reading against a new thruster is worse than none.
+  self.slowCache = nil
+  self.slowAt = 0
+  self.slowCursor = 0
 end
 
 -- ---------------------------------------------------------------- mapping
@@ -227,15 +232,70 @@ end
 
 -- ---------------------------------------------------------------- readback
 
+--- WHICH GETTERS COST A SERVER TICK, from the Propulsion source rather than assumption.
+---
+--- There is no shared base: `ThrusterPeripheralBase` declares no @LuaFunctions at all, so every
+--- peripheral lists its own and they do NOT agree.
+---
+---   VectorThrusterPeripheral / LiquidVectorThrusterPeripheral
+---     getVectorX/Y, getTargetVectorX/Y, getThrust, getPower  -- plain @LuaFunction, CHEAP.
+---     Only the setters (and the fluid passthroughs) are mainThread.
+---     They do not implement getCurrentThrust*, getObstruction or the fuel readouts AT ALL.
+---
+---   ThrusterPeripheral / solid / ion  (the plain, non-vector blocks)
+---     EVERYTHING is `mainThread = true`, getters included.
+---
+--- So the cost is not uniform, and the correction matters: an earlier comment here claimed the
+--- getters were never mainThread, and I then over-corrected to claiming they always are. Neither
+--- is true. What follows splits them.
+local CHEAP_READS = {
+  { "getVectorX", "vecX" },
+  { "getVectorY", "vecY" },
+  { "getTargetVectorX", "targetX" },
+  { "getTargetVectorY", "targetY" },
+  { "getPower", "power" },
+}
+
+--- mainThread everywhere they exist, and none of them feeds a control loop: obstruction changes
+--- when the craft is rebuilt, and thrust readout is for display and the pre-flight interlock.
+local COSTLY_READS = {
+  { "getObstruction", "obstruction" },
+  { "getCurrentThrustKN", "thrustKN" },
+}
+
+--- How often the costly ones are refreshed. Two seconds is far inside the rate at which an
+--- obstruction or a fuel state changes, and nothing in the control path reads them.
+Thrusters.SLOW_READ_MS = 2000
+
 --- Actual hardware state.
 ---
---- NOT CHEAP. This said "getters are NOT mainThread, so this is cheap" and that is wrong: every
---- @LuaFunction on ThrusterPeripheral is declared `mainThread = true`, getters included
---- (getPower, getCurrentThrustPN/KN, getObstruction, the fuel readouts -- all of them), so each
---- call waits on a server tick. Verified against the Propulsion source, not inferred.
+--- The costly reads are refreshed on a slow timer and ONE THRUSTER PER PASS, round-robin. A craft
+--- with twelve thrusters otherwise spends twelve server ticks on readouts nothing is steering by,
+--- every time the timer expires -- and doing them all at once turns a smooth loop into a periodic
+--- stall, which is worse than a slow one. Their last values are kept and reported, so consumers
+--- see a real reading with an age rather than a hole.
 function Thrusters:readback()
   local out = {}
-  for _, entry in ipairs(self.per:thrusterList()) do
+  local now = os.epoch("utc")
+  self.slowCache = self.slowCache or {}
+  self.slowAt = self.slowAt or 0
+
+  -- AT MOST ONE THRUSTER PER CALL, and only when ITS OWN reading has gone stale. Each entry
+  -- carries its own timestamp, so the refreshes spread themselves out instead of landing
+  -- together -- a periodic stall is worse than a steady cost. A single shared timer got this
+  -- wrong: it only reset once the cursor had wrapped, so every call refreshed somebody.
+  local list = self.per:thrusterList()
+  local refreshIndex = nil
+  if #list > 0 then
+    self.slowCursor = ((self.slowCursor or 0) % #list) + 1
+    local candidate = list[self.slowCursor]
+    local cached = candidate and self.slowCache[candidate.id]
+    if cached == nil or (now - (cached.at or 0)) >= Thrusters.SLOW_READ_MS then
+      refreshIndex = self.slowCursor
+    end
+  end
+
+  for index, entry in ipairs(list) do
     local dev, id = entry.dev, entry.id
     local row = { id = id, group = entry.spec.group, ok = true }
     local function read(method, key)
@@ -244,13 +304,24 @@ function Thrusters:readback()
       local ok, v = pcall(fn)
       if ok then row[key] = v else row.ok = false end
     end
-    read("getPower", "power")
-    read("getVectorX", "vecX")
-    read("getVectorY", "vecY")
-    read("getTargetVectorX", "targetX")
-    read("getTargetVectorY", "targetY")
-    read("getObstruction", "obstruction")
-    read("getCurrentThrustKN", "thrustKN")
+
+    for _, pair in ipairs(CHEAP_READS) do read(pair[1], pair[2]) end
+
+    local cached = self.slowCache[id]
+    if index == refreshIndex or cached == nil then
+      cached = { at = now }
+      for _, pair in ipairs(COSTLY_READS) do
+        local fn = dev[pair[1]]
+        if type(fn) == "function" then
+          local ok, v = pcall(fn)
+          if ok then cached[pair[2]] = v end
+        end
+      end
+      self.slowCache[id] = cached
+    end
+    for _, pair in ipairs(COSTLY_READS) do row[pair[2]] = cached[pair[2]] end
+    row.slowAgeMs = now - (cached.at or now)
+
     row.commandedStep = (self.last[id] or {}).step
     row.failures = self.failures[id] or 0
     out[id] = row
@@ -258,6 +329,7 @@ function Thrusters:readback()
   if self.state then self.state:set("thrusters.readback", out) end
   return out
 end
+
 
 --- Total commanded thrust across the lift group, normalised. The altitude loop's
 --- feedback on what it actually achieved after quantisation.

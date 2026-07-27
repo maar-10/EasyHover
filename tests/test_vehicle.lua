@@ -1175,6 +1175,52 @@ T.it("does not re-send a deflection the nozzle is already holding", function()
   fs.delete(path)
 end)
 
+--- READBACK COST. The cheap getters (vector angles, throttle) are plain @LuaFunction on the
+--- vector peripherals and can run every cycle. getObstruction and getCurrentThrustKN are
+--- mainThread wherever they exist and feed nothing in the control path, so they are refreshed on
+--- a slow timer, ONE THRUSTER PER PASS -- doing all of them at once would turn a slow loop into a
+--- periodically stalling one, which is worse.
+T.it("does not pay for the mainThread readouts on every cycle", function()
+  local app, path = appRig(fullCraft())
+  local costly = 0
+  for _, entry in ipairs(app.per:thrusterList()) do
+    for _, method in ipairs({ "getObstruction", "getCurrentThrustKN" }) do
+      if type(entry.dev[method]) == "function" then
+        local inner = entry.dev[method]
+        entry.dev[method] = function(...) costly = costly + 1; return inner(...) end
+      end
+    end
+  end
+  app.thrusters:invalidate()
+  app.thrusters:readback()            -- first pass primes every cache entry
+  local afterPrime = costly
+  for _ = 1, 30 do app.thrusters:readback() end
+  T.eq(costly, afterPrime,
+    ("%d costly reads in 30 passes -- the slow timer had not expired"):format(
+      costly - afterPrime))
+  fs.delete(path)
+end)
+
+T.it("still reports a real value for the slow readouts, with its age", function()
+  local app, path = appRig(fullCraft())
+  app.thrusters:invalidate()
+  local out = app.thrusters:readback()
+  local row = out["lift_fl"]
+  T.notNil(row, "the thruster is reported")
+  T.notNil(row.slowAgeMs, "and says how old the slow readings are")
+  T.isTrue(row.slowAgeMs >= 0, "a real age, not a hole")
+  fs.delete(path)
+end)
+
+T.it("forgets the slow cache when the hardware set changes", function()
+  local app, path = appRig(fullCraft())
+  app.thrusters:readback()
+  T.notNil(app.thrusters.slowCache, "primed")
+  app.thrusters:invalidate()
+  T.isNil(app.thrusters.slowCache, "a rebuild can put a different block behind the same id")
+  fs.delete(path)
+end)
+
 T.it("respects each thruster's own maxVector limit", function()
   local cfg = fullCraft()
   cfg.hardware.thrusters[1].maxVector = 0.3
@@ -1473,6 +1519,33 @@ T.it("every nozzle-mapping refusal carries a form that fits the narrowest monito
       ("%s: %q is %d columns"):format(case.name, tostring(short), #tostring(short)))
     fs.delete(path)
   end
+end)
+
+--- A held nozzle OUTRANKS the sweep in App:cycle, so a latch left over from the axis map let the
+--- sweep start, report RUNNING and never once be ticked -- the panel counting down against a
+--- craft where nothing moved. vectorHold already refused while the sweep ran; this was the
+--- missing half of that guard.
+T.it("a held nozzle does not silently stop the sweep from ever ticking", function()
+  local app, path = axisRig()
+  app.engine.master = false
+  T.isTrue((app:handleCommand({ cmd = "vectorHold", action = "latch", id = "lift_fl",
+    axis = "x", sign = 1 })), "latched")
+  T.isTrue(app.axisMap:isHolding(), "and it is holding")
+
+  T.isTrue((app:handleCommand({ cmd = "selfTest", action = "start" })), "the sweep starts")
+  T.isFalse(app.axisMap:isHolding(), "and the latch gave way, so cycle reaches the sweep")
+
+  -- prove it: the real loop must actually tick it
+  local moved = 0
+  for _, entry in ipairs(app.per:thrusterList()) do
+    if type(entry.dev.setVector) == "function" then
+      entry.dev.setVector = function() moved = moved + 1 end
+    end
+  end
+  for _ = 1, 5 do app:cycle(0.05) end
+  T.isTrue(app.selfTest:isRunning(), "still running")
+  T.isTrue(moved > 0, "and the nozzles were commanded through App:cycle")
+  fs.delete(path)
 end)
 
 T.it("nozzle mapping refuses with the engine running, same as the sweep", function()

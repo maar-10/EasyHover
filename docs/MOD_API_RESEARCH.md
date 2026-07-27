@@ -322,12 +322,32 @@ Verified in the source, not inferred:
 - `getDisplayedThrustPN()` → `getDisplayedThrustPnForTooltip()`. **A display figure. Never use it
   to decide whether a nozzle is firing.**
 
-### ⚠️ Every thruster `@LuaFunction` is `mainThread = true` — getters included
+### ⚠️ `mainThread` is per-peripheral, and the peripherals do not agree
 
-`getPower`, `getCurrentThrustPN/KN`, `getDisplayedThrust*`, `getObstruction`, `getFuelAmountMb`,
-`getFuelCapacityMb` — all of them. `flight/lib/io/thrusters.lua` used to claim "getters are NOT
-mainThread, so this is cheap"; that was wrong, and `readback()` runs over every thruster every
-control cycle. Each call waits on a server tick.
+**There is no shared base.** `ThrusterPeripheralBase` declares no `@LuaFunction` at all — it is
+attachment bookkeeping. Every concrete peripheral lists its own methods, and they differ:
+
+| | Vector / LiquidVector | Thruster / solid / ion |
+|---|---|---|
+| `getVectorX/Y`, `getTargetVectorX/Y` | plain — **cheap** | not present |
+| `getThrust`, `getPower` | plain — **cheap** | `mainThread` |
+| `setVector*`, `setThrust*`, `setPower*` | `mainThread` | `mainThread` |
+| `getCurrentThrustPN/KN`, `getObstruction`, `getAirflowMs` | **not present at all** | `mainThread` |
+| fuel readouts, `tanks`/`pushFluid`/`pullFluid` | fluid ones only | present |
+
+Two corrections in a row happened here, so it is worth stating plainly: the comment in
+`thrusters.lua` first claimed the getters are *never* `mainThread` (wrong), and I then
+over-corrected to *always* (also wrong). It depends on which block.
+
+**A vector thruster exposes no thrust or obstruction readout whatsoever.** That is why the
+"thrusters do not expose a fuel API" notice was correct rather than a bug, and it means
+`anyPowered()` cannot see thrust on a vector-only craft — the engine-master gate and `allStop`
+carry that guarantee instead.
+
+`readback()` splits accordingly: the cheap getters run every cycle, and `getObstruction` /
+`getCurrentThrustKN` refresh on a 2 s timer, **one thruster per call**, round-robin. Doing all of
+them together would turn a steady cost into a periodic stall, which is worse. Measured on a
+12-thruster craft: 100 readbacks after the first cost **zero** slow reads.
 
 ### The engine master does not make the thrusters cold
 

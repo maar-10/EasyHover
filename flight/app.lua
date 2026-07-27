@@ -785,6 +785,15 @@ function App:handleCommand(cmd)
     --
     -- errorShort is the 15-column wording. The craft picks both, because a panel that shortens a
     -- refusal by truncation can invert it: "cut the engine first" became "he engine first".
+    -- A HELD NOZZLE OUTRANKS THE SWEEP IN App:cycle, so a latch left over from the axis map
+    -- would let the sweep start, report RUNNING, and never once be ticked -- the panel counting
+    -- down against a craft where nothing moves. There is a guard the other way (vectorHold
+    -- refuses while the sweep runs) and this was its missing half. The pilot pressing SELF TEST
+    -- is the newer instruction, so the latch gives way to it.
+    if self.axisMap:isHolding() then
+      self.axisMap:release("starting the self test")
+      self.log:info("self test: released a held nozzle first")
+    end
     local ok, err, short = self.selfTest:start({
       airborne = self:knownAirborne(),
       engineOn = self.engine.master and true or false, now = now })

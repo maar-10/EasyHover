@@ -419,6 +419,58 @@ for _, entry in ipairs(thrusterNames) do
 end
 if #thrusterNames == 0 then w("No thrusters found.") end
 
+-- ------------------------------------------------- does each nozzle respond?
+
+--- THE QUESTION THE SELF TEST CANNOT ANSWER FOR ITSELF: when this computer commands a nozzle,
+--- does that nozzle move? Tested per thruster, directly, with nothing else in the way -- no
+--- mixer, no self test, no config. A thruster that reports no `setVector` has no nozzle at all,
+--- which is silent everywhere else and is the whole answer if it applies.
+---
+--- Aim is stored as round(x * 15) into four redstone signals, so 0.6 must come back as 9/15 =
+--- 0.6. Anything else is the interesting case.
+section("nozzle response  -- does setVector actually move it?")
+
+local TEST_AIM = 0.6
+local nozzleOk, nozzleNone, nozzleDead = 0, 0, 0
+
+for _, entry in ipairs(thrusterNames) do
+  local dev = peripheral.wrap(entry.name)
+  if type(dev.setVector) ~= "function" then
+    nozzleNone = nozzleNone + 1
+    w("%-28s %-24s NO setVector -- THRUST ONLY, no nozzle to move",
+      entry.name, entry.ptype)
+  else
+    local _, beforeTarget = try(dev, "getTargetVectorX")
+    try(dev, "setVector", TEST_AIM, 0)
+    local _, afterTarget = try(dev, "getTargetVectorX")
+    -- the nozzle slews, so give it a moment before reading the ACTUAL angle
+    sleep(0.6)
+    local _, afterActual = try(dev, "getVectorX")
+    try(dev, "setVector", 0, 0)
+    sleep(0.3)
+    try(dev, "setVector", 0, 0)
+
+    local moved = type(afterTarget) == "number" and math.abs(afterTarget - TEST_AIM) < 0.05
+    local slewed = type(afterActual) == "number" and math.abs(afterActual) > 0.02
+    if moved and slewed then nozzleOk = nozzleOk + 1 else nozzleDead = nozzleDead + 1 end
+    w("%-28s %-24s target %s -> %s (asked %.2f)  actual %s  %s",
+      entry.name, entry.ptype, fmt(beforeTarget), fmt(afterTarget), TEST_AIM, fmt(afterActual),
+      (moved and slewed) and "OK" or "DID NOT MOVE")
+  end
+end
+
+if #thrusterNames == 0 then
+  w("No thrusters found.")
+else
+  brief("nozzles  %d move, %d thrust-only, %d did NOT move", nozzleOk, nozzleNone, nozzleDead)
+  if nozzleNone > 0 then
+    brief("         thrust-only ones cannot be swept -- they have no nozzle")
+  end
+  if nozzleDead > 0 then
+    brief("         %d accepted setVector but did not move", nozzleDead)
+  end
+end
+
 -- ---------------------------------------------------------------- slew + cost
 
 local vecName, vecType = firstOf(table.unpack(VECTOR_TYPES))

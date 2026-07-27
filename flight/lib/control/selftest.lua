@@ -284,6 +284,11 @@ function SelfTest:tick(now)
     }
     if #members == 0 then
       self.log:warn("self test: no %s thrusters are assigned", step.group)
+    elseif #vectoring == 0 then
+      -- EVERY thruster in this group is thrust-only, so nothing will move for the next 15
+      -- seconds while the screen counts down as though it were testing something. Only the
+      -- VECTOR peripherals expose setVector; a plain `thruster` has no nozzle at all.
+      self.log:warn("self test: NO %s thruster has a nozzle -- nothing will move", step.group)
     elseif #plain > 0 then
       self.log:info("self test: %d %s thruster(s) have no nozzle (thrust only): %s",
         #plain, step.group, table.concat(plain, ", "))
@@ -336,10 +341,15 @@ function SelfTest:publish(progress)
   if not self.state then return end
   if self.run then
     local p = progress or self:progress()
+    -- `moving` is how many nozzles this step can actually sweep. Zero is the answer to "it says
+    -- running but nothing moves", and it belongs on the screen, not only in the log.
+    local current = self.run.findings[SelfTest.STEPS[p.step].group]
     self.state:set("selfTest", {
       running = true,
       step = p.step, steps = p.steps, label = p.label, watch = p.watch,
       phase = p.phase,
+      moving = current and #(current.vectoring or {}) or nil,
+      groupCount = current and current.count or nil,
       stepRemainingMs = p.stepRemainingMs,
       remainingMs = p.remainingMs,
       findings = self.run.findings,

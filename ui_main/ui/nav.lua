@@ -504,8 +504,16 @@ function Nav.build(frame, opts)
     end
 
     if st.running then
-      selfStatus:setText(Theme.fit(tostring(st.label or ""), width))
-      selfStatus:setForeground(Theme.fg)
+      -- NOTHING TO SWEEP is the most useful thing this screen can say, and it was buried in a
+      -- "lif 0/4" findings line that only parsed if you already knew what it meant. A group whose
+      -- thrusters are all thrust-only has no nozzle to move, so the countdown means nothing.
+      if st.moving == 0 then
+        selfStatus:setText(Theme.fit(("NO NOZZLE: %d THR"):format(st.groupCount or 0), width))
+        selfStatus:setForeground(Theme.warning)
+      else
+        selfStatus:setText(Theme.fit(tostring(st.label or ""), width))
+        selfStatus:setForeground(Theme.fg)
+      end
       selfTimer:setText(Theme.fit(("%s  %.0fs left"):format(tostring(st.phase or ""),
         (st.stepRemainingMs or 0) / 1000), width))
       selfWatch:setText(Theme.fit("watch: " .. tostring(st.watch or ""), width))
