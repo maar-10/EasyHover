@@ -105,9 +105,9 @@
         },
         {
           ["dst"] = "flight/lib/control/selftest.lua",
-          ["size"] = 9600,
+          ["size"] = 11823,
           ["src"] = "flight/lib/control/selftest.lua",
-          ["sum"] = "3904a7df",
+          ["sum"] = "1f58a2f4",
         },
         {
           ["dst"] = "flight/lib/input/bindings.lua",
@@ -570,5 +570,5 @@
     ["size"] = 36872,
     ["sum"] = "305c58ce",
   },
-  ["version"] = "5a78defe",
+  ["version"] = "79b2d109",
 }

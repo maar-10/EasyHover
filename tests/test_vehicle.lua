@@ -838,11 +838,61 @@ end)
 T.it("refuses while a thruster is producing thrust", function()
   local app, path = appRig(fullCraft())
   app.state.mode = "GROUND"
-  app.per.thrusters["lift_fl"].dev.getPower = function() return 0.5 end
+  -- ACTUAL thrust, which is what the interlock is about. Stubbing getPower here used to be
+  -- enough, and that was the bug: getPower is the throttle the flight computer last asked for.
+  app.per.thrusters["lift_fl"].dev.getCurrentThrustKN = function() return 12.0 end
   local ok, detail = app:handleCommand({ cmd = "selfTest", action = "start" })
   T.isFalse(ok, "refused")
   T.isTrue(tostring((detail or {}).error):find("thrust") ~= nil,
     "and says why: " .. tostring((detail or {}).error))
+  fs.delete(path)
+end)
+
+--- THE FALSE POSITIVE THE PILOT HIT. Engine off, nothing burning, and the sweep still said
+--- "CUT THE ENGINE" -- with no way to comply, because the reading came from the flight computer
+--- own command rather than from the engine.
+---
+--- `Thrusters:apply` runs every control cycle regardless of the engine master, so the altitude
+--- loop keeps asking the lift thrusters for lift while the craft sits on the ground. getPower
+--- read that back as about 0.2 and the interlock called it thrust.
+T.it("ALLOWS the sweep on a parked craft whose throttles are commanded but unfuelled", function()
+  local app, path = appRig(fullCraft())
+  app.engine.master = false
+  app.state.mode = "GROUND"
+
+  -- no fuel is reaching anything: throttle holds, physics reads zero
+  for _, entry in ipairs(app.per:thrusterList()) do
+    if entry.dev.__setFuelled then entry.dev.__setFuelled(false) end
+  end
+  -- let the control loop command lift, exactly as it does in game
+  for _ = 1, 10 do app:cycle(0.05) end
+
+  local commanded = app.per.thrusters["lift_fl"].dev.getPower()
+  T.isTrue(commanded > 0.001,
+    "precondition: the mixer really is holding a throttle (" .. tostring(commanded) .. ")")
+  T.eq(app.per.thrusters["lift_fl"].dev.getCurrentThrustKN(), 0, "but nothing is firing")
+
+  local ok, detail = app:handleCommand({ cmd = "selfTest", action = "start" })
+  T.isTrue(ok, "permitted: " .. tostring((detail or {}).error))
+  fs.delete(path)
+end)
+
+T.it("and takes those commanded throttles to zero once it owns the thrusters", function()
+  -- Otherwise the mixer last command stands for the whole 45 seconds, ready to become real
+  -- thrust the moment someone opens the fuel valve.
+  local app, path = appRig(fullCraft())
+  app.engine.master = false
+  app.state.mode = "GROUND"
+  for _, entry in ipairs(app.per:thrusterList()) do
+    if entry.dev.__setFuelled then entry.dev.__setFuelled(false) end
+  end
+  for _ = 1, 10 do app:cycle(0.05) end
+  T.isTrue(app.per.thrusters["lift_fl"].dev.getPower() > 0.001, "a throttle is standing")
+
+  T.isTrue((app:handleCommand({ cmd = "selfTest", action = "start" })), "started")
+  for _, entry in ipairs(app.per:thrusterList()) do
+    T.eq(entry.dev.getPower(), 0, entry.id .. " throttle is zero while the sweep runs")
+  end
   fs.delete(path)
 end)
 
@@ -866,7 +916,7 @@ T.it("every self-test refusal carries a form that fits the narrowest monitor", f
       end },
     { name = "a thruster making thrust", setup = function(app)
         app.state.mode = "GROUND"
-        app.per.thrusters["lift_fl"].dev.getPower = function() return 0.4 end
+        app.per.thrusters["lift_fl"].dev.getCurrentThrustKN = function() return 9.0 end
       end },
   }
   for _, case in ipairs(cases) do
@@ -890,16 +940,21 @@ T.it("the self test never commands thrust, only nozzle deflection", function()
   -- itself must never ask for any.
   local app, path = appRig(fullCraft())
   app.state.mode = "GROUND"
-  local thrustAsked = {}
+  -- Zero IS commanded, on purpose, once at the start: that is allStop taking the mixer last
+  -- throttle down. What must never appear is a NONZERO request.
+  local nonzero = {}
   for id, entry in pairs(app.per.thrusters) do
-    entry.dev.setThrust = function(v) thrustAsked[#thrustAsked + 1] = id .. "=" .. tostring(v) end
-    entry.dev.setThrustNormalized = entry.dev.setThrust
-    entry.dev.setPower = entry.dev.setThrust
+    local record = function(v)
+      if type(v) == "number" and v > 0 then nonzero[#nonzero + 1] = id .. "=" .. tostring(v) end
+    end
+    entry.dev.setThrust = record
+    entry.dev.setThrustNormalized = record
+    entry.dev.setPower = record
   end
   T.isTrue((app:handleCommand({ cmd = "selfTest", action = "start" })), "started")
   local started = app.selfTest.run.startedAt
   for at = 0, 44000, 500 do app.selfTest:tick(started + at) end
-  T.eq(#thrustAsked, 0, "no thrust was ever commanded: " .. table.concat(thrustAsked, " "))
+  T.eq(#nonzero, 0, "no thrust was ever commanded: " .. table.concat(nonzero, " "))
   fs.delete(path)
 end)
 
@@ -1020,14 +1075,28 @@ T.it("the pilot can abort it, and the nozzles are centred", function()
   local app, path = appRig(fullCraft())
   app.state.mode = "GROUND"
   app:handleCommand({ cmd = "selfTest", action = "start" })
-  local centred = {}
+  -- Run far enough in to actually DEFLECT something, otherwise this asserts nothing: apply()
+  -- elides a write that would not change anything, so an abort one tick after the start has no
+  -- centring left to do. Asserting the WRITE rather than the STATE is what made this look broken
+  -- once allStop began centring the nozzles up front.
+  local started = app.selfTest.run.startedAt
+  for at = 0, 4000, 250 do app.selfTest:tick(started + at) end
+  local deflected = false
   for _, entry in ipairs(app.per:thrusterList()) do
-    local id = entry.id
-    entry.dev.setVector = function(x, y) centred[id] = (x == 0 and y == 0) end
+    local n = entry.dev._nozzle
+    if n and (math.abs(n.tx or 0) > 0.01 or math.abs(n.ty or 0) > 0.01) then deflected = true end
   end
+  T.isTrue(deflected, "precondition: the sweep really moved a nozzle")
+
   T.isTrue((app:handleCommand({ cmd = "selfTest", action = "abort" })), "aborted")
   T.isFalse(app.selfTest:isRunning(), "stopped")
-  T.isTrue(centred["lift_fl"], "and every nozzle was returned to centre")
+  for _, entry in ipairs(app.per:thrusterList()) do
+    local n = entry.dev._nozzle
+    if n then
+      T.eq(n.tx, 0, entry.id .. " nozzle X is centred")
+      T.eq(n.ty, 0, entry.id .. " nozzle Y is centred")
+    end
+  end
   fs.delete(path)
 end)
 

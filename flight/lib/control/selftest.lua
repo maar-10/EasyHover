@@ -60,13 +60,39 @@ function SelfTest:groupMembers(group)
   return out
 end
 
---- Is any thruster producing power? A sweep with live thrust would move the craft.
+--- Anything above this in kN counts as firing. Not zero: a mod readout that jitters at the
+--- fourth decimal would make the interlock unpassable, which is its own kind of broken.
+local THRUST_EPSILON_KN = 0.05
+
+--- Is any thruster ACTUALLY PRODUCING THRUST? Physics, not the commanded throttle.
+---
+--- THIS READ getPower(), WHICH IS THE READ-BACK OF setPower -- the throttle the flight computer
+--- last asked for. It says nothing about whether the thruster is doing anything: a thruster with
+--- no fuel reaching it holds its throttle and produces nothing. And `Thrusters:apply` runs every
+--- control cycle regardless of the engine master, so on a craft parked with the engine OFF the
+--- altitude loop still asks the lift thrusters for about 20%. The interlock read that back and
+--- told the pilot to cut an engine that was already off -- with no way to comply, because the
+--- reading came from the flight computer's own command, not from the engine.
+---
+--- getCurrentThrustKN and getDisplayedThrustKN are the physical output and are documented for
+--- every thruster type (docs/MOD_API_RESEARCH.md). Only kN readouts are used: PN is listed too
+--- but mixing units to save a fallback is how an epsilon silently becomes a thousand times too
+--- large. If a thruster exposes neither, the throttle is used as a LAST RESORT and the message
+--- says so, because guessing "not firing" would be the unsafe direction.
 function SelfTest:anyPowered()
   for _, entry in ipairs(self.per:thrusterList()) do
-    local fn = entry.dev.getPower
-    if type(fn) == "function" then
-      local ok, v = pcall(fn)
-      if ok and type(v) == "number" and v > 0.001 then return true, entry.id, v end
+    local dev = entry.dev
+    local reader = dev.getCurrentThrustKN or dev.getDisplayedThrustKN
+    if type(reader) == "function" then
+      local ok, kn = pcall(reader)
+      if ok and type(kn) == "number" and kn > THRUST_EPSILON_KN then
+        return true, entry.id, kn, "kN"
+      end
+    elseif type(dev.getPower) == "function" then
+      local ok, v = pcall(dev.getPower)
+      if ok and type(v) == "number" and v > 0.001 then
+        return true, entry.id, v, "throttle"
+      end
     end
   end
   return false
@@ -92,12 +118,21 @@ function SelfTest:start(opts)
   if not opts.allowed then
     return false, "on the ground only, with the engine off", "ON GROUND ONLY"
   end
-  local powered, id, value = self:anyPowered()
+  local powered, id, value, unit = self:anyPowered()
   if powered then
     return false,
-      ("%s is making thrust (%.2f) -- cut the engine"):format(tostring(id), value),
+      ("%s is making thrust (%.2f %s) -- cut the engine"):format(tostring(id), value,
+        tostring(unit)),
       "CUT THE ENGINE"
   end
+
+  -- NOW take the throttles to zero. After the check, never before: cutting thrust on a craft
+  -- that is producing it would be the one genuinely dangerous thing this screen could do, so a
+  -- craft making thrust is refused rather than quietly silenced. Past this line nothing is
+  -- firing, and the mixer does not run again until the sweep ends -- so without this the
+  -- throttle the mixer last commanded would stand for the whole 45 seconds, ready to become
+  -- real thrust the moment someone opened the fuel valve.
+  self.thrusters:allStop()
 
   self.run = {
     startedAt = opts.now or os.epoch("utc"),
@@ -172,7 +207,7 @@ function SelfTest:tick(now)
     self.run.lastPowerCheck = now
     local powered, id = self:anyPowered()
     if powered then
-      self:abort(("aborted: %s started producing thrust"):format(tostring(id)),
+      self:abort(("aborted: %s started making thrust"):format(tostring(id)),
         "THRUST APPEARED")
       return false
     end

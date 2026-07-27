@@ -287,8 +287,21 @@ Three layers, and the sweep itself commands no thrust at all — asserted by a t
 | Layer | What it stops |
 |---|---|
 | `engine.master` must be off | fuel reaching the thrusters at all |
-| no thruster may read power > 0.001 at start | residual thrust from before |
-| power re-checked each second, sweep aborts | thrust appearing mid-run |
+| no thruster may read **> 0.05 kN of actual thrust** at start | anything genuinely firing |
+| thrust re-checked each second, sweep aborts | thrust appearing mid-run |
+| `allStop()` once the checks pass | the mixer's last throttle standing for 45 s |
+
+**Actual thrust, not the commanded throttle.** This interlock read `getPower()`, which is the
+read-back of `setPower` — so on a craft parked with the engine off it read the altitude loop's own
+~20% lift command and told the pilot to cut an engine that was already off. `getPower` is a
+throttle; `getCurrentThrustKN` is physics. See [MOD_API_RESEARCH.md](MOD_API_RESEARCH.md).
+
+**The order matters.** Thrust is checked *before* `allStop()`, never after: silently cutting thrust
+on a craft that is producing it would be the one genuinely dangerous thing this screen could do, so
+a craft making thrust is **refused** rather than quietly silenced. Past that line nothing is
+firing, and since the mixer does not run again until the sweep ends, `allStop()` stops the throttle
+it last commanded from standing for the whole 45 seconds — ready to become real thrust the moment
+someone opens the fuel valve.
 
 ## A refusal must not invert when it is truncated
 

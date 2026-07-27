@@ -52,6 +52,24 @@ end
 --- Vector thruster with quantised throttle and a slewing nozzle.
 -- opts.slewPerCall: how far the reported vector moves toward target per getVectorX call
 -- opts.autoSlew=false: the nozzle reports its target immediately (simpler for unit tests)
+--- Test scaffolding, not a mod method: cut the fuel to a thruster. A real unfuelled thruster
+--- keeps whatever throttle it was told to hold and produces NO thrust, which is the difference
+--- between `getPower` (a read-back of setPower) and `getCurrentThrustKN` (physics). Deriving one
+--- from the other made the mock unable to express a parked craft with the engine off.
+local function fuelSwitch(dev, thrustKeys)
+  local fuelled = true
+  dev.__setFuelled = function(v) fuelled = v and true or false end
+  for _, key in ipairs(thrustKeys) do
+    local inner = dev[key]
+    if type(inner) == "function" then
+      dev[key] = function(...) if not fuelled then return 0 end return inner(...) end
+    end
+  end
+  return dev
+end
+
+M.fuelSwitch = fuelSwitch
+
 function M.vectorThruster(opts)
   opts = opts or {}
   local n = { x = 0, y = 0, tx = 0, ty = 0, power = 0, slewPerCall = opts.slewPerCall or 0.25 }
@@ -102,13 +120,13 @@ function M.vectorThruster(opts)
     dev.getVectorX = function() return n.x end
   end
   dev._nozzle = n
-  return dev
+  return fuelSwitch(dev, { "getCurrentThrustKN", "getCurrentThrustPN", "getDisplayedThrustKN", "getDisplayedThrustPN", "getAirflowMs" })
 end
 
 function M.solidThruster(opts)
   opts = opts or {}
   local power = 0
-  return {
+  local dev = {
     setThrust = function(p) power = math.max(0, math.min(15, math.floor(p))) / 15 end,
     setPower = function(p) power = math.max(0, math.min(15, math.floor(p))) / 15 end,
     setThrustNormalized = function(p) power = math.floor(math.max(0, math.min(1, p)) * 15 + 1e-6) / 15 end,
@@ -120,12 +138,13 @@ function M.solidThruster(opts)
     getBurnTimeRemaining = function() return opts.burnTime or 340 end,
     isBurning = function() return opts.burning ~= false end,
   }
+  return fuelSwitch(dev, { "getCurrentThrustKN", "getCurrentThrustPN", "getDisplayedThrustKN" })
 end
 
 function M.ionThruster(opts)
   opts = opts or {}
   local power = 0
-  return {
+  local dev = {
     setThrust = function(p) power = math.max(0, math.min(15, math.floor(p))) / 15 end,
     setPower = function(p) power = math.max(0, math.min(15, math.floor(p))) / 15 end,
     getPower = function() return power end,
@@ -134,6 +153,7 @@ function M.ionThruster(opts)
     getEnergyAmountFe = function() return opts.energy or 20000 end,
     getEnergyCapacityFe = function() return opts.energyCapacity or 100000 end,
   }
+  return fuelSwitch(dev, { "getCurrentThrustKN", "getCurrentThrustPN", "getDisplayedThrustKN" })
 end
 
 --- Redstone relay. opts.lie = an offset added to every readback, to test verification.

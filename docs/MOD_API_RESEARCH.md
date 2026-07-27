@@ -290,3 +290,35 @@ A ~30-line probe on the assembled craft settles all of these:
    this sets the achievable attitude-loop bandwidth.
 7. `optical_sensor` max range and whether `getBlock()` returns a full id (`minecraft:stone`).
 8. Whether thruster peripherals survive assembly, or need re-wrapping afterwards.
+
+---
+
+## ⚠️ `getPower()` is the throttle read-back, NOT thrust
+
+This one reached the craft. `getPower()` / `getThrust()` return **what `setPower`/`setThrust` last
+asked for** — the commanded throttle. They say nothing about whether the thruster is doing
+anything: a thruster with no fuel reaching it holds its throttle and produces **zero** thrust.
+
+`getCurrentThrustKN` / `getDisplayedThrustKN` are the physical output. Use those for any question
+of the form *"is anything actually firing?"*
+
+The self-test interlock read `getPower() > 0.001`. Because `Thrusters:apply` runs every control
+cycle **regardless of the engine master**, the altitude loop keeps asking the lift thrusters for
+about 20% lift while the craft sits parked. The interlock read its own command back and told the
+pilot to `CUT THE ENGINE` — with **no way to comply**, because the reading did not come from the
+engine at all. The engine was already off.
+
+**Only kN readouts are used.** `PN` is listed for every thruster too, but mixing units to gain a
+fallback is how an epsilon silently becomes a thousand times too large. If a thruster exposes
+neither kN readout, the throttle is used as a last resort and the message says `throttle` instead
+of `kN`, because guessing "not firing" is the unsafe direction.
+
+### The mock had the same confusion
+
+`tests/mocks/peripherals.lua` derived `getCurrentThrustKN` from commanded power, so the two were
+indistinguishable and **no test could tell a false interlock trip from a true one**. Every thruster
+mock now has a `__setFuelled(false)` switch (test scaffolding, not a mod method) that makes the
+thrust readouts return 0 while the throttle keeps its value — which is what an unfuelled thruster
+really does.
+
+A fix for a physical-semantics bug is not verified until the mock can express the physics.
