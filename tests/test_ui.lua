@@ -1144,6 +1144,33 @@ T.it("leaves the middle empty -- the map goes there", function()
     "says so rather than drawing decoration: " .. panel.elements.placeholder:getText())
 end)
 
+--- THE STANDARD SINGLE MONITOR: one block at text scale 0.5 is 15x10, and the panel's floor was
+--- 14x12 -- so the default cockpit screen showed "TOO SMALL" and nothing else.
+T.it("fits the standard single monitor, 15x10", function()
+  local panel = navRig(15, 10)
+  panel.update(navModel())
+  T.notNil(panel.pages.nav, "the nav page exists rather than a TOO SMALL notice")
+  T.isTrue(panel.pages.nav:getVisible(), "and it is the page on show")
+end)
+
+--- The dangerous one. The bar loop stopped at `height - 5`, so a 10-row monitor drew three bars
+--- and silently dropped roll and yaw -- a dead roll input would have passed the very test that
+--- exists to catch it.
+T.it("shows every flight axis at every size, or none at all", function()
+  for _, size in ipairs({ { 15, 10 }, { 15, 12 }, { 29, 12 }, { 29, 19 }, { 51, 19 } }) do
+    local panel = navRig(size[1], size[2])
+    panel.update(navModel({
+      axes = { accel = 0.5, climb = -0.5, pitch = 0.25, roll = -0.75, yaw = 0.1 },
+      brake = false, controller = false, typewriter = true,
+    }))
+    for _, axis in ipairs(Nav.AXES) do
+      T.notNil(panel.bars[axis.key],
+        ("%dx%d: %s has no bar -- a dead input would pass unnoticed"):format(
+          size[1], size[2], axis.label))
+    end
+  end
+end)
+
 --- On a narrow cockpit monitor the three labels do not fit across one row: they came out as
 --- "FCS T SELFT AXI" with the third button hanging past the right edge.
 T.it("the three test buttons stay readable and on-screen at every width", function()
@@ -1324,18 +1351,34 @@ end)
 
 T.suite("nozzle axis map screen")
 
-local function axisNavRig(hold, rows)
-  local panel, commands = navRig()
+--- Two thrusters IN THE SAME GROUP by default, because the axis map pages per group -- a lift
+--- and a main are no longer on the same page, which is the point of paging that way.
+local function axisNavRig(hold, rows, width, height)
+  local panel, commands = navRig(width, height)
   local m = navModel()
   m.telemetry.thrusterAxes = rows or {
     { index = 1, id = "lift_fl", group = "lift", key = "fl",
       swap = false, invertX = false, invertY = false },
-    { index = 2, id = "main_1", group = "main", key = "1",
+    { index = 2, id = "lift_fr", group = "lift", key = "fr",
       swap = false, invertX = false, invertY = false },
   }
   m.telemetry.axisMap = hold or { holding = false }
   panel.update(m)
   return panel, commands
+end
+
+--- A full craft: four of each group, which is what the pilot actually has.
+local function twelveThrusters()
+  local out = {}
+  local keys = { lift = { "fl", "fr", "bl", "br" }, lateral = { "l1", "l2", "r1", "r2" },
+    main = { "m1", "m2", "m3", "m4" } }
+  for _, group in ipairs({ "lift", "lateral", "main" }) do
+    for _, key in ipairs(keys[group]) do
+      out[#out + 1] = { index = #out + 1, id = group .. "_" .. key, group = group, key = key,
+        swap = false, invertX = false, invertY = false }
+    end
+  end
+  return out
 end
 
 T.it("is the third button on the nav border, and replaces the nav view", function()
@@ -1351,7 +1394,21 @@ T.it("offers all four nozzle deflections for every thruster", function()
   T.eq(#row.buttons, 4, "X+, X-, Y+, Y-")
   T.eq(row.buttons[1]:getText(), "X+")
   T.eq(row.buttons[4]:getText(), "Y-")
-  T.isTrue(row.label:getText():find("LIFFL") ~= nil, "named: " .. row.label:getText())
+  -- "LIF:FL" where there is room for it, the bare key "FL" where there is not -- see the
+  -- narrow-screen test below for why the group cannot simply always be included.
+  T.isTrue(row.label:getText():find("FL") ~= nil, "named: " .. row.label:getText())
+end)
+
+--- Both lift rows used to read "LIF": the label was group..key fitted into the three columns a
+--- 15-wide monitor can spare, so `fl` and `fr` were indistinguishable on the one screen whose
+--- job is telling you which nozzle just moved.
+T.it("distinguishes thrusters in the same group on a narrow screen", function()
+  local panel = axisNavRig(nil, nil, 15, 10)
+  local first = panel.axisRows[1].label:getText()
+  local second = panel.axisRows[2].label:getText()
+  T.isTrue(first ~= second, ("both rows read %q"):format(first))
+  T.isTrue(first:find("FL") ~= nil, "the first is fl: " .. first)
+  T.isTrue(second:find("FR") ~= nil, "the second is fr: " .. second)
 end)
 
 T.it("tapping a deflection LATCHES that nozzle", function()
@@ -1385,9 +1442,53 @@ T.it("LIGHTS UP with the direction the system currently believes", function()
     direction = "RIGHT", group = "lift" })
   local text = panel.elements.axisHolding:getText()
   T.isTrue(text:find("lift_fl") ~= nil, "names the thruster: " .. text)
-  T.isTrue(text:find("%+x") ~= nil, "and the deflection")
+  T.isTrue(text:find("%+X") ~= nil, "and the deflection")
   T.isTrue(text:find("RIGHT") ~= nil, "and what it is currently called")
   T.eq(panel.elements.axisHolding:getForeground(), Theme.ok, "lit")
+end)
+
+--- NOTHING EVER CHANGED THE PAGE. axisPageIndex was clamped and read but never written, so on a
+--- 10-row monitor -- four rows to a page -- only the first four of twelve thrusters could be
+--- reached. The footer said "pg 1/3" and there was no way to get to 2 or 3.
+T.it("can reach every thruster on a screen too short to list them all", function()
+  local panel = axisNavRig(nil, twelveThrusters(), 15, 10)
+  T.notNil(panel.elements.axisNext, "there is a way forward")
+
+  local seen, guard = {}, 0
+  repeat
+    for _, row in ipairs(panel.axisRows) do
+      if row.entry then seen[row.entry.id] = true end
+    end
+    click(panel.elements.axisNext)
+    guard = guard + 1
+  until guard >= 12
+
+  for _, entry in ipairs(twelveThrusters()) do
+    T.isTrue(seen[entry.id], entry.id .. " is reachable")
+  end
+end)
+
+T.it("pages by group, so bare keys are never ambiguous", function()
+  -- The craft really does have a lift `fl` and a lateral `fl`; the row label is the key alone.
+  local panel = axisNavRig(nil, twelveThrusters(), 15, 10)
+  for _ = 1, 3 do
+    local groups = {}
+    for _, row in ipairs(panel.axisRows) do
+      if row.entry then groups[row.entry.group] = true end
+    end
+    local count = 0
+    for _ in pairs(groups) do count = count + 1 end
+    T.eq(count, 1, "exactly one group on the page")
+    T.isTrue(panel.elements.axisFooter:getText():len() > 0, "and it is named in the footer")
+    click(panel.elements.axisNext)
+  end
+end)
+
+T.it("hides the paging buttons when everything fits on one page", function()
+  local panel = axisNavRig(nil, {
+    { index = 1, id = "lift_fl", group = "lift", key = "fl" },
+  }, 29, 19)
+  T.isFalse(panel.elements.axisNext:getVisible(), "no paging needed, so no paging offered")
 end)
 
 T.it("marks the held deflection on the grid", function()

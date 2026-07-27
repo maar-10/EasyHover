@@ -22,7 +22,12 @@ local Util = require("shared.util")
 
 local Nav = {}
 
-local MIN_WIDTH, MIN_HEIGHT = 14, 12
+--- THE SMALLEST MONITOR ANYONE ACTUALLY USES: one block at text scale 0.5, which is 15x10.
+--- The floor was 14x12, chosen from what the pages happened to need rather than from the
+--- hardware, so the standard single monitor got "TOO SMALL" and nothing else. Every page below
+--- is laid out to fit in 10 rows, and 15 columns is what the axis map's label + four buttons
+--- need (3 + 4*3). 0.5 is CC's finest text scale, so nothing can be gained below this.
+local MIN_WIDTH, MIN_HEIGHT = 15, 10
 
 --- The pilot axes, in the order they sit under your hands.
 local AXES = {
@@ -88,6 +93,7 @@ function Nav.build(frame, opts)
     Theme.line(frame, 1, width, "NAV: TOO", Theme.warning)
     Theme.line(frame, 2, width, "SMALL", Theme.warning)
     Theme.line(frame, 3, width, ("%dx%d"):format(width, height), Theme.dim)
+    Theme.line(frame, 4, width, ("need %dx%d"):format(MIN_WIDTH, MIN_HEIGHT), Theme.dim)
     return { update = function() end, elements = {}, pages = {} }
   end
 
@@ -107,6 +113,15 @@ function Nav.build(frame, opts)
 
   local function show(target)
     for _, p in ipairs(pages) do p:setVisible(p == target) end
+  end
+
+  --- A line that is only placed if a row was spared for it. It is created either way, so
+  --- update() never needs to know which rows a given monitor could afford -- an unplaced one is
+  --- simply invisible. Passing `nil` for the row is how a caller says "no room".
+  local function optionalLine(parent, row, text, colour)
+    local element = Theme.line(parent, row or 1, width, text, colour)
+    if row == nil then element:setVisible(false) end
+    return element
   end
 
   -- ---------------------------------------------------------------- nav view
@@ -150,43 +165,76 @@ function Nav.build(frame, opts)
   -- ---------------------------------------------------------------- FCS test
 
   Theme.line(fcsPage, 1, width, Theme.centre("FCS TEST", width), Theme.accent)
-  local fcsStale = Theme.line(fcsPage, 2, width, "", Theme.dim)
 
-  local bars, by = {}, 3
-  for _, axis in ipairs(AXES) do
-    if by <= height - 5 then
-      bars[axis.key] = signedBar(fcsPage, by, width, axis.label)
-      by = by + 1
-    end
+  --- ALL FIVE AXES, OR NONE. The bar loop used to stop at `height - 5`, which on a 10-row
+  --- monitor drew three bars and silently dropped roll and yaw -- so a dead roll input would
+  --- have passed the one test whose entire purpose is to catch it. The five bars and the BACK
+  --- button are now mandatory; everything else is spent out of what is left, in the order it is
+  --- worth having. A screen too short for all five is refused by MIN_HEIGHT instead.
+  local spare = height - (1 + #AXES + 1)      -- title, bars, BACK
+  local wantStale = spare >= 4
+  local wantRule = spare >= 5
+
+  local by = 2
+  local function take()
+    local row = by
+    by = by + 1
+    return row
   end
-  Theme.rule(fcsPage, by, width); by = by + 1
 
-  local brakeLine = Theme.line(fcsPage, by, width, "", Theme.dim); by = by + 1
-  local modeLine = Theme.line(fcsPage, by, width, "", Theme.fg); by = by + 1
-  local sourceLine = Theme.line(fcsPage, math.min(by, height - 1), width, "", Theme.dim)
+  local fcsStale = optionalLine(fcsPage, wantStale and take() or nil, "", Theme.dim)
+
+  local bars = {}
+  for _, axis in ipairs(AXES) do
+    bars[axis.key] = signedBar(fcsPage, take(), width, axis.label)
+  end
+
+  if wantRule then Theme.rule(fcsPage, take(), width) end
+
+  local brakeLine = optionalLine(fcsPage, spare >= 1 and take() or nil, "", Theme.dim)
+  local modeLine = optionalLine(fcsPage, spare >= 2 and take() or nil, "", Theme.fg)
+  local sourceLine = optionalLine(fcsPage, spare >= 3 and take() or nil, "", Theme.dim)
 
   Theme.button(fcsPage, 1, height, math.min(6, width), "BACK", function() show(navPage) end)
 
   -- --------------------------------------------------------------- self test
 
   Theme.line(selfPage, 1, width, Theme.centre("SELF TEST", width), Theme.accent)
-  local selfWarn = Theme.line(selfPage, 2, width, "GROUND ONLY", Theme.caution)
+
+  --- Same budgeting as the FCS page, and for a sharper reason: these rows used to be placed by
+  --- `math.min(sy, height - 2)`, which on a 10-row monitor stacked the result on top of the
+  --- timer and START/ABORT on top of the watchdog line. Overlapping Basalt elements do not
+  --- error -- they just draw over each other, so the screen lies rather than breaks.
+  --- Mandatory: title, three step lines, status, the START/ABORT row, BACK.
+  local selfSpare = height - (1 + 3 + 1 + 1 + 1)
+  local sy = 2
+  local function takeSelf()
+    local row = sy
+    sy = sy + 1
+    return row
+  end
+
+  -- GROUND ONLY first: the craft enforces the interlock, but the pilot should be told before
+  -- the button is within reach rather than after.
+  local selfWarn = optionalLine(selfPage, selfSpare >= 1 and takeSelf() or nil,
+    "GROUND ONLY", Theme.caution)
 
   local stepLines = {}
-  local sy = 3
-  for i = 1, 3 do
-    stepLines[i] = Theme.line(selfPage, sy, width, "", Theme.dim)
-    sy = sy + 1
-  end
-  Theme.rule(selfPage, sy, width); sy = sy + 1
-  local selfStatus = Theme.line(selfPage, sy, width, "", Theme.fg); sy = sy + 1
-  local selfTimer = Theme.line(selfPage, sy, width, "", Theme.accent); sy = sy + 1
-  local selfWatch = Theme.line(selfPage, sy, width, "", Theme.dim); sy = sy + 1
-  local selfResult = Theme.line(selfPage, math.min(sy, height - 2), width, "", Theme.dim)
+  for i = 1, 3 do stepLines[i] = Theme.line(selfPage, takeSelf(), width, "", Theme.dim) end
 
-  local startButton = Theme.button(selfPage, 1, height - 1, math.min(9, width), "START",
-    function() actions.selfTest("start") end)
-  Theme.button(selfPage, math.max(1, width - 6), height - 1, 7, "ABORT",
+  if selfSpare >= 5 then Theme.rule(selfPage, takeSelf(), width) end
+  local selfStatus = Theme.line(selfPage, takeSelf(), width, "", Theme.fg)
+  local selfTimer = optionalLine(selfPage, selfSpare >= 2 and takeSelf() or nil, "", Theme.accent)
+  local selfResult = optionalLine(selfPage, selfSpare >= 3 and takeSelf() or nil, "", Theme.dim)
+  local selfWatch = optionalLine(selfPage, selfSpare >= 4 and takeSelf() or nil, "", Theme.dim)
+
+  -- START stops one column short of ABORT. They used to be `min(9, width)` and `width - 6`,
+  -- which on a 15-wide screen both claimed column 9: the labels happened not to collide, but a
+  -- tap on that column hit whichever button drew last.
+  local abortX = math.max(1, width - 6)
+  local startButton = Theme.button(selfPage, 1, height - 1,
+    math.max(4, math.min(9, abortX - 2)), "START", function() actions.selfTest("start") end)
+  Theme.button(selfPage, abortX, height - 1, 7, "ABORT",
     function() actions.selfTest("abort") end)
   Theme.button(selfPage, 1, height, math.min(6, width), "BACK", function() show(navPage) end)
 
@@ -239,6 +287,12 @@ function Nav.build(frame, opts)
     axisRows[i] = row
   end
 
+  --- PAGE NAVIGATION. There was none: axisPageIndex was clamped and read, but nothing ever
+  --- changed it, so with twelve thrusters and four rows to a page only the first four were
+  --- reachable -- the footer said "pg 1/3" and there was no way to get to 2 or 3. It stayed
+  --- hidden because a tall monitor fits all twelve on one page.
+  local axisFooterWidth = width
+  local axisPrev, axisNext
   local axisFooter = Theme.line(axisPage, axisFooterRow, width, "", Theme.dim)
   local axisHolding = Theme.line(axisPage, height - 1, width, "", Theme.fg)
   Theme.button(axisPage, 1, height, math.min(6, width), "BACK", function()
@@ -248,19 +302,71 @@ function Nav.build(frame, opts)
   local axisRelease = Theme.button(axisPage, math.max(1, width - 8), height, 9, "RELEASE",
     function() actions.vectorHold("release", "", "x", 1) end)
 
+  -- On the footer row, right-aligned, exactly as the terminal's monitor list does it. The footer
+  -- text is built to what is left over rather than fitted afterwards.
+  if width >= 12 then
+    axisFooterWidth = width - 8
+    axisPrev = Theme.button(axisPage, width - 7, axisFooterRow, 3, "^", function()
+      axisPageIndex = axisPageIndex - 1
+      refreshAxisRows()
+    end)
+    axisNext = Theme.button(axisPage, width - 3, axisFooterRow, 3, "v", function()
+      axisPageIndex = axisPageIndex + 1
+      refreshAxisRows()
+    end)
+  end
+
+  --- Pages are built PER GROUP, not by slicing the flat list. Two reasons: the row labels are
+  --- bare keys, which are only unique WITHIN a group -- the craft really does have a lift `fl`
+  --- and a lateral `fl` -- and one group to a page matches the SELF TEST's three steps, so you
+  --- inspect the same nozzles the sweep just moved. A group with more thrusters than there are
+  --- rows spills onto a second page of its own.
+  local function buildAxisPages(list)
+    local order, byGroup = {}, {}
+    for _, entry in ipairs(list) do
+      if byGroup[entry.group] == nil then
+        byGroup[entry.group] = {}
+        order[#order + 1] = entry.group
+      end
+      local bucket = byGroup[entry.group]
+      bucket[#bucket + 1] = entry
+    end
+    local out = {}
+    for _, group in ipairs(order) do
+      local entries = byGroup[group]
+      for start = 1, #entries, axisRowCount do
+        local page = { group = group, entries = {} }
+        for i = start, math.min(start + axisRowCount - 1, #entries) do
+          page.entries[#page.entries + 1] = entries[i]
+        end
+        out[#out + 1] = page
+      end
+    end
+    return out
+  end
+
   function refreshAxisRows()
     local list = live.thrusterAxes or {}
     local held = live.axisMap or {}
-    local pagesTotal = math.max(1, math.ceil(#list / axisRowCount))
+    local allPages = buildAxisPages(list)
+    local pagesTotal = math.max(1, #allPages)
     axisPageIndex = math.max(1, math.min(axisPageIndex, pagesTotal))
+    local current = allPages[axisPageIndex] or { group = nil, entries = {} }
 
     for i, row in ipairs(axisRows) do
-      local entry = list[(axisPageIndex - 1) * axisRowCount + i]
+      local entry = current.entries[i]
       row.entry = entry
       row.label:setVisible(entry ~= nil)
       if entry then
-        row.label:setText(Theme.fit((entry.group:sub(1, 3) .. tostring(entry.key)):upper(),
-          axisLabelWidth))
+        -- THE KEY, NOT THE GROUP. "lift:fl" and "lift:fr" both truncated to "LIF" in the three
+        -- columns a 15-wide monitor can spare, so the two rows were identical -- on the one
+        -- screen whose whole job is telling you which nozzle you just moved. Keys are unique
+        -- within a group, and the group is named in the footer.
+        local label = tostring(entry.key):upper()
+        if axisLabelWidth >= #label + 4 then
+          label = (entry.group:sub(1, 3) .. ":" .. tostring(entry.key)):upper()
+        end
+        row.label:setText(Theme.fit(label, axisLabelWidth))
       end
       for j, button in ipairs(row.buttons) do
         button:setVisible(entry ~= nil)
@@ -274,23 +380,38 @@ function Nav.build(frame, opts)
       end
     end
 
+    -- The GROUP is named here, because the row labels are bare keys. Built to the room actually
+    -- left beside the paging buttons: "5 thrusters  pg 1/2" fitted to 15 columns came out as
+    -- "5 thrusters  pg", losing the page number -- half of what a paging footer is for.
     if #list == 0 then
-      axisFooter:setText(Theme.fit("no thrusters assigned", width))
+      axisFooter:setText(Theme.fit("no thrusters assigned", axisFooterWidth))
       axisFooter:setForeground(Theme.warning)
-    elseif pagesTotal > 1 then
-      axisFooter:setText(Theme.fit(("%d thrusters  pg %d/%d"):format(#list, axisPageIndex,
-        pagesTotal), width))
-      axisFooter:setForeground(Theme.dim)
     else
-      axisFooter:setText(Theme.fit(("%d thrusters"):format(#list), width))
+      local group = tostring(current.group or "?"):upper()
+      local page = ("%d/%d"):format(axisPageIndex, pagesTotal)
+      local long = ("%s  %d nozzles  pg %s"):format(group, #current.entries, page)
+      local medium = ("%s  pg %s"):format(group, page)
+      local text = long
+      if #text > axisFooterWidth then text = medium end
+      if #text > axisFooterWidth then text = ("%s %s"):format(group:sub(1, 3), page) end
+      axisFooter:setText(Theme.fit(text, axisFooterWidth))
       axisFooter:setForeground(Theme.dim)
     end
+    if axisPrev then axisPrev:setVisible(pagesTotal > 1) end
+    if axisNext then axisNext:setVisible(pagesTotal > 1) end
 
     -- THE LIT PANEL: what is deflected, and what the system thinks that direction is.
     if held.holding then
-      axisHolding:setText(Theme.fit(("%s %s%s = %s"):format(tostring(held.id),
-        held.sign > 0 and "+" or "-", tostring(held.axis),
-        tostring(held.direction or "?")), width))
+      -- THE DIRECTION SURVIVES THE TRUNCATION. "lift:fl +x = left" is 17 characters, so on a
+      -- 15-wide monitor it arrived as "lift:fl +x = le" -- the believed direction is the single
+      -- thing this screen is for, and it was the part that got cut. The id is already obvious
+      -- from the highlighted row, so it is what gets dropped when there is no room.
+      local deflection = ("%s%s"):format(held.sign > 0 and "+" or "-",
+        tostring(held.axis):upper())
+      local direction = tostring(held.direction or "?"):upper()
+      local long = ("%s %s = %s"):format(tostring(held.id), deflection, direction)
+      axisHolding:setText(#long <= width and long
+        or Theme.fit(("%s = %s"):format(deflection, direction), width))
       axisHolding:setForeground(Theme.ok)
       -- The legend comes from the CRAFT, which owns the plane rule. A lateral nozzle cannot
       -- point sideways, so a hardcoded "a/d = left/right" here would be a lie on four of them.
@@ -444,7 +565,7 @@ function Nav.build(frame, opts)
       steps = stepLines, status = selfStatus, timer = selfTimer,
       watch = selfWatch, result = selfResult, start = startButton,
       axisHint = axisHint, axisFooter = axisFooter, axisHolding = axisHolding,
-      axisRelease = axisRelease,
+      axisRelease = axisRelease, axisPrev = axisPrev, axisNext = axisNext,
     },
   }
 end

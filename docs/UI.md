@@ -480,3 +480,54 @@ right edge. The widest label is `FCS TEST` at 8, so one row needs `3*8 + 2 = 26`
 that they stack one per row up the bottom border, and the reserved centre shrinks to match. The
 test asserts full labels and `x + width - 1 <= width` at six widths, because "it fits on my
 screen" is not a property of the screen the pilot has.
+
+---
+
+## Lay out for the smallest monitor anyone will actually use
+
+A **single monitor block at text scale 0.5 is 15x10**, and 0.5 is CC's finest scale — nothing can
+be gained below it. The nav panel's floor was `14x12`, picked from what its pages happened to need
+rather than from the hardware, so the standard cockpit screen showed `TOO SMALL` and nothing else.
+The floor is now `15x10`: 15 is what the axis map's label plus four buttons need (3 + 4x3), 10 is
+what the pages are laid out to fit.
+
+Fixing that turned up four bugs hiding behind it, three of them only reachable on a short screen:
+
+**The FCS bar loop was capped at `height - 5`.** On a 10-row monitor it drew three bars and
+silently dropped roll and yaw — a dead roll input would have passed the one test that exists to
+catch it. The five bars and the BACK button are now mandatory and everything else is spent out of
+what is left, in the order it is worth having; a screen too short for all five is refused instead.
+
+**The self-test rows were placed with `math.min(sy, height - 2)`.** At 10 rows that stacked the
+result on the timer and START/ABORT on the watchdog line. Overlapping Basalt elements do not
+error — they draw over each other, so the screen lies rather than breaks. Both pages now budget
+rows explicitly: mandatory rows first, optional ones only if `spare` allows.
+
+**The axis map could not change page.** `axisPageIndex` was clamped and read but never written,
+so with twelve thrusters and four rows to a page only the first four were reachable — the footer
+said `pg 1/3` and there was no way to get to 2 or 3. It stayed hidden because a tall monitor fits
+all twelve on one page. There are `^`/`v` buttons on the footer row now, and pages are built **per
+group** rather than by slicing the flat list: the row label is a bare key, which is only unique
+inside a group (the craft really does have a lift `fl` and a lateral `fl`), and one group to a page
+matches the SELF TEST's three steps.
+
+**Both lift rows read `LIF`.** The label was `group..key` fitted into the three columns a 15-wide
+screen can spare, so `fl` and `fr` were identical — on the one screen whose entire job is telling
+you which nozzle you just moved.
+
+### Truncation eats the most important word first
+
+`lift:fl +x = left` is 17 characters, so at 15 columns it arrived as `lift:fl +x = le`. The
+believed direction is the whole point of that line and it was the part that got cut — the same
+failure as `DEAD RECKONED` on the nav console. When there is no room the panel now drops the id,
+which is already obvious from the highlighted row, and keeps `+X = LEFT`.
+
+The general rule, now applied in four places: **build the string to the width you have** and pick
+between a long, medium and short form, rather than composing the ideal string and fitting it
+afterwards. `Theme.fit` cuts from the end, and the end is usually where the answer is.
+
+### Two buttons, one column
+
+START was `min(9, width)` and ABORT was at `width - 6`. At 15 columns both claimed column 9. The
+labels happened not to collide, so it looked right — but a tap on that column hit whichever button
+drew last. START now stops one column short of ABORT by construction.
