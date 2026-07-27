@@ -10,6 +10,7 @@ local Geometry = require("lib.geometry")
 local Host = require("lib.host")
 local Mesh = require("lib.mesh")
 local Config = require("lib.config")
+local Theme = require("ui.theme")
 local Log = require("shared.log")
 
 local function quietLog() return Log.new({ level = "error", capacity = 80 }) end
@@ -318,6 +319,208 @@ T.it("an old config gains fields added later", function()
   T.eq(cfg.label, "North", "mine survived")
   T.eq(cfg.meshProtocol, "eh_gps_mesh", "and new fields appeared")
   T.eq(cfg.selfCheckTolerance, 1.0)
+end)
+
+
+-- ------------------------------------------------------------------- panel
+
+T.suite("beacon panel")
+
+--- Built against REAL Basalt, in a real window.
+---
+--- These exist because the first beacon installed in game crashed on boot: the panel called
+--- `setValue` on an Input, which does not exist -- Basalt holds an Input's contents in its `text`
+--- property, so the generated accessors are setText/getText. Every other module in this role had
+--- tests and the screen had none, so a guessed API reached the pilot untested.
+local basalt = require("basalt")
+local Panel = require("ui.panel")
+
+local function panelRig(width, height, cfgOver)
+  local monitor = window.create(term.current(), 1, 1, width or 51, height or 19, false)
+  monitor.setTextScale = function() end
+  monitor.getTextScale = function() return 1 end
+  local frame = basalt.createFrame()
+  frame:setTerm(monitor)
+  local cfg = Config.withDefaults(cfgOver or {})
+  local saves = { count = 0 }
+  local host = Host.new(cfg, quietLog())
+  local mesh = Mesh.new(cfg, quietLog())
+  local panel = Panel.build(frame, {
+    cfg = cfg, host = host, mesh = mesh, log = quietLog(),
+    save = function() saves.count = saves.count + 1 end,
+  })
+  return panel, cfg, saves, frame, monitor
+end
+
+local function model(status, assessment)
+  return { status = status or {}, assessment = assessment or { problems = {}, hostCount = 0 } }
+end
+
+--- A tap through Basalt's own hit test, as the terminal delivers it.
+local function click(element)
+  return element:dispatchEvent("mouse_click", 1, element:getX(), element:getY())
+end
+
+T.it("BUILDS AND UPDATES WITHOUT THROWING -- the crash that shipped", function()
+  local panel = panelRig()
+  panel.update(model())                       -- must not error
+  T.notNil(panel.elements.title, "the panel exists")
+end)
+
+T.it("the coordinate fields use Basalt's REAL Input API", function()
+  -- setText/getText, from the `text` property. setValue does not exist and fails only at runtime.
+  local panel = panelRig(51, 19, { position = { x = 12, y = 70, z = -34 } })
+  for _, axis in ipairs({ "x", "y", "z" }) do
+    local field = panel.fields[axis]
+    T.eq(type(field.setText), "function", axis .. " has setText")
+    T.eq(type(field.getText), "function", axis .. " has getText")
+    T.isNil(field.setValue, axis .. ": setValue does NOT exist, which is what broke")
+  end
+  T.eq(panel.fields.x:getText(), "12", "and the fields were filled from the config")
+  T.eq(panel.fields.z:getText(), "-34", "including negatives")
+end)
+
+T.it("shows blank fields when no position is set yet", function()
+  local panel = panelRig()
+  T.eq(panel.fields.x:getText(), "", "nothing to show")
+end)
+
+T.it("SAVES a typed position, and tells the config", function()
+  local panel, cfg, saves = panelRig()
+  panel.show(panel.pages.edit)
+  panel.fields.x:setText("100")
+  panel.fields.y:setText("72")
+  panel.fields.z:setText("-300")
+  click(panel.elements.title and panel.pages.edit or panel.pages.edit)   -- no-op, keeps shape
+  -- the SAVE button is the first bottom-row button on the edit page
+  local saved = false
+  for _, child in ipairs(panel.pages.edit.getChildren and panel.pages.edit:getChildren() or {}) do
+    if child.getText and child:getText() == "SAVE" then click(child); saved = true end
+  end
+  T.isTrue(saved, "found the SAVE button")
+  T.eq(cfg.position.x, 100, "x stored")
+  T.eq(cfg.position.z, -300, "z stored")
+  T.eq(saves.count, 1, "and written to disk")
+  T.isTrue(panel.pages.home:getVisible(), "returning to the home page")
+end)
+
+T.it("REFUSES a non-numeric coordinate and says which axis", function()
+  local panel, cfg = panelRig()
+  panel.show(panel.pages.edit)
+  panel.fields.x:setText("100")
+  panel.fields.y:setText("seventy")
+  panel.fields.z:setText("-300")
+  for _, child in ipairs(panel.pages.edit:getChildren()) do
+    if child.getText and child:getText() == "SAVE" then click(child) end
+  end
+  T.isTrue(panel.elements.editError:getText():find("Y") ~= nil,
+    "names the axis: " .. panel.elements.editError:getText())
+  T.isNil(cfg.position.x, "and NOTHING was stored -- not two axes out of three")
+end)
+
+T.it("says NO POSITION SET rather than drawing zeros", function()
+  local panel = panelRig()
+  panel.update(model({ position = {} }))
+  T.isTrue(panel.elements.position:getText():find("NO POSITION") ~= nil,
+    "position line: " .. panel.elements.position:getText())
+  T.eq(panel.elements.position:getForeground(), Theme.warning, "and flags it")
+end)
+
+T.it("A SELF-CHECK MISMATCH IS THE LOUDEST LINE ON THE SCREEN", function()
+  local panel = panelRig(51, 19, { position = { x = 1, y = 2, z = 3 } })
+  panel.update(model({ position = { x = 1, y = 2, z = 3 },
+                       selfCheck = { state = "MISMATCH", error = 20.4 } }))
+  local text = panel.elements.check:getText()
+  T.isTrue(text:find("MISMATCH") ~= nil, "named: " .. text)
+  T.isTrue(text:find("20") ~= nil, "with how far off")
+  T.eq(panel.elements.check:getForeground(), Theme.warning, "in the warning colour")
+end)
+
+T.it("a passing self check reads calmly", function()
+  local panel = panelRig(51, 19, { position = { x = 1, y = 2, z = 3 } })
+  panel.update(model({ position = { x = 1, y = 2, z = 3 },
+                       selfCheck = { state = "ok", error = 0.12 } }))
+  T.isTrue(panel.elements.check:getText():find("ok") ~= nil)
+  T.eq(panel.elements.check:getForeground(), Theme.ok)
+end)
+
+T.it("lists this beacon and its peers, marking which one is us", function()
+  local panel = panelRig()
+  panel.update(model({}, { hostCount = 3, usable = false, problems = {}, hosts = {
+    { x = 0, y = 70, z = 0, label = "me", self_ = true },
+    { x = 200, y = 72, z = 0, label = "East" },
+    { x = 0, y = 68, z = 200, label = "South" },
+  } }))
+  T.isTrue(panel.elements.peers[1]:getText():find("this one") ~= nil,
+    "ours is marked: " .. panel.elements.peers[1]:getText())
+  T.isTrue(panel.elements.peers[2]:getText():find("East") ~= nil, "peers named with coordinates")
+  T.isTrue(panel.elements.peers[2]:getText():find("200") ~= nil)
+end)
+
+T.it("shows the count and grade, and the FIRST problem to fix", function()
+  local panel = panelRig()
+  panel.update(model({}, { hostCount = 4, usable = false, grade = "UNUSABLE",
+    problems = { "the beacons are effectively COPLANAR", "something else" }, hosts = {} }))
+  T.isTrue(panel.elements.grade:getText():find("4/4") ~= nil,
+    "count: " .. panel.elements.grade:getText())
+  T.isTrue(panel.elements.grade:getText():find("UNUSABLE") ~= nil, "and the grade")
+  T.eq(panel.elements.grade:getForeground(), Theme.warning, "flagged")
+  T.isTrue(panel.elements.problem:getText():find("COPLANAR") ~= nil,
+    "the first problem, not a wall of them: " .. panel.elements.problem:getText())
+end)
+
+T.it("the ENABLE toggle reflects and flips the config", function()
+  local panel, cfg, saves = panelRig()
+  panel.update(model())
+  T.eq(panel.elements.enable:getText(), "ON", "starts enabled")
+  click(panel.elements.enable)
+  T.isFalse(cfg.enabled, "flipped")
+  T.eq(saves.count, 1, "and saved, so moving a beacon survives a reboot")
+  panel.update(model())
+  T.eq(panel.elements.enable:getText(), "OFF", "and the label follows")
+end)
+
+T.it("CANCEL puts the fields back rather than keeping a half-typed value", function()
+  local panel, cfg = panelRig(51, 19, { position = { x = 5, y = 6, z = 7 } })
+  panel.show(panel.pages.edit)
+  panel.fields.x:setText("999")
+  for _, child in ipairs(panel.pages.edit:getChildren()) do
+    if child.getText and child:getText() == "CANCEL" then click(child) end
+  end
+  T.eq(cfg.position.x, 5, "config untouched")
+  T.eq(panel.fields.x:getText(), "5", "and the field reverted")
+  T.isTrue(panel.pages.home:getVisible(), "back on the home page")
+end)
+
+T.it("changing coordinates INVALIDATES the previous self-check verdict", function()
+  -- Leaving a stale "ok" showing after moving a beacon would be the most misleading thing on
+  -- the screen: the check that passed was for a different position.
+  local panel, cfg, _, _, _ = panelRig(51, 19, { position = { x = 1, y = 2, z = 3 } })
+  local host = Host.new(cfg, quietLog())
+  host.selfCheck = { state = "ok", error = 0.1 }
+  -- rebuild with that host so the panel holds it
+  local monitor = window.create(term.current(), 1, 1, 51, 19, false)
+  monitor.setTextScale = function() end
+  local frame = basalt.createFrame()
+  frame:setTerm(monitor)
+  local p2 = Panel.build(frame, { cfg = cfg, host = host, mesh = Mesh.new(cfg, quietLog()),
+    log = quietLog(), save = function() end })
+  p2.show(p2.pages.edit)
+  p2.fields.x:setText("50")
+  p2.fields.y:setText("60")
+  p2.fields.z:setText("70")
+  for _, child in ipairs(p2.pages.edit:getChildren()) do
+    if child.getText and child:getText() == "SAVE" then click(child) end
+  end
+  T.eq(host.selfCheck.state, "unchecked", "the stale verdict was cleared")
+end)
+
+T.it("fits a standard 51x19 terminal, and a pocket-sized one", function()
+  local wide = panelRig(51, 19)
+  wide.update(model())
+  local small = panelRig(26, 20)
+  small.update(model())          -- must not throw
+  T.notNil(small.elements.grade, "still builds")
 end)
 
 return true

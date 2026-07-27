@@ -277,9 +277,9 @@
         },
         {
           ["dst"] = "gps_beacon/ui/panel.lua",
-          ["size"] = 7806,
+          ["size"] = 8028,
           ["src"] = "gps_beacon/ui/panel.lua",
-          ["sum"] = "3b65707c",
+          ["sum"] = "60924d52",
         },
         {
           ["dst"] = "gps_beacon/ui/theme.lua",
@@ -508,5 +508,5 @@
     ["size"] = 36872,
     ["sum"] = "305c58ce",
   },
-  ["version"] = "98e0b735",
+  ["version"] = "119d50db",
 }

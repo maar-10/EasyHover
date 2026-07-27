@@ -391,6 +391,10 @@ Both cost a debugging round and are noted where they bite:
   reported state in a closure instead.
 - **Register click handlers once.** Basalt *appends* callbacks rather than replacing them, so
   re-registering on every refresh made one tap cycle an assignment several times.
+- **An `Input`'s contents live in its `text` property**, so the accessors are `setText`/`getText`
+  — there is no `setValue`. A guessed accessor is `nil` and fails only when that screen is first
+  drawn, which on a fresh install is on the pilot's monitor. Every element's real property list
+  is in `src/elements/<Name>.lua` under `defineProperty`; read it rather than guessing.
 - **A label auto-sizes to its text, so an empty one reports width 0.** Reading a width back off
   an element and passing it to `Theme.fitEnd` then truncates to nothing — a blank row that looks
   exactly like missing data. Hold the width you laid the element out with, in a local.
@@ -411,6 +415,11 @@ computers in game, different interpreters in test.
 The panels are built against **real Basalt**, rendering into real `window` objects, and the
 tests assert on the text that ended up on screen rather than on the model — so a panel that
 silently stops updating is caught.
+
+> **Every screen needs at least a build-and-update test.** The first GPS beacon installed in game
+> crashed on boot because its panel called a Basalt method that does not exist. Every other module
+> in that role had tests; the screen had none, so a guessed API reached the pilot untested. A
+> single test that constructs the panel and calls `update` once would have caught it, and now does.
 
 Two click paths are exercised, deliberately. `click()` dispatches `mouse_click` on an element,
 which is fast and enough for most assertions. `tap()` dispatches **`monitor_touch` on the frame**

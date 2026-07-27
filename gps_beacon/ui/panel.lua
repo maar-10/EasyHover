@@ -71,9 +71,12 @@ function Panel.build(frame, opts)
   local fields, fy = {}, 4
   for _, axis in ipairs({ "x", "y", "z" }) do
     Theme.line(editPage, fy, 3, axis:upper(), Theme.dim)
+    -- Basalt's Input holds its contents in the `text` property, so the generated accessors are
+    -- setText/getText -- NOT setValue/getValue, which do not exist and fail only at runtime.
     local input = editPage:addInput({
       x = 5, y = fy, width = math.max(8, width - 8), height = 1,
       background = Theme.buttonBg, foreground = Theme.fg,
+      placeholder = axis:upper(),
     })
     fields[axis] = input
     fy = fy + 1
@@ -85,7 +88,7 @@ function Panel.build(frame, opts)
   local function fillFields()
     for _, axis in ipairs({ "x", "y", "z" }) do
       local v = cfg.position[axis]
-      fields[axis]:setValue(v ~= nil and tostring(math.floor(v)) or "")
+      fields[axis]:setText(v ~= nil and tostring(math.floor(v)) or "")
     end
     editError:setText("")
   end
@@ -93,7 +96,7 @@ function Panel.build(frame, opts)
   Theme.button(editPage, 1, height, math.min(8, width), "SAVE", function()
     local wanted = {}
     for _, axis in ipairs({ "x", "y", "z" }) do
-      local text = tostring(fields[axis]:getValue() or ""):gsub("%s", "")
+      local text = tostring(fields[axis]:getText() or ""):gsub("%s", "")
       local number = tonumber(text)
       if number == nil then
         -- All three or none: two axes typed is a typo mid-entry, not a position.
