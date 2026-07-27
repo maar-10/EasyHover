@@ -296,6 +296,23 @@ function App:cycle(dt)
   -- Applying the mixer's commands as well would have the attitude loop fighting the sweep for the
   -- same nozzles: both spoils the test and is the one thing this vehicle must never do. So an
   -- owner returns early, and the mixer does not run at all.
+  -- WHICH ARM DID WE TAKE? Logged once a second whenever anything claims to own the thrusters,
+  -- because the console shows the mixer writing nozzles (a mix of lift and lateral ids, which
+  -- only the mixer produces -- the sweep does one group at a time) while handleCommand insists a
+  -- sweep is running. Both cannot be true of the same object, and nothing so far distinguishes
+  -- them. This line names the arm, from inside the branch, once per second.
+  local owner = self.axisMap:isHolding() and "axisMap"
+    or (self.selfTest:isRunning() and "selfTest")
+    or (self.thrusters:isIdentifying() and "identify")
+    or "mixer"
+  if owner ~= "mixer" or self._lastOwner ~= owner then
+    if (now - (self._ownerLoggedAt or 0)) >= 1000 then
+      self._ownerLoggedAt = now
+      self.log:info("cycle owner: %s (state %s)", owner, tostring(state))
+    end
+  end
+  self._lastOwner = owner
+
   local activelyFlying = (state == "FLIGHT" or state == "HOVER" or state == "REVERSE")
   if self.axisMap:isHolding() then
     if activelyFlying then

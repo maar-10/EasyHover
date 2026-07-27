@@ -513,3 +513,40 @@ set up. An owner returns early, so the mixer never runs and cannot fight it for 
 a healthy craft, so none ever entered the state where the branch was unreachable. The regression
 tests force `DAMPED` and assert both halves: the sweep is still ticked, and `neutralVectors` is not
 called behind its back.
+
+---
+
+## The loop rate is set by mainThread writes, and it is slow
+
+Measured from the craft, not estimated. Every thruster setter in Create: Propulsion is
+`@LuaFunction(mainThread = true)`, so **each call waits a server tick — 50 ms.** With twelve
+thrusters and one `setVector` each:
+
+```
+12 calls x 50 ms = 600 ms per control cycle  ->  ~1.6 Hz
+```
+
+The craft reported `sinceTick=0.5s` and `sinceTick=0.6s` on two separate runs. That is not a
+coincidence, it is the arithmetic above.
+
+**Consequences that were being read as separate faults:**
+
+- the attitude loop cannot run at `attitudeHz` — it runs at whatever the writes allow
+- telemetry is published from the cycle, so the cockpit updates at ~1.6 Hz, not 10 Hz. A panel
+  that lags a second or two behind the craft looks exactly like a panel that is not updating.
+- a button press is answered on the same schedule, which reads as "the click did nothing"
+
+This is a **design constraint of the platform**, not a bug to be fixed in the loop: there is no
+batched write in CC, and twelve nozzles cannot be commanded in less than twelve ticks. Anything
+that wants a faster attitude loop has to write fewer nozzles per cycle — for example, only those
+whose commanded deflection has actually crossed a quantisation step.
+
+## Ctrl+T must not be swallowed
+
+`callDevice` wraps every device call in `pcall`, which is right for a hardware fault and wrong for
+a terminate. Because the setters yield, **a terminate arriving mid-call surfaces as an ordinary
+error inside that pcall** — so Ctrl+T killed one call, the loop started the next, and the program
+would not stop until it had been pressed once per thruster. The craft showed it plainly: a row of
+`thruster fl setVector() failed: Terminated`, one line per press.
+
+A terminate is now re-raised. An ordinary device fault is still caught and counted.

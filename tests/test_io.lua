@@ -135,6 +135,38 @@ T.it("mapVector honours axis mapping, inversion and authority limit", function()
   T.near(ny2, 0.25, 1e-9, "swapped axes: nozzle y follows craft x")
 end)
 
+--- CTRL+T MUST STILL WORK. Every thruster setter is mainThread, so the call yields, and a
+--- terminate arriving mid-yield surfaces as an ordinary error inside callDevice's pcall. Catching
+--- it made Ctrl+T a no-op: one call dies, the loop starts the next, and the pilot has to hit it
+--- once per thruster before the program stops. Reported from the craft as a row of
+--- "setVector() failed: Terminated" lines, one per press.
+T.it("does not swallow a terminate", function()
+  mock.reset()
+  _G.peripheral = mock.install()
+  local r = rig()
+  local th = Thrusters.new(r.per, r.cfg, r.log, r.state)
+  r.per.thrusters["lift_fl"].dev.setVector = function() error("Terminated", 0) end
+
+  local ok, err = pcall(function()
+    th:apply({ lift_fl = { thrust = 0.5, defX = 0.4, defZ = 0 } })
+  end)
+  T.isFalse(ok, "the terminate propagated instead of being absorbed")
+  T.isTrue(tostring(err):find("Terminated") ~= nil, "and it is the terminate: " .. tostring(err))
+end)
+
+T.it("but a real device fault is still caught and counted", function()
+  mock.reset()
+  _G.peripheral = mock.install()
+  local r = rig()
+  local th = Thrusters.new(r.per, r.cfg, r.log, r.state)
+  r.per.thrusters["lift_fl"].dev.setVector = function() error("no such method", 0) end
+  local ok = pcall(function()
+    th:apply({ lift_fl = { thrust = 0.5, defX = 0.4, defZ = 0 } })
+  end)
+  T.isTrue(ok, "an ordinary hardware fault does not take the loop down")
+  T.isTrue(th.stats.errors > 0, "and is counted")
+end)
+
 T.it("write-on-change: repeating a command costs nothing", function()
   mock.reset()
   _G.peripheral = mock.install()

@@ -100,6 +100,12 @@ local function callDevice(self, id, dev, method, ...)
   end
   local ok, err = pcall(fn, ...)
   self.stats.calls = self.stats.calls + 1
+  -- TERMINATE IS NOT OURS TO SWALLOW. Every thruster setter is `mainThread = true`, so the call
+  -- YIELDS -- and a terminate arriving mid-yield surfaces as an ordinary error inside this pcall.
+  -- Catching it turns Ctrl+T into a no-op: the pilot holds it, one call dies, the loop starts the
+  -- next one, and the program will not stop until they have hit it as many times as there are
+  -- thrusters. Re-raise it so the shell can do its job.
+  if not ok and tostring(err):find("Terminated") then error(err, 0) end
   if not ok then
     self.stats.errors = self.stats.errors + 1
     self.failures[id] = (self.failures[id] or 0) + 1
