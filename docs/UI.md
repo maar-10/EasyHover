@@ -21,7 +21,6 @@ of the cockpit.
 | **nav** | **live** | The map and waypoints come later, so the centre is empty on purpose. Its border carries the two pre-flight screens. |
 | pfd | reserved | Attitude / flight-path indicator. Mirrored pair. |
 | autopilot | reserved | Autopilot settings. |
-| nav | reserved | Waypoints and the map. |
 
 The UI computer's **own terminal** is not a panel. It runs one screen — which monitor shows
 which panel — and it always runs it.
