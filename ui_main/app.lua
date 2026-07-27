@@ -204,7 +204,13 @@ end
 function App:onTimer(id)
   if id ~= self.staleTimer then return false end
   if self.rebuildPending then self:syncPanels() end
+  -- MEASURED, not guessed. Two attempts at the cockpit's sluggishness have failed to shift it,
+  -- which means the model behind them was wrong. A redraw that takes longer than the gap between
+  -- redraws leaves no room for anything else -- touches included -- and this is the number that
+  -- says whether that is what is happening. It is shown on this computer's own terminal.
+  local startedAt = os.epoch("utc")
   self:refresh()
+  self.lastRefreshMs = os.epoch("utc") - startedAt
   -- Re-armed AFTER the redraw. A slow frame therefore delays the next one instead of stacking a
   -- second timer behind it, so the draw rate degrades to whatever the computer can sustain rather
   -- than running the event queue out of room.
@@ -224,6 +230,10 @@ end
 --- Push the latest model into every panel, including the terminal fallback.
 function App:refresh()
   local model = self.link:model()
+  -- Last frame's cost, for the terminal to display. Last frame's rather than this one's, because
+  -- this one is not finished yet -- and a number that is one frame stale still answers the
+  -- question being asked of it.
+  model.refreshMs = self.lastRefreshMs
   self.monitors:update(model)
   if self.terminalPanel and self.terminalPanel.update then
     pcall(self.terminalPanel.update, model)

@@ -32,7 +32,7 @@ function Terminal.build(frame, opts)
   frame:setBackground(Theme.bg)
 
   Theme.line(frame, 1, width, Theme.centre("EasyHover UI", width), Theme.accent)
-  Theme.line(frame, 2, width, Theme.fitEnd(BUILD, width), Theme.dim)
+  local buildLine = Theme.line(frame, 2, width, Theme.fitEnd(BUILD, width), Theme.dim)
   Theme.rule(frame, 3, width)
 
   local listStart = 4
@@ -129,9 +129,16 @@ function Terminal.build(frame, opts)
   refresh()
 
   --- The terminal shows no craft data, so an update is just a rescan -- a monitor plugged in
-  --- while you are looking at this screen should appear on it.
-  local function update()
+  --- while you are looking at this screen should appear on it. It also carries the redraw cost,
+  --- which is the one number that says whether this computer is keeping up: if a redraw takes
+  --- longer than the interval between redraws, there is no room left for touches.
+  local function update(model)
     refresh()
+    local ms = model and model.refreshMs
+    if type(ms) == "number" then
+      buildLine:setText(Theme.fitEnd(("%s %dms"):format(BUILD, ms), width))
+      buildLine:setForeground(ms > 150 and Theme.warning or Theme.dim)
+    end
   end
 
   return {
