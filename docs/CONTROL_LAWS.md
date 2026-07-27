@@ -550,3 +550,51 @@ would not stop until it had been pressed once per thruster. The craft showed it 
 `thruster fl setVector() failed: Terminated`, one line per press.
 
 A terminate is now re-raised. An ordinary device fault is still caught and counted.
+
+---
+
+## ROOT CAUSE: one lost timer event stopped the control loop
+
+`App:run` ran the control cycle **only** inside `event == "timer" and p1 == timer`, and re-armed
+the timer **only there**. So the single outstanding timer was the loop's one and only heartbeat:
+
+> **Lose that one event and the control cycle never runs again.**
+
+The computer stays alive and responsive — `rednet_message` is a different branch of the same loop,
+so commands are still received and answered. That is precisely the state the craft was in:
+
+```
+[info] cycle owner: mixer (state BRAKE)      <- logged once, and never again
+[info] self test started                      <- the command was received and handled
+[warn] self test REFUSED: already running     <- and answered, on every later press
+```
+
+`cycle owner` is printed from **inside** the ownership branch. It appears once and never again,
+while `self test started` follows it. The cycle had stopped before the sweep ever existed.
+
+**And the event was easy to lose.** `SelfTest:start` calls `allStop()` — 12 `setVector` plus 12
+`setThrust`, every one `mainThread` at a server tick each. That is **~1.2 s inside a single rednet
+handler with `os.pullEvent` not being called**. The craft reported `sinceTick=1.4s`.
+
+Every symptom chased for days follows from this one line:
+
+| Symptom | Cause |
+|---|---|
+| SELF TEST never shows `running` | telemetry is published from the cycle; the cycle stopped |
+| nozzles never move | the sweep is ticked by the cycle |
+| `already running` for ever | the run can only end in `tick()` |
+| cockpit sluggish, clicks "swallowed" | the panel is rendering telemetry that stopped arriving |
+| AXIS MAP / THR AXES say "no thrusters" | `thrusterAxes` rides in a payload that stopped |
+
+**The fix is to stop depending on one event.** The cycle now runs on a **deadline**: any event is a
+chance to notice that the period has elapsed, the timer is only a wake-up for when nothing else is
+happening, and it is re-armed on every cycle. A dropped timer costs one late cycle instead of all
+of them.
+
+### And the terminate had to stop being eaten
+
+Fixing `callDevice` only moved the swallow up a level, into the `pcall` around `cycle` — the craft
+still printed a row of `cycle error: Terminated`, one per press, instead of stopping. A terminate is
+now re-raised from `callDevice`, from the cycle, and from the message handler. With the swallow put
+back, the test does not merely fail: CraftOS kills the loop with *"Too long without yielding"*,
+which is the runaway the pilot was looking at.

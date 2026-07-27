@@ -1045,26 +1045,52 @@ function App:run()
   local timer = os.startTimer(period)
   self.lastCycleAt = os.epoch("utc")
 
+  -- THE CYCLE RUNS ON A DEADLINE, NOT ON ONE IRREPLACEABLE TIMER.
+  --
+  -- It used to run only inside `event == "timer" and p1 == timer`, and re-arm only there. So the
+  -- single outstanding timer was the loop's only heartbeat: lose that one event and the control
+  -- cycle NEVER RUNS AGAIN. The computer stays responsive -- rednet is a different branch, so
+  -- commands are still answered -- which is exactly the state the craft was in: "self test
+  -- started" logged, "already running" on every later press, and not one cycle after it.
+  --
+  -- And the event was easy to lose. SelfTest:start calls allStop(), which is 12 setVector plus 12
+  -- setThrust, every one of them mainThread at a server tick each: about 1.2 s inside a single
+  -- rednet handler, with os.pullEvent not being called. The craft reported sinceTick=1.4s.
+  --
+  -- Now: any event is a chance to notice the deadline has passed, the timer is only a wake-up for
+  -- when nothing else is happening, and it is re-armed on every cycle.
+  local nextCycleAt = os.epoch("utc")
   while self.running do
     local event, p1, p2, p3 = os.pullEvent()
-    if event == "timer" and p1 == timer then
-      local now = os.epoch("utc")
-      local dt = (now - (self.lastCycleAt or now)) / 1000
-      self.lastCycleAt = now
+
+    local nowMs = os.epoch("utc")
+    if nowMs >= nextCycleAt then
+      local dt = (nowMs - (self.lastCycleAt or nowMs)) / 1000
+      self.lastCycleAt = nowMs
+      nextCycleAt = nowMs + period * 1000
+      timer = os.startTimer(period)
       local ok, err = pcall(function() self:cycle(dt) end)
       if not ok then
+        -- TERMINATE IS NOT A CYCLE ERROR. The setters yield, so Ctrl+T surfaces here as an
+        -- ordinary error; catching it made the loop eat the pilot's terminate one press at a
+        -- time. Re-raised, so the shell can stop the program on the first press.
+        if tostring(err):find("Terminated") then error(err, 0) end
         -- A crash in the loop must not leave thrust commanded at whatever it was mid-update.
         self.log:error("cycle error: %s", tostring(err))
         pcall(function() self.thrusters:neutralVectors() end)
         self.state:raise("cycle", "warning", "control cycle error: " .. tostring(err))
       end
-      timer = os.startTimer(period)
-    elseif event == "peripheral" or event == "peripheral_detach" then
+    end
+
+    if event == "peripheral" or event == "peripheral_detach" then
       self:onPeripheralChange(event, p1)
     elseif event == "rednet_message" then
       -- p1 is the sender; pullEvent gave us only two values above, so re-read them
       local sender, message, protocol = p1, p2, p3
-      pcall(function() self:onMessage(sender, message, protocol) end)
+      local okMsg, msgErr = pcall(function() self:onMessage(sender, message, protocol) end)
+      -- Same rule as the cycle: a terminate is the pilot, not a fault.
+      if not okMsg and tostring(msgErr):find("Terminated") then error(msgErr, 0) end
+      if not okMsg then self.log:error("message error: %s", tostring(msgErr)) end
     elseif event == "disk" or event == "disk_eject" then
       self.per:scan()
       self.disk:status()

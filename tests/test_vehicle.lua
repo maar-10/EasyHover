@@ -1483,11 +1483,16 @@ T.it("App:run drives the control cycle AND the sweep", function()
   app.telemetry.publish = function() return true end
 
   local armed = 1000
-  local realStart, realPull = os.startTimer, os.pullEvent
+  local realStart, realPull, realEpoch = os.startTimer, os.pullEvent, os.epoch
   os.startTimer = function() armed = armed + 1; return armed end
+  -- A CLOCK THAT MOVES. The cycle is deadline-driven now, so a frozen os.epoch means one cycle
+  -- and no more -- which says nothing about the loop and everything about the harness.
+  local clock = realEpoch("utc")
+  os.epoch = function(kind) if kind == "utc" then return clock end return realEpoch(kind) end
   local fed = 0
   os.pullEvent = function()
     fed = fed + 1
+    clock = clock + 60
     if fed == 5 then
       return "rednet_message", 7, { cmd = "selfTest", action = "start" },
         app.cfg.comms.commandProtocol
@@ -1501,12 +1506,70 @@ T.it("App:run drives the control cycle AND the sweep", function()
   app.selfTest.tick = function(self, t) ticks = ticks + 1; return innerTick(self, t) end
 
   local ok, err = pcall(function() app:run() end)
-  os.startTimer, os.pullEvent = realStart, realPull
+  os.startTimer, os.pullEvent, os.epoch = realStart, realPull, realEpoch
   T.isTrue(ok, "the loop ran without error: " .. tostring(err))
 
   T.isTrue((app.cycles or 0) > 10, "cycles actually ran: " .. tostring(app.cycles))
   T.isTrue(app.selfTest:isRunning(), "the sweep was started through the loop")
   T.isTrue(ticks > 5, "and DRIVEN by it: " .. tostring(ticks) .. " ticks")
+  fs.delete(path)
+end)
+
+--- THE ROOT CAUSE. The cycle used to run only inside `event == "timer" and p1 == timer`, and
+--- re-arm only there, so the single outstanding timer was the loop's ONLY heartbeat. Lose that
+--- one event and the control cycle never runs again -- while rednet keeps answering from its own
+--- branch, so the craft still replies "already running" and looks alive.
+---
+--- And it was easy to lose: SelfTest:start calls allStop(), 12 setVector plus 12 setThrust, every
+--- one mainThread at a server tick each -- about 1.2 s inside one rednet handler with
+--- os.pullEvent not being called. The craft reported sinceTick=1.4s.
+T.it("a LOST timer event does not stop the control loop", function()
+  local app, path = appRig(fullCraft())
+  app.telemetry.publish = function() return true end
+
+  local armed = 1000
+  local realStart, realPull, realEpoch = os.startTimer, os.pullEvent, os.epoch
+  os.startTimer = function() armed = armed + 1; return armed end
+  local clock = realEpoch("utc")
+  os.epoch = function(kind) if kind == "utc" then return clock end return realEpoch(kind) end
+
+  local fed = 0
+  os.pullEvent = function()
+    fed = fed + 1
+    clock = clock + 60
+    if fed > 25 then return "terminate" end
+    -- NEVER deliver the timer the loop armed. Only other events arrive -- exactly what a queue
+    -- that dropped the timer looks like.
+    return "rednet_message", 7, { cmd = "ping" }, app.cfg.comms.commandProtocol
+  end
+
+  local ok = pcall(function() app:run() end)
+  os.startTimer, os.pullEvent, os.epoch = realStart, realPull, realEpoch
+  T.isTrue(ok, "the loop ran")
+  T.isTrue((app.cycles or 0) > 0,
+    "cycles ran anyway: " .. tostring(app.cycles) .. " -- the deadline, not the timer, drives it")
+  fs.delete(path)
+end)
+
+--- The loop must not eat the pilot's terminate either. Fixing it in callDevice only moved the
+--- swallow one level up, into the pcall around cycle -- the craft still printed a row of
+--- "cycle error: Terminated" lines, one per press, instead of stopping.
+T.it("a terminate inside the cycle stops the program", function()
+  local app, path = appRig(fullCraft())
+  app.telemetry.publish = function() return true end
+  local realStart, realPull, realEpoch = os.startTimer, os.pullEvent, os.epoch
+  local armed = 1000
+  os.startTimer = function() armed = armed + 1; return armed end
+  local clock = realEpoch("utc")
+  os.epoch = function(kind) if kind == "utc" then return clock end return realEpoch(kind) end
+  os.pullEvent = function() clock = clock + 60; return "timer", armed end
+
+  app.cycle = function() error("Terminated", 0) end
+  local ok, err = pcall(function() app:run() end)
+  os.startTimer, os.pullEvent, os.epoch = realStart, realPull, realEpoch
+
+  T.isFalse(ok, "the terminate left the loop instead of being logged and ignored")
+  T.isTrue(tostring(err):find("Terminated") ~= nil, "and it is the terminate: " .. tostring(err))
   fs.delete(path)
 end)
 
