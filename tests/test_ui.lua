@@ -1913,6 +1913,39 @@ end)
 
 T.suite("telemetry link")
 
+--- THE "NO THRUSTERS" BUG. The craft sends the big, slow-changing half of the payload only about
+--- once a second. Storing each frame wholesale meant every fast frame in between ERASED
+--- thrusterAxes, candidates and layout -- so the AXIS MAP and THR AXES screens, which read
+--- thrusterAxes, said "no thrusters" while the LIFT/ACCEL/LAT config pages, reading a different
+--- field, listed them correctly. Two screens disagreeing about the same craft.
+T.it("a frame that omits a field does not erase it", function()
+  local link = Link.new(UiConfig.withDefaults({}), quietLog())
+  local proto = link.cfg.comms.telemetryProtocol
+
+  link:onMessage(7, { proto = "eh1", mode = "GROUND",
+    thrusterAxes = { { id = "lift_fl", group = "lift", key = "fl" } },
+    candidates = { thrusters = { "vector_thruster_0" } } }, proto)
+  T.eq(#link.latest.thrusterAxes, 1, "the slow frame landed")
+
+  -- ten fast frames with no slow half, exactly as the craft now sends them
+  for i = 1, 10 do
+    link:onMessage(7, { proto = "eh1", mode = "GROUND", cycle = { n = i } }, proto)
+  end
+  T.notNil(link.latest.thrusterAxes, "still known after ten fast frames")
+  T.eq(#link.latest.thrusterAxes, 1, "and intact")
+  T.notNil(link.latest.candidates, "so is the peripheral inventory")
+  T.eq(link.latest.cycle.n, 10, "while the fast fields DID update")
+end)
+
+T.it("but a field the craft actually emptied does empty", function()
+  local link = Link.new(UiConfig.withDefaults({}), quietLog())
+  local proto = link.cfg.comms.telemetryProtocol
+  link:onMessage(7, { proto = "eh1", alarms = { "one", "two" } }, proto)
+  T.eq(#link.latest.alarms, 2, "two alarms")
+  link:onMessage(7, { proto = "eh1", alarms = {} }, proto)
+  T.eq(#link.latest.alarms, 0, "cleared, not merged into the old list")
+end)
+
 T.it("accepts a telemetry payload and tracks its age", function()
   local cfg = UiConfig.withDefaults({})
   local link = Link.new(cfg, quietLog())

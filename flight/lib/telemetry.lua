@@ -198,7 +198,8 @@ end
 
 --- Assemble the payload. Deliberately hand-built rather than dumping the whole state store:
 --- the wire format is an interface, and an accidental rename should not silently break a UI.
-function Telemetry:build(extra)
+--- `includeSlow` adds the large, rarely-changing half of the payload. See the note beside it.
+function Telemetry:build(extra, includeSlow)
   local s = self.state
   self.seq = self.seq + 1
 
@@ -276,37 +277,55 @@ function Telemetry:build(extra)
       calls = s:get("thrusters.calls"),
       writes = s:get("thrusters.writes"),
       errors = s:get("thrusters.errors"),
-      readback = s:get("thrusters.readback"),
     },
 
-    layout = s:get("layout"),
     -- What the pilot's controls are actually doing, and the self test's progress. Both exist
     -- so the pre-flight screens can show real internal state rather than a guess.
     pilot = s:get("pilot"),
     selfTest = s:get("selfTest"),
-    thrusterAxes = s:get("thrusterAxes"),
     axisMap = s:get("axisMap"),
-    candidates = s:get("candidates"),
-    disk = {
-      driveCount = s:get("disk.driveCount"),
-      diskPresent = s:get("disk.diskPresent"),
-      onDisk = s:get("disk.onDisk"),
-      localConfigs = s:get("disk.localConfigs"),
-      label = s:get("disk.label"),
-    },
-
-    config = configView(self.cfg),
-    slots = slotView(self.cfg),
     oscillation = s:get("oscillation"),
     envelopeClipped = s:get("envelope.clipped"),
     alarms = s:activeAlarms(),
     cycle = { dt = s:get("cycle.dt"), overrun = s:get("cycle.overrun"), n = s:get("cycles") },
   }
 
+  -- THE SLOW HALF. Hardware inventories, the config view and the readback table are large and
+  -- change rarely -- thrusterAxes only when a thruster is re-mapped, candidates only when the
+  -- peripheral set changes. Serialising all of it ten times a second, and deserialising it again
+  -- at the far end, was costing both computers most of their loop for data that had not moved.
+  --
+  -- Omitted from a fast frame entirely rather than sent as nil: the receiver deep-merges, so an
+  -- absent field keeps its last value.
+  if includeSlow then
+    payload.thrusters.readback = s:get("thrusters.readback")
+    payload.layout = s:get("layout")
+    payload.thrusterAxes = s:get("thrusterAxes")
+    payload.candidates = s:get("candidates")
+    payload.disk = {
+      driveCount = s:get("disk.driveCount"),
+      diskPresent = s:get("disk.diskPresent"),
+      onDisk = s:get("disk.onDisk"),
+      localConfigs = s:get("disk.localConfigs"),
+      label = s:get("disk.label"),
+    }
+    payload.config = configView(self.cfg)
+    payload.slots = slotView(self.cfg)
+  end
+
   if extra then
     for k, v in pairs(extra) do payload[k] = v end
   end
   return payload
+end
+
+--- How often the large, rarely-changing half of the payload is included.
+Telemetry.SLOW_PERIOD_MS = 1000
+
+--- Force the slow half into the next frame. Called when the hardware set or the config changes,
+--- so a screen reflects an action immediately rather than up to a second later.
+function Telemetry:markSlowDirty()
+  self.slowDirty = true
 end
 
 --- Broadcast, rate-limited to telemetryHz. Returns true when it actually sent.
@@ -317,7 +336,18 @@ function Telemetry:publish(now, extra)
   if (now - self.lastPublishAt) < period then return false end
   self.lastPublishAt = now
 
-  local payload = self:build(extra)
+  -- The slow half rides along about once a second, and on the first frame after boot so a screen
+  -- opened immediately is not blank. `slowDirty` forces it out early when something actually
+  -- changed -- a re-scan, a re-map -- so a screen never waits to catch up with what the pilot
+  -- just did.
+  local includeSlow = self.slowDirty or (self.lastSlowAt == nil)
+    or (now - self.lastSlowAt) >= Telemetry.SLOW_PERIOD_MS
+  if includeSlow then
+    self.lastSlowAt = now
+    self.slowDirty = false
+  end
+
+  local payload = self:build(extra, includeSlow)
   local ok, err = pcall(rednet.broadcast, payload, self.cfg.comms.telemetryProtocol)
   if not ok then
     self.log:throttled("telemetry", 5000, "warn", "telemetry broadcast failed: %s", tostring(err))

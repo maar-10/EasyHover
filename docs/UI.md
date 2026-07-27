@@ -558,3 +558,33 @@ The fix is to make the two independent:
 The trap this hid: a self test that **had** started looked exactly like one that never did, because
 the panel was rendering a model from before the run began. Chasing that cost several rounds of
 looking in the wrong place — the panel was not lying about the craft, it was lying about *when*.
+
+---
+
+## The payload is two halves, and the receiver merges
+
+**Symptom: AXIS MAP and THR AXES said "no thrusters" while LIFT / ACCEL / LAT listed them
+correctly.** Two screens disagreeing about the same craft is never a display bug — it means they
+read different fields, and one of those fields is not arriving.
+
+Every telemetry frame carried the lot: `readback` for every thruster, `candidates` (the whole
+peripheral inventory), `layout`, `config`, `slots`, `thrusterAxes`, `disk`. At `telemetryHz = 10`
+that is serialised on the craft and deserialised on the UI **ten times a second**, almost all of it
+data that had not changed. Both computers spent most of their loop on it.
+
+Split:
+
+| | contents | rate |
+|---|---|---|
+| **fast** | mode, modes, attitude, engine, fuel summary, pilot, selfTest, axisMap, alarms, cycle | `telemetryHz` |
+| **slow** | thrusterAxes, candidates, layout, config, slots, disk, thruster readback | ~1 Hz, on the first frame after boot, and immediately on `markSlowDirty()` |
+
+**The receiver must therefore merge, not replace.** `self.latest = message` erased every slow field
+on each fast frame in between — which is precisely why those two screens went blank while the
+config pages stayed correct. `Link:onMessage` deep-merges: a field the frame **has** wins, a field
+it **omits** keeps its last value. Lists are replaced wholesale, so something the craft genuinely
+emptied still empties.
+
+`markSlowDirty()` is called whenever the hardware set changes, so a re-scan or a re-map shows up at
+once rather than up to a second later. Waiting is fine for data that did not change; it is not fine
+immediately after the pilot changed it.

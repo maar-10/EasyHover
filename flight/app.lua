@@ -81,6 +81,9 @@ function App.new(opts)
     self.thrusters:invalidate()
     self.mixer:build()
     self:publishThrusterAxes()
+  -- The hardware set moved, so push the slow half of the payload out at once rather than letting
+  -- the screens wait up to a second for it.
+  if self.telemetry and self.telemetry.markSlowDirty then self.telemetry:markSlowDirty() end
     Config.save(self.configPath, self.cfg)
   end
 
@@ -649,6 +652,9 @@ function App:rebuildHardware()
   self.state:set("velocity.capability", self.sensors:velocityCapability())
   self.state:set("candidates", self.per:candidates())
   self:publishThrusterAxes()
+  -- The hardware set moved, so push the slow half of the payload out at once rather than letting
+  -- the screens wait up to a second for it.
+  if self.telemetry and self.telemetry.markSlowDirty then self.telemetry:markSlowDirty() end
   return caps
 end
 
@@ -835,6 +841,9 @@ function App:handleCommand(cmd)
     self.thrusters:invalidate()
     self.mixer:build()
     self:publishThrusterAxes()
+  -- The hardware set moved, so push the slow half of the payload out at once rather than letting
+  -- the screens wait up to a second for it.
+  if self.telemetry and self.telemetry.markSlowDirty then self.telemetry:markSlowDirty() end
     Config.save(self.configPath, self.cfg)
     self.log:info("axes %s: swap=%s invX=%s invY=%s", cmd.id, tostring(cmd.swap),
       tostring(cmd.invertX), tostring(cmd.invertY))

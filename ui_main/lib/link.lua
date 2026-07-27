@@ -9,6 +9,8 @@
      it just sends and reports the acknowledgement.
 ]]
 
+local Util = require("shared.util")
+
 local Link = {}
 Link.__index = Link
 
@@ -64,7 +66,15 @@ end
 function Link:onMessage(sender, message, protocol)
   if protocol == self.cfg.comms.telemetryProtocol then
     if type(message) ~= "table" or message.proto ~= "eh1" then return nil end
-    self.latest = message
+    -- MERGED, NOT REPLACED. A frame that omits a field must not erase what we already knew: the
+    -- craft sends the big, slow-changing parts of the payload only occasionally, so wholesale
+    -- replacement would blank thrusterAxes, candidates and layout on every frame in between --
+    -- which is how the AXIS MAP and THR AXES screens came to read "no thrusters" while the config
+    -- pages, reading a different field, listed them correctly.
+    --
+    -- deepMerge takes the new value wherever the frame HAS one and keeps the old where it does
+    -- not. Lists are replaced wholesale, so an emptied list still empties.
+    self.latest = Util.deepMerge(self.latest or {}, message)
     self.receivedAt = os.epoch("utc")
     self.flightId = sender
     self.messages = self.messages + 1

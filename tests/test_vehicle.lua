@@ -771,7 +771,7 @@ end)
 
 T.it("the whole binding map is published so the config screen can show it", function()
   local app, path = appRig()
-  local published = app.telemetry:build().config.typewriterBindings
+  local published = app.telemetry:build(nil, true).config.typewriterBindings
   T.notNil(published, "reported")
   T.eq(published.brake, "b", "with each action's key name")
   T.eq(published.climb, "space", "including the ones with long names")

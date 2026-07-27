@@ -27,9 +27,9 @@
       ["files"] = {
         {
           ["dst"] = "flight/app.lua",
-          ["size"] = 42227,
+          ["size"] = 42935,
           ["src"] = "flight/app.lua",
-          ["sum"] = "6e8719ea",
+          ["sum"] = "3b5bd7e7",
         },
         {
           ["dst"] = "flight/diskmenu.lua",
@@ -195,9 +195,9 @@
         },
         {
           ["dst"] = "flight/lib/telemetry.lua",
-          ["size"] = 15053,
+          ["size"] = 16642,
           ["src"] = "flight/lib/telemetry.lua",
-          ["sum"] = "d86414b2",
+          ["sum"] = "845b675d",
         },
         {
           ["dst"] = "flight/lib/util.lua",
@@ -479,9 +479,9 @@
         },
         {
           ["dst"] = "ui_main/lib/link.lua",
-          ["size"] = 4091,
+          ["size"] = 4793,
           ["src"] = "ui_main/lib/link.lua",
-          ["sum"] = "4079c728",
+          ["sum"] = "9cb2b5e3",
         },
         {
           ["dst"] = "ui_main/lib/monitors.lua",
@@ -570,5 +570,5 @@
     ["size"] = 36872,
     ["sum"] = "305c58ce",
   },
-  ["version"] = "b0d3ec1f",
+  ["version"] = "0dbc39f7",
 }

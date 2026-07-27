@@ -49,11 +49,68 @@ T.it("reports whatever the state store holds", function()
   T.eq(payload.engine.nextFeedInMs, 4200, "engine countdown")
 end)
 
+--- THE PAYLOAD IS TWO HALVES. The fast one goes out at telemetryHz; the slow one -- hardware
+--- inventories, the config view, the readback table -- rides along about once a second. All of it
+--- was going every frame: serialising it on the craft and deserialising it on the UI ten times a
+--- second, for data that had not moved, which cost both computers most of their loop.
+T.it("a fast frame leaves out the big, slow-changing half", function()
+  local _, _, tel = rig()
+  local fast = tel:build()
+  T.isNil(fast.thrusterAxes, "no thruster axis map")
+  T.isNil(fast.candidates, "no peripheral inventory")
+  T.isNil(fast.config, "no config view")
+  T.isNil(fast.slots, "no slot view")
+  T.isNil(fast.thrusters.readback, "no readback table")
+  -- but everything a live screen needs IS there
+  T.eq(fast.proto, "eh1", "still a well-formed frame")
+  T.notNil(fast.modes, "flight modes")
+  T.notNil(fast.thrusters, "thruster counters")
+  T.notNil(fast.engine, "engine state")
+end)
+
+T.it("a slow frame carries it", function()
+  local _, _, tel = rig()
+  local slow = tel:build(nil, true)
+  T.notNil(slow.config, "config view")
+  T.notNil(slow.slots, "slot view")
+end)
+
+T.it("publish sends the slow half at once, then sparingly", function()
+  local _, _, tel = rig()
+  tel.modem = { transmit = function() end, isWireless = function() return false end }
+  local sent = {}
+  tel.send = function(_, payload) sent[#sent + 1] = payload end
+  local t0 = 1000000
+  -- first frame after boot carries it, so a screen opened immediately is not blank
+  T.isTrue(tel:publish(t0) ~= false, "published")
+  T.notNil(tel.lastSlowAt, "the slow half went out on the first frame")
+  local firstSlow = tel.lastSlowAt
+  -- the next few fast frames do not
+  for i = 1, 5 do tel:publish(t0 + i * 100) end
+  T.eq(tel.lastSlowAt, firstSlow, "and not again straight away")
+  -- a second later it does
+  tel:publish(t0 + 1200)
+  T.isTrue(tel.lastSlowAt > firstSlow, "but it does come round again")
+end)
+
+T.it("markSlowDirty pushes it out immediately", function()
+  local _, _, tel = rig()
+  tel.modem = { transmit = function() end, isWireless = function() return false end }
+  tel.send = function() end
+  local t0 = 1000000
+  tel:publish(t0)
+  local firstSlow = tel.lastSlowAt
+  tel:markSlowDirty()
+  tel:publish(t0 + 100)
+  T.isTrue(tel.lastSlowAt > firstSlow,
+    "a re-scan or re-map does not make the pilot wait a second to see it")
+end)
+
 T.it("includes the config view the panels edit", function()
   local cfg, _, tel = rig()
   cfg.engine.pulseMs = 350
   cfg.envelope.maxBankDeg = 17
-  local payload = tel:build()
+  local payload = tel:build(nil, true)
   T.eq(payload.config.enginePulseMs, 350, "engine pulse")
   T.eq(payload.config.maxBankDeg, 17, "bank limit")
   T.notNil(payload.config.maxClimbRate, "climb limit present")
@@ -170,7 +227,7 @@ T.it("the payload reports what is assigned and what could be", function()
   cfg.hardware.tanks[1] = { peripheral = "tank_0", label = "Main fuel", capacityMb = 0 }
   state:set("candidates", { relays = { "redstone_relay_0" }, tanks = { "tank_0" }, vaults = {} })
 
-  local payload = tel:build()
+  local payload = tel:build(nil, true)
   T.eq(payload.config.engineRelay, "redstone_relay_0", "assigned relay")
   T.eq(payload.config.engineSide, "back", "and its side")
   T.eq(payload.config.tankPeripheral, "tank_0", "assigned tank")
@@ -205,7 +262,7 @@ T.it("the payload reports what fills every named slot", function()
   cfg.hardware.sensors.altitude = "alt_0"
   cfg.hardware.sensors.gimbal = "gimbal_0"
 
-  local slots = tel:build().slots
+  local slots = tel:build(nil, true).slots
   T.eq(slots["lift:fl"], "thruster_0", "a lift thruster")
   T.eq(slots["main:1"], "thruster_9", "a main thruster")
   T.eq(slots["velocity:z"], "vel_2", "a velocity axis")
