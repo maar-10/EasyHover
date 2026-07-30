@@ -22,6 +22,9 @@ function Link.new(cfg, log)
   self.latest = nil          -- the last telemetry payload
   self.receivedAt = nil      -- epoch ms when it arrived
   self.flightId = nil        -- which computer is flying
+  self.navFix = nil          -- the last nav-computer position/heading broadcast
+  self.navReceivedAt = nil   -- epoch ms when it arrived
+  self.navId = nil           -- which computer is navigating
   self.messages = 0
   self.lastAck = nil
   return self
@@ -79,6 +82,15 @@ function Link:onMessage(sender, message, protocol)
     self.flightId = sender
     self.messages = self.messages + 1
     return "telemetry"
+  elseif protocol == self.cfg.comms.navFixProtocol then
+    -- The nav computer's own broadcast (nav/lib/relay.lua), a SEPARATE protocol from the flight
+    -- telemetry. Kept apart from `latest` because it has its own sender and its own, slower age --
+    -- merging it into the flight frame would make one stale source poison the other's freshness.
+    if type(message) ~= "table" or message.proto ~= "ehnav1" then return nil end
+    self.navFix = message
+    self.navReceivedAt = os.epoch("utc")
+    self.navId = sender
+    return "navfix"
   elseif protocol == self.cfg.comms.commandProtocol then
     if type(message) == "table" and message.ack ~= nil then
       self.lastAck = message
@@ -102,6 +114,28 @@ function Link:isStale()
   return self:age() > (self.cfg.comms.staleMs or 2000)
 end
 
+--- Age of the newest nav fix, in ms. math.huge when nothing has arrived.
+function Link:navAge()
+  if not self.navReceivedAt then return math.huge end
+  return os.epoch("utc") - self.navReceivedAt
+end
+
+--- The nav computer's latest position/heading, with its OWN freshness, or nil if none seen.
+function Link:nav()
+  if self.navFix == nil then return nil end
+  local age = self:navAge()
+  return {
+    stale = age > (self.cfg.comms.navStaleMs or 4000),
+    ageMs = age,
+    navId = self.navId,
+    position = self.navFix.position,
+    heading = self.navFix.heading,           -- degrees number, from the nav relay
+    headingSource = self.navFix.headingSource,   -- navtable|backup|gimbal
+    headingAligned = self.navFix.headingAligned,
+    waypointCount = self.navFix.waypointCount,
+  }
+end
+
 --- The model every panel renders from. Always a table, never nil, and it always says whether
 --- the numbers in it can be trusted.
 function Link:model()
@@ -112,6 +146,7 @@ function Link:model()
     ageMs = self:age(),
     flightId = self.flightId,
     telemetry = payload,
+    nav = self:nav(),
   }
 end
 

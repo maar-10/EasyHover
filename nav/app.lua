@@ -158,7 +158,8 @@ function App:tick(now)
 
   -- Keep the heading trued: poll the navigation table (free) and re-calibrate the gimbal offset.
   self.heading:tick(now)
-  local heading = self.heading:degrees(now)
+  local headingInfo = self.heading:current(now)   -- { degrees, source, aligned } or nil
+  local heading = headingInfo and headingInfo.degrees or nil
 
   if now - self.lastFixAt >= self.cfg.fixEverySeconds * 1000 then
     self.lastFixAt = now
@@ -179,7 +180,9 @@ function App:tick(now)
   local position = self:position(now)
   if position then
     self.relay:publish(position, {
-      heading = heading,
+      heading = heading,                             -- degrees, kept a bare number for consumers
+      headingSource = headingInfo and headingInfo.source or nil,  -- navtable|backup|gimbal
+      headingAligned = headingInfo and headingInfo.aligned or nil,
       waypointCount = self.waypoints:count(),
     })
   end

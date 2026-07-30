@@ -9,15 +9,33 @@ local Util = require("shared.util")
 
 local Theme = {}
 
-Theme.bg = colours.black
-Theme.fg = colours.white
-Theme.dim = colours.lightGrey
-Theme.accent = colours.cyan
-Theme.ok = colours.lime
-Theme.caution = colours.yellow
-Theme.warning = colours.red
-Theme.buttonBg = colours.grey
-Theme.buttonFg = colours.white
+--- DAY / NIGHT. Two colour sets, chosen from CC's fixed 16, swapped by Theme.setMode. Day is the
+--- high-contrast set for reading in sunlight (pure white on black, bright accents); night is the
+--- softer set for a dark cockpit (greys instead of white, calmer accents). Because panels capture
+--- these values when they BUILD, the app rebuilds every panel after a mode change -- see
+--- ui_main/app.lua toggleDayNight. Colours only, never characters, so the ASCII rule still holds.
+local PALETTES = {
+  day = {
+    bg = colours.black, fg = colours.white, dim = colours.lightGrey,
+    accent = colours.cyan, ok = colours.lime, caution = colours.yellow,
+    warning = colours.red, buttonBg = colours.grey, buttonFg = colours.white,
+  },
+  night = {
+    bg = colours.black, fg = colours.lightGrey, dim = colours.grey,
+    accent = colours.lightBlue, ok = colours.green, caution = colours.orange,
+    warning = colours.red, buttonBg = colours.grey, buttonFg = colours.lightGrey,
+  },
+}
+
+--- Switch the active colour set. Returns the mode actually set. Anything but "night" is "day".
+function Theme.setMode(mode)
+  Theme.mode = (mode == "night") and "night" or "day"
+  for key, value in pairs(PALETTES[Theme.mode]) do Theme[key] = value end
+  return Theme.mode
+end
+
+Theme.mode = "day"
+Theme.setMode("day")     -- seed the colour fields below from the day palette
 
 --- Colour for a 0..1 fraction, using the configured thresholds so every gauge agrees.
 function Theme.levelColour(fraction, cfg)

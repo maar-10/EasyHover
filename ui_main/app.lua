@@ -19,6 +19,7 @@ local Overhead = require("ui.overhead")
 local ConfigPanel = require("ui.config_panel")
 local Nav = require("ui.nav")
 local Terminal = require("ui.terminal")
+local Theme = require("ui.theme")
 local Log = require("shared.log")
 
 local basalt = require("basalt")
@@ -101,7 +102,23 @@ function App:buildActions()
     configSave = function() link:send({ cmd = "configSave" }) end,
     diskSave = function() link:send({ cmd = "diskSave" }) end,
     diskLoad = function() link:send({ cmd = "diskLoad" }) end,
+    -- UI-LOCAL: re-themes this computer's own monitors for day/night reading. Not a flight command
+    -- -- it never leaves this computer -- so it goes straight to the app rather than the link.
+    dayNight = function() self:toggleDayNight() end,
   }
+end
+
+--- Flip day/night, persist the choice, and rebuild every panel so the new colours take (panels
+--- capture Theme's colours when they build). Returns the mode now in effect.
+function App:toggleDayNight()
+  local next = (Theme.mode == "night") and "day" or "night"
+  Theme.setMode(next)
+  self.cfg.ui.dayNight = next
+  local ok, err = UiConfig.save(self.configPath, self.cfg)
+  if not ok then self.log:warn("could not save day/night: %s", tostring(err)) end
+  self.rebuildPending = true          -- syncPanels on the next timer rebuilds with the new colours
+  self.log:info("display mode -> %s", next)
+  return next
 end
 
 -- ---------------------------------------------------------------- panels
@@ -235,6 +252,13 @@ function App:refresh()
   -- this one is not finished yet -- and a number that is one frame stale still answers the
   -- question being asked of it.
   model.refreshMs = self.lastRefreshMs
+  -- The two clocks the nav monitor shows, read HERE (not in the panel) so the render stays a pure
+  -- function of its model and the tests can drive any time they like. os.time returns hours 0..24.
+  model.clock = {
+    mc = os.time("ingame"),
+    irl = os.time("local"),
+    day = os.day("ingame"),
+  }
   self.monitors:update(model)
   if self.terminalPanel and self.terminalPanel.update then
     pcall(self.terminalPanel.update, model)
@@ -246,6 +270,9 @@ end
 function App:boot()
   self.log:info("EasyHover ui_main booting (config %s)",
     self.configExisted and "loaded" or "defaults")
+  -- Apply the saved day/night choice BEFORE any panel builds, so the first frame is already in the
+  -- right colours rather than flashing day and rebuilding to night.
+  Theme.setMode(self.cfg.ui.dayNight)
   self.link:open()
   self:buildPanels()
 

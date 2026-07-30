@@ -64,7 +64,12 @@ function Config.defaults()
       modem = "",                             -- blank = auto-pick the first wired modem
       telemetryProtocol = "eh_telemetry",
       commandProtocol = "eh_command",
+      -- The nav computer's position/heading broadcast (see nav/lib/relay.lua). Must match the nav
+      -- computer's comms.navFixProtocol. The nav monitor's heading tape and map read from it.
+      navFixProtocol = "eh_navfix",
       staleMs = 2000,                         -- no telemetry for this long = show STALE
+      -- Nav fixes arrive slower than flight telemetry, so a longer grace before the tape blanks.
+      navStaleMs = 4000,
     },
 
     ui = {
@@ -72,6 +77,9 @@ function Config.defaults()
       -- Gauge thresholds, so the colours mean the same thing on every panel.
       cautionFraction = 0.25,
       warningFraction = 0.10,
+      -- "day" (bright, high-contrast for sunlight) or "night" (softer for a dark cockpit). The
+      -- DAY/NGT button on the nav monitor toggles it; persisted so it survives a reboot.
+      dayNight = "day",
     },
   }
 end

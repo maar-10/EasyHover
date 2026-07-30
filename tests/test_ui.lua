@@ -117,6 +117,7 @@ local function sent()
     end,
     selfTest = function(action) out[#out + 1] = { cmd = "selfTest", action = action } end,
     selfConfig = function(action) out[#out + 1] = { cmd = "selfConfig", action = action } end,
+    dayNight = function() out[#out + 1] = { cmd = "dayNight" } end,
     vectorHold = function(action, id, axis, sign)
       out[#out + 1] = { cmd = "vectorHold", action = action, id = id, axis = axis, sign = sign }
     end,
@@ -1138,10 +1139,10 @@ local function navModel(pilot, selfTest)
   return m
 end
 
-T.it("leaves the middle empty -- the map goes there", function()
+T.it("says so when there is no nav link rather than drawing decoration", function()
   local panel = navRig()
   panel.update(navModel())
-  T.isTrue(panel.elements.placeholder:getText():find("no nav yet") ~= nil,
+  T.isTrue(panel.elements.placeholder:getText():find("no nav link") ~= nil,
     "says so rather than drawing decoration: " .. panel.elements.placeholder:getText())
 end)
 
@@ -1259,6 +1260,94 @@ T.it("SELF CONFIG buttons send the right commands", function()
   panel.update(m)
   click(panel.elements.cfgStart)
   T.eq(commands[#commands].action, "abort", "STOP sends abort while running")
+end)
+
+-- --------------------------------------------------------------- heading tape
+
+T.it("the compass is the aviation standard: N at 0, clockwise", function()
+  T.eq(Nav.cardinal(0), "N", "000 is north")
+  T.eq(Nav.cardinal(90), "E", "090 is east")
+  T.eq(Nav.cardinal(180), "S", "180 is south")
+  T.eq(Nav.cardinal(270), "W", "270 is west")
+  T.eq(Nav.cardinal(45), "NE", "045 is north-east")
+  T.eq(Nav.cardinal(360), "N", "360 wraps to north")
+end)
+
+T.it("headings read 001..360, north as 360 not 000", function()
+  T.eq(Nav.disp3(0), "360", "north shows as 360")
+  T.eq(Nav.disp3(360), "360", "so does 360")
+  T.eq(Nav.disp3(5), "005", "zero-padded")
+  T.eq(Nav.disp3(271), "271", "an exact heading")
+end)
+
+T.it("the heading tape centres the exact heading with its cardinal", function()
+  local tape = Nav.headingTape(270, 48)
+  T.eq(#tape, 48, "exactly the monitor width")
+  T.isTrue(tape:find("|270W|", 1, true) ~= nil, "the box shows 270W: " .. tape)
+  T.isTrue(tape:find("265", 1, true) ~= nil, "a lower tick is visible")
+  T.isTrue(tape:find("275", 1, true) ~= nil, "a higher tick is visible")
+
+  -- The centre box lands in the middle of the tape, not off to one side.
+  local at = tape:find("|270W|", 1, true)
+  T.isTrue(at > 15 and at < 30, "the box is centred, at column " .. at)
+end)
+
+T.it("the tape scrolls as the heading changes, and blanks with no heading", function()
+  T.isTrue(Nav.headingTape(270, 29) ~= Nav.headingTape(275, 29), "different headings differ")
+  T.isTrue(Nav.headingTape(271, 29):find("|271", 1, true) ~= nil, "shows the exact heading 271")
+  T.eq(Nav.headingTape(nil, 15), ("-"):rep(15), "no heading -> dashes, full width")
+end)
+
+T.it("the two clocks format as hh:mm, and say so when there is no time", function()
+  T.eq(Nav.clockText(6.5), "06:30", "6.5 hours is half past six")
+  T.eq(Nav.clockText(0), "00:00", "midnight")
+  T.eq(Nav.clockText(13.25), "13:15", "quarter past one")
+  T.eq(Nav.clockText(nil), "--:--", "no time source")
+end)
+
+-- --------------------------------------------------------------- nav view
+
+--- A model carrying a nav fix and the two clocks, as the app assembles it.
+local function navFixModel(nav, clock)
+  local m = navModel()
+  m.nav = nav
+  m.clock = clock or { irl = 14.5, mc = 6.0, day = 3 }
+  return m
+end
+
+T.it("the nav view shows the tape, position and clocks from the nav fix", function()
+  local panel = navRig(51, 19)
+  panel.update(navFixModel({
+    stale = false, heading = 271, headingSource = "navtable",
+    position = { x = 128, y = 74, z = -344, source = "gps" }, waypointCount = 2,
+  }))
+  T.isTrue(panel.elements.headingTape:getText():find("|271", 1, true) ~= nil, "tape shows 271")
+  T.isTrue(panel.elements.headingDetail:getText():find("true N") ~= nil, "source is true north")
+  T.isTrue(panel.elements.navPos:getText():find("128") ~= nil, "position x is shown")
+  T.isTrue(panel.elements.times:getText():find("14:30") ~= nil, "IRL clock")
+  T.isTrue(panel.elements.times:getText():find("06:00") ~= nil, "MC clock")
+end)
+
+T.it("a stale nav fix says so instead of showing a frozen heading", function()
+  local panel = navRig(51, 19)
+  panel.update(navFixModel({ stale = true, heading = 271,
+    position = { x = 1, y = 2, z = 3 } }))
+  T.eq(panel.elements.headingTape:getText(), ("-"):rep(51), "tape blanks when the fix is stale")
+  T.isTrue(panel.elements.headingDetail:getText():find("STALE") ~= nil, "and says STALE")
+end)
+
+T.it("the DAY/NGT button reflects the mode and toggling it re-themes", function()
+  Theme.setMode("day")
+  local panel, commands = navRig()
+  panel.update(navFixModel(nil))
+  T.eq(panel.elements.dayNight:getText(), "DAY", "shows the current mode")
+  click(panel.elements.dayNight)
+  T.eq(commands[#commands].cmd, "dayNight", "the button fires the day/night action")
+
+  Theme.setMode("night")
+  panel.update(navFixModel(nil))
+  T.eq(panel.elements.dayNight:getText(), "NGT", "night mode shows NGT")
+  Theme.setMode("day")     -- leave the shared Theme as we found it
 end)
 
 -- --------------------------------------------------------------- FCS test

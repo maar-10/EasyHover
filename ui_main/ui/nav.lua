@@ -90,6 +90,98 @@ end
 
 Nav.signedBar = signedBar
 
+-- ---------------------------------------------------------------- heading tape
+
+--- The 16-point compass, NORTH AT 0 AND CLOCKWISE -- the aviation/navigation standard, the same
+--- convention as nav/lib/geo.lua: 000/360=N, 090=E, 180=S, 270=W. Kept here (not imported from the
+--- nav computer's Geo) because ui_main ships without it, and the tape needs only this.
+local COMPASS = { "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+  "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW" }
+
+local function cardinal(deg)
+  deg = deg % 360
+  if deg < 0 then deg = deg + 360 end
+  return COMPASS[(math.floor(deg / 22.5 + 0.5) % 16) + 1]
+end
+Nav.cardinal = cardinal
+
+--- A heading as three digits, 001..360 -- north reads as 360, never 000, as the pilot asked.
+local function disp3(deg)
+  local d = math.floor(deg + 0.5) % 360
+  if d == 0 then d = 360 end
+  return ("%03d"):format(d)
+end
+Nav.disp3 = disp3
+
+--- hh:mm from an os.time value (hours 0..24, the fractional part being minutes). Used for both
+--- clocks -- os.time("ingame") and os.time("local") both return this shape.
+local function clockText(t)
+  if type(t) ~= "number" then return "--:--" end
+  local h = math.floor(t) % 24
+  local m = math.floor((t - math.floor(t)) * 60) % 60
+  return ("%02d:%02d"):format(h, m)
+end
+Nav.clockText = clockText
+
+--- Shortest signed difference target-ref, in (-180, 180]. So a tick near the 0/360 seam is placed
+--- by its true distance rather than jumping most of the way round the dial.
+local function shortestDelta(target, ref)
+  local d = (target - ref) % 360
+  if d > 180 then d = d - 360 end
+  return d
+end
+
+--- Columns per degree. 1.4 (seven columns per five degrees) gives the arrow density of the
+--- pilot's sketch: three-digit ticks every five degrees with a few '<'/'>' between them.
+local COLS_PER_DEG = 1.4
+
+--- A MOVING HEADING TAPE, exactly `width` characters, centred on `deg`.
+---
+---   * the exact current heading sits in the centre as |NNNC| -- three digits + cardinal
+---   * five-degree ticks flow past it as three-digit numbers, positioned by their offset
+---   * '<' fills the gaps to the left (lower headings), '>' to the right (higher)
+---   * everything clips to the monitor's width, so the centre stays put and the tape scrolls
+---
+--- Pure: the same `deg` and `width` always give the same string, so it is fully unit-tested.
+function Nav.headingTape(deg, width)
+  width = math.max(1, math.floor(width or 0))
+  if type(deg) ~= "number" then return ("-"):rep(width) end
+
+  local H = deg % 360
+  if H < 0 then H = H + 360 end
+  local centre = math.floor((width + 1) / 2)
+
+  local cells = {}
+  for i = 1, width do
+    cells[i] = (i < centre) and "<" or ((i > centre) and ">" or " ")
+  end
+
+  local function place(str, startCol)
+    for k = 1, #str do
+      local c = startCol + k - 1
+      if c >= 1 and c <= width then cells[c] = str:sub(k, k) end
+    end
+  end
+
+  -- Five-degree ticks, out to a little past the visible edge so one never pops in at the border.
+  -- Stepped by INDEX off the nearest 5-degree mark, so every tick is a real multiple of five --
+  -- iterating `baseTick - reach, ..., 5` starts at 247 when reach is 23 and prints 247/252/257.
+  local reach = math.ceil(width / (2 * COLS_PER_DEG)) + 5
+  local baseTick = math.floor(H / 5) * 5
+  local span = math.ceil(reach / 5)
+  for i = -span, span do
+    local t = baseTick + i * 5
+    local col = centre + math.floor(shortestDelta(t, H) * COLS_PER_DEG + 0.5)
+    place(disp3(t), col - 1)                 -- centre the 3-digit label on its column
+  end
+
+  -- The centre box last, so it overwrites any tick or arrow beneath it.
+  local box = "|" .. disp3(H) .. cardinal(H) .. "|"
+  place(box, centre - math.floor(#box / 2))
+
+  return table.concat(cells)
+end
+
 --- opts = { cfg, actions, log, lastAck }
 function Nav.build(frame, opts)
   local actions = opts.actions
@@ -134,24 +226,42 @@ function Nav.build(frame, opts)
   end
 
   -- ---------------------------------------------------------------- nav view
+  --
+  -- Top: the moving heading tape. Middle: position + waypoints from the nav computer's broadcast
+  -- (the link merges it in as model.nav). Bottom: the two clocks on one row, then the BIT/CONF door
+  -- and the DAY/NGT toggle on the last. The tape and the clocks are headline instruments, so they
+  -- own the fixed edges; the map fills whatever is left between them.
 
-  Theme.line(navPage, 1, width, Theme.centre("NAV", width), Theme.accent)
-  Theme.rule(navPage, 2, width)
+  -- Row 1: the heading tape, rewritten every frame. Row 2: what the heading rests on.
+  local headingTapeLine = Theme.line(navPage, 1, width, ("-"):rep(width), Theme.dim)
+  local headingDetail = Theme.line(navPage, 2, width, "", Theme.dim)
+  Theme.rule(navPage, 3, width)
 
-  -- The middle is left empty ON PURPOSE: the map and waypoint list land here, and filling it
-  -- with placeholder decoration now would only have to be torn out.
-  local reservedTop = 3
-  -- The nav view keeps ONE button on its bottom edge now: BIT/CONF, the door to the built-in tests
-  -- and configuration processes. They used to sit here directly -- FCS TEST / SELF TEST / AXIS MAP,
-  -- three across -- but there is a fourth now, the SELF AXIS CONFIG BIP, and four labels never
-  -- share a 15-wide edge. One button leads to a menu with room for all of them.
+  local reservedTop = 4
+  local timesRow = height - 1
+  local buttonRow = height
+
+  -- Middle: a placeholder until the nav computer is heard from, then position + waypoint count.
+  local navPlaceholder = Theme.line(navPage, reservedTop, width,
+    Theme.centre("no nav link", width), Theme.dim)
+  local navPosLine = optionalLine(navPage,
+    (timesRow - reservedTop >= 2) and (reservedTop + 1) or nil, "", Theme.fg)
+  local navInfoLine = optionalLine(navPage,
+    (timesRow - reservedTop >= 3) and (reservedTop + 2) or nil, "", Theme.dim)
+
+  -- The two clocks: IRL on the left, Minecraft on the right, on their own row above the buttons.
+  local timesLine = Theme.line(navPage, timesRow, width, "", Theme.dim)
+
+  -- The BIT/CONF door and the DAY/NGT toggle share the bottom row: BIT/CONF from the left, the
+  -- day/night button in the right corner. dayNight is a UI-LOCAL action (it re-themes this
+  -- computer's own monitors), not a flight command.
   local stacked = width < 26          -- kept for the return contract; layout no longer branches
-  local reservedBottom = height - 1
-
-  local navPlaceholder = Theme.line(navPage, math.floor((reservedTop + reservedBottom) / 2),
-    width, Theme.centre("no nav yet", width), Theme.dim)
-
-  local bitButton = Theme.button(navPage, 1, height, width, "BIT/CONF", function() show(bitPage) end)
+  local dayW = math.min(5, math.max(3, width - 10))
+  local bitW = math.max(6, width - dayW - 1)
+  local bitButton = Theme.button(navPage, 1, buttonRow, bitW, "BIT/CONF",
+    function() show(bitPage) end)
+  local dayNightButton = Theme.button(navPage, width - dayW + 1, buttonRow, dayW, "DAY",
+    function() if actions.dayNight then actions.dayNight() end end)
 
   -- ---------------------------------------------------------------- BIT/CONF menu
   --
@@ -604,6 +714,69 @@ function Nav.build(frame, opts)
   end
   refreshConfig()
 
+  -- ------------------------------------------------------------- nav view render
+  --
+  -- Everything on the nav view is the REPORTED state, never a guess: the tape blanks to dashes when
+  -- there is no fresh heading, the clocks show --:-- with no time source, and a stale nav link says
+  -- so rather than freezing the last position as though it were live.
+  local function refreshNav(model)
+    local nav = model.nav
+    local headingDeg = (nav and not nav.stale) and nav.heading or nil
+
+    -- The tape.
+    headingTapeLine:setText(Nav.headingTape(headingDeg, width))
+    headingTapeLine:setForeground(headingDeg and Theme.fg or Theme.dim)
+
+    -- What the heading rests on -- and colour it by how much to trust it.
+    if type(headingDeg) == "number" then
+      local src = nav.headingSource
+      local tag = (src == "navtable" and "true N") or (src == "backup" and "backup")
+        or (src == "gimbal" and "relative") or "?"
+      headingDetail:setText(Theme.fit(("HDG %s %s  %s"):format(
+        Nav.disp3(headingDeg), Nav.cardinal(headingDeg), tag), width))
+      headingDetail:setForeground((src == "navtable" and Theme.ok)
+        or (src == "gimbal" and Theme.caution) or Theme.dim)
+    else
+      headingDetail:setText(Theme.fit(nav and "HEADING STALE" or "NO NAV LINK", width))
+      headingDetail:setForeground(Theme.warning)
+    end
+
+    -- Position + waypoints in the middle.
+    local function n(v) return type(v) == "number" and tostring(math.floor(v + 0.5)) or "--" end
+    if nav then
+      navPlaceholder:setText(Theme.fit(nav.stale and "NAV STALE" or "NAV", width))
+      navPlaceholder:setForeground(nav.stale and Theme.warning or Theme.accent)
+      local p = nav.position
+      if navPosLine then
+        navPosLine:setText(p and Theme.fit(("P %s %s %s"):format(n(p.x), n(p.y), n(p.z)), width)
+          or "NO FIX")
+        navPosLine:setForeground((p and p.dead) and Theme.caution
+          or (nav.stale and Theme.warning or Theme.fg))
+      end
+      if navInfoLine then
+        local tag = (p and p.dead) and "DEAD RECK" or tostring((p and p.source) or "fix")
+        navInfoLine:setText(Theme.fit(("%s  %d wpts"):format(tag, nav.waypointCount or 0), width))
+      end
+    else
+      navPlaceholder:setText(Theme.centre("no nav link", width))
+      navPlaceholder:setForeground(Theme.dim)
+      if navPosLine then navPosLine:setText("") end
+      if navInfoLine then navInfoLine:setText("") end
+    end
+
+    -- The two clocks, fitted to the row: labelled when there is room, bare when narrow.
+    local clk = model.clock or {}
+    local irl, mc = clockText(clk.irl), clockText(clk.mc)
+    local left, right = ("IRL %s"):format(irl), ("MC %s"):format(mc)
+    if #left + 1 + #right > width then left, right = ("R %s"):format(irl), ("M %s"):format(mc) end
+    local gap = math.max(1, width - #left - #right)
+    timesLine:setText(Theme.fit(left .. (" "):rep(gap) .. right, width))
+
+    -- The day/night button shows the mode it is IN, as asked (press to switch).
+    dayNightButton:setText((Theme.mode == "night") and "NGT" or "DAY")
+  end
+  refreshNav({})
+
   -- ---------------------------------------------------------------- update
 
   local function update(model)
@@ -618,9 +791,7 @@ function Nav.build(frame, opts)
     live.selfConfigPrereqs = t.selfConfigPrereqs or {}
     refreshAxisRows()
     refreshConfig()
-
-    navPlaceholder:setText(Theme.centre(model.stale and "NO DATA" or "no nav yet", width))
-    navPlaceholder:setForeground(model.stale and Theme.warning or Theme.dim)
+    refreshNav(model)
 
     -- ---- FCS
     fcsStale:setText(model.stale and "NO DATA -- craft not reporting" or "live from the craft")
@@ -816,6 +987,9 @@ function Nav.build(frame, opts)
       cfgWarn = cfgWarn, cfgStatus = cfgStatus, cfgDetail1 = cfgDetail1,
       cfgDetail2 = cfgDetail2, cfgCheck = cfgCheckBtn, cfgStart = cfgStartBtn,
       cfgAccept = cfgAcceptBtn, cfgDiscard = cfgDiscardBtn,
+      headingTape = headingTapeLine, headingDetail = headingDetail,
+      navPos = navPosLine, navInfo = navInfoLine, times = timesLine,
+      dayNight = dayNightButton,
     },
   }
 end
