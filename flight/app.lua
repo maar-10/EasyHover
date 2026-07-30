@@ -148,6 +148,13 @@ function App:boot()
     tostring(caps.yaw))
   self.state:set("layout", caps)
 
+  -- PUBLISH THE THRUSTER AXIS MAP AT BOOT. It was only ever published on a remap (onAssigned),
+  -- inside rebuildHardware, or in setAxes -- never on a plain start. So a craft booted with a
+  -- saved config had `thrusterAxes` nil in its telemetry, and the AXIS MAP and THR AXES screens
+  -- read "no thrusters assigned" until the pilot happened to re-pick a slot. The thrusters were
+  -- assigned, listed and swept correctly the whole time; only this one publish was missing.
+  self:publishThrusterAxes()
+
   local capability = self.sensors:velocityCapability()
   self.state:set("velocity.capability", capability)
   if capability ~= "vector" then

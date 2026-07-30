@@ -798,6 +798,25 @@ local function fullCraft()
   } } }
 end
 
+--- THE "NO THRUSTERS" BUG on the AXIS MAP and THR AXES screens. thrusterAxes was only ever
+--- published on a remap, inside rebuildHardware, or in setAxes -- never on a plain boot. So a
+--- craft started with a saved config sent nil for it, and both screens read "no thrusters
+--- assigned" while the thrusters were assigned, listed and swept correctly everywhere else.
+T.it("publishes the thruster axis map at boot", function()
+  local app, path = appRig(fullCraft())     -- appRig boots
+  local axes = app.state:get("thrusterAxes")
+  T.notNil(axes, "thrusterAxes is set at boot, not only after a remap")
+  T.eq(#axes, #app.cfg.hardware.thrusters, "one entry per configured thruster")
+  T.notNil(axes[1].id, "each entry names its thruster")
+  T.notNil(axes[1].key, "and its slot key, which the screen shows")
+
+  -- and it must ride in the slow telemetry frame the screens actually read
+  local payload = app.telemetry:build(nil, true)
+  T.notNil(payload.thrusterAxes, "carried in the slow telemetry")
+  T.eq(#payload.thrusterAxes, #axes, "all of them")
+  fs.delete(path)
+end)
+
 T.it("REFUSES to run on a craft that is flying under power", function()
   local app, path = appRig(fullCraft())
   app.state:set("measured", { groundContact = false })
