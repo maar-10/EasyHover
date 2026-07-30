@@ -116,6 +116,7 @@ local function sent()
       out[#out + 1] = { cmd = "setSlot", kind = kind, key = key, peripheral = pe }
     end,
     selfTest = function(action) out[#out + 1] = { cmd = "selfTest", action = action } end,
+    selfConfig = function(action) out[#out + 1] = { cmd = "selfConfig", action = action } end,
     vectorHold = function(action, id, axis, sign)
       out[#out + 1] = { cmd = "vectorHold", action = action, id = id, axis = axis, sign = sign }
     end,
@@ -1171,14 +1172,15 @@ T.it("shows every flight axis at every size, or none at all", function()
   end
 end)
 
---- On a narrow cockpit monitor the three labels do not fit across one row: they came out as
---- "FCS T SELFT AXI" with the third button hanging past the right edge.
-T.it("the three test buttons stay readable and on-screen at every width", function()
+--- The four screens now live in the BIT/CONF menu, stacked one per row, so every full label fits
+--- and none hangs past the edge -- the failure that made "FCS T SELFT AXI" on a narrow monitor.
+T.it("the BIT/CONF menu entries stay readable and on-screen at every width", function()
   for _, size in ipairs({ { 15, 20 }, { 18, 16 }, { 25, 19 }, { 26, 19 }, { 29, 19 }, { 51, 19 } }) do
     local width = size[1]
     local panel = navRig(width, size[2])
     panel.update(navModel())
-    local labels = { ["FCS TEST"] = false, SELFTEST = false, AXISMAP = false }
+    local labels = { ["FCS TEST"] = false, ["SELF TEST"] = false,
+      ["AXIS MAP"] = false, ["SELF CONFIG"] = false }
     for _, button in ipairs(panel.buttons or {}) do
       local text = button:getText()
       T.notNil(labels[text], ("%dx%d: %q is not a full label"):format(width, size[2], text))
@@ -1190,21 +1192,73 @@ T.it("the three test buttons stay readable and on-screen at every width", functi
     for name, seen in pairs(labels) do
       T.isTrue(seen, ("%dx%d: %s missing"):format(width, size[2], name))
     end
+    -- The nav view itself carries just the one door to them.
+    T.eq(panel.bitButton:getText(), "BIT/CONF", ("%dx%d: nav has BIT/CONF"):format(width, size[2]))
   end
 end)
 
-T.it("both pre-flight tests are on the border, and each replaces the nav view", function()
+T.it("BIT/CONF opens a menu, and each entry replaces the nav view", function()
   local panel = navRig()
   panel.update(navModel())
   T.isTrue(panel.pages.nav:getVisible(), "nav is up first")
 
+  panel.show(panel.pages.bit)
+  T.isTrue(panel.pages.bit:getVisible(), "the BIT/CONF menu opens")
+  T.isFalse(panel.pages.nav:getVisible(), "nav is hidden behind it")
+
   panel.show(panel.pages.fcs)
   T.isTrue(panel.pages.fcs:getVisible(), "FCS TEST replaces it")
-  T.isFalse(panel.pages.nav:getVisible(), "nav is hidden while it is up")
 
-  panel.show(panel.pages.selfTest)
-  T.isTrue(panel.pages.selfTest:getVisible(), "SELF TEST too")
+  panel.show(panel.pages.config)
+  T.isTrue(panel.pages.config:getVisible(), "SELF CONFIG too")
   T.isFalse(panel.pages.fcs:getVisible(), "one at a time")
+end)
+
+-- --------------------------------------------------------------- self axis config BIP
+
+T.it("SELF CONFIG shows the prereq verdict and only offers ACCEPT with a proposal", function()
+  local panel = navRig()
+  local m = navModel()
+
+  m.telemetry.selfConfigPrereqs = { ok = false, missing = { "ENGINE OFF", "NO FUEL" }, nozzles = 0 }
+  panel.update(m)
+  T.isTrue(panel.elements.cfgStatus:getText():find("NO GO") ~= nil, "NO GO! is shown")
+  T.isFalse(panel.elements.cfgAccept:getVisible(), "no ACCEPT without a proposal")
+
+  m.telemetry.selfConfigPrereqs = { ok = true, missing = {}, nozzles = 4 }
+  panel.update(m)
+  T.isTrue(panel.elements.cfgStatus:getText():find("READY") ~= nil, "READY! is shown")
+
+  m.telemetry.selfConfig = { running = true, phase = "probe", index = 2, total = 4, current = "lift_fr" }
+  panel.update(m)
+  T.eq(panel.elements.cfgStart:getText(), "STOP", "START becomes STOP while running")
+
+  m.telemetry.selfConfig = { running = false, complete = true, proposed = 1,
+    proposal = { lift_fl = { id = "lift_fl", vectorMap = { x = "z", y = "x" },
+      invertVectorX = false, invertVectorY = true } } }
+  panel.update(m)
+  T.isTrue(panel.elements.cfgStatus:getText():find("PROPOSED") ~= nil, "the proposal is announced")
+  T.isTrue(panel.elements.cfgAccept:getVisible(), "ACCEPT is offered")
+  T.isTrue(panel.elements.cfgDiscard:getVisible(), "so is DISCARD")
+end)
+
+T.it("SELF CONFIG buttons send the right commands", function()
+  local panel, commands = navRig()
+  panel.update(navModel())
+
+  click(panel.elements.cfgCheck)
+  T.eq(commands[#commands].cmd, "selfConfig", "CHECK sends a selfConfig command")
+  T.eq(commands[#commands].action, "checkPrereqs", "with the checkPrereqs action")
+
+  click(panel.elements.cfgStart)
+  T.eq(commands[#commands].action, "start", "START sends start")
+
+  -- While running, the same button aborts.
+  local m = navModel()
+  m.telemetry.selfConfig = { running = true, phase = "float", index = 1, total = 4 }
+  panel.update(m)
+  click(panel.elements.cfgStart)
+  T.eq(commands[#commands].action, "abort", "STOP sends abort while running")
 end)
 
 -- --------------------------------------------------------------- FCS test

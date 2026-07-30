@@ -26,6 +26,7 @@ local Oscillation = require("lib.control.oscillation")
 local Assist = require("lib.control.assist")
 local Brake = require("lib.control.brake")
 local SelfTest = require("lib.control.selftest")
+local SelfConfig = require("lib.control.selfconfig")
 local AxisMap = require("lib.control.axismap")
 local Modes = require("lib.modes")
 local Pilot = require("lib.input.pilot")
@@ -75,6 +76,7 @@ function App.new(opts)
   self.pilot = Pilot.new(cfg, self.log)
   self.telemetry = Telemetry.new(cfg, self.log, self.state)
   self.selfTest = SelfTest.new(self.thrusters, self.per, cfg, self.log, self.state)
+  self.selfConfig = SelfConfig.new(self.thrusters, self.per, cfg, self.log, self.state)
   self.axisMap = AxisMap.new(self.thrusters, self.per, cfg, self.log, self.state)
   -- A remap changes the mixer's matrix, so it must be rebuilt and saved the moment it happens.
   self.axisMap.onAssigned = function()
@@ -315,6 +317,7 @@ function App:cycle(dt)
   --   mixer                           normal closed-loop flight
   local owner = (self.axisMap:isHolding() and "axisMap")
     or (self.selfTest:isRunning() and "selfTest")
+    or (self.selfConfig:isRunning() and "selfConfig")
     or (self.thrusters:isIdentifying() and "identify")
     or ((not self.engine.master) and "disarmed")
     or "mixer"
@@ -345,6 +348,22 @@ function App:cycle(dt)
     else
       self.selfTest:tick(now)
     end
+    self:publish(measured, capability, dt, overrun)
+    return state
+  elseif owner == "selfConfig" then
+    -- The BIP DELIBERATELY FLIES the craft -- a deflected nozzle only reads if it is making thrust
+    -- and the craft is light on its ropes. So there is no activelyFlying abort here as there is for
+    -- the self test: its own safety envelope (tilt, height, runaway speed, engine-off) is what stops
+    -- it, checked inside tick every cycle. It owns thrust AND nozzles at the raw level, which is why
+    -- it must run above the mixer -- two writers on the same nozzles is the one thing to never do.
+    self.selfConfig:tick({
+      now = now,
+      attitude = measured.attitude,
+      velocity = measured.velocity,
+      altitude = measured.altitude and measured.altitude.baro,
+      groundContact = measured.groundContact,
+      engineOn = self.engine.master and true or false,
+    })
     self:publish(measured, capability, dt, overrun)
     return state
   elseif owner == "identify" then
@@ -763,6 +782,53 @@ function App:publishThrusterAxes()
   return rows
 end
 
+--- The go/no-go facts for the SELF AXIS CONFIG BIP, read from the craft's OWN published state so
+--- handleCommand (which runs off a rednet message, not inside the cycle) still decides for itself.
+function App:selfConfigFacts()
+  local worstTank = self.state:get("fuel.worstTank")
+  return {
+    engineOn = self.engine.master and true or false,
+    -- Lenient: block only on a tank that positively reads empty. A craft fed some other way, or
+    -- with no tank configured, is not stopped here -- the float phase times out as "WONT LIFT" if
+    -- it genuinely cannot make thrust.
+    fuelled = not (type(worstTank) == "number" and worstTank <= 0.001),
+    onGround = self.state:get("ground.contact"),
+    velocityVector = self.state:get("velocity.capability"),
+    otherBip = self.selfTest:isRunning() or self.axisMap:isHolding()
+      or self.thrusters:isIdentifying() or false,
+  }
+end
+
+--- Apply the BIP's proposed nozzle mappings to config and save -- the same write path as AXIS MAP:
+--- mutate the live spec (shared with cfg.hardware.thrusters, see peripherals.lua), rebuild the
+--- mixer, republish, and persist. Only ever called on an explicit pilot ACCEPT.
+function App:acceptSelfConfig()
+  local proposal = self.selfConfig:pendingProposal()
+  if not proposal then
+    return false, { error = "no proposal to accept", errorShort = "NO PROPOSAL" }
+  end
+  local applied = 0
+  for id, prop in pairs(proposal) do
+    local entry = self.per.thrusters[id]
+    if entry and entry.spec then
+      entry.spec.vectorMap = prop.vectorMap
+      entry.spec.invertVectorX = prop.invertVectorX
+      entry.spec.invertVectorY = prop.invertVectorY
+      applied = applied + 1
+    end
+  end
+  if applied > 0 then
+    self.thrusters:invalidate()
+    self.mixer:build()
+    self:publishThrusterAxes()
+    if self.telemetry and self.telemetry.markSlowDirty then self.telemetry:markSlowDirty() end
+    Config.save(self.configPath, self.cfg)
+    self.selfConfig:discard()           -- consumed; clear it so the screen does not re-offer it
+    self.log:info("self config: applied %d nozzle mapping(s) to config", applied)
+  end
+  return true, { applied = applied }
+end
+
 function App:handleCommand(cmd)
   local now = os.epoch("utc")
 
@@ -893,6 +959,33 @@ function App:handleCommand(cmd)
         tostring(self:knownAirborne()), tostring(self.engine.master))
     end
     return ok, { error = err, errorShort = short }
+
+  elseif cmd.cmd == "selfConfig" then
+    -- The SELF AXIS CONFIG BIP. Actions: checkPrereqs (go/no-go), start, abort, accept (apply the
+    -- proposed mapping to config), discard. Policy facts come from the craft's own state, never the
+    -- sender -- a UI is not a trusted peer, exactly as with the self test.
+    if cmd.action == "checkPrereqs" then
+      return true, self.selfConfig:checkPrereqs(self:selfConfigFacts())
+    elseif cmd.action == "abort" then
+      local aborted = self.selfConfig:abort("aborted by the pilot", "STOPPED")
+      return true, { running = false, aborted = aborted }
+    elseif cmd.action == "accept" then
+      return self:acceptSelfConfig()
+    elseif cmd.action == "discard" then
+      self.selfConfig:discard()
+      return true, { discarded = true }
+    else
+      -- A held nozzle outranks the BIP in App:cycle, so release one first -- the same missing half
+      -- the self test needed, for the same reason: otherwise the BIP starts, is never ticked, and
+      -- locks the screen out.
+      if self.axisMap:isHolding() then
+        self.axisMap:release("starting self config")
+      end
+      local ok, err, short = self.selfConfig:start(self:selfConfigFacts(), {
+        now = now, altitude = self.state:get("altitude.baro") })
+      if not ok then self.log:warn("self config REFUSED: %s", tostring(err)) end
+      return ok, { error = err, errorShort = short }
+    end
 
   elseif cmd.cmd == "setAxes" then
     local target

@@ -74,15 +74,23 @@ forward thrust is zero**. It brakes and then holds position.
 
 ---
 
-## 6. ⚠️ The hardware gap this specification runs into
+## 6. The velocity-vector requirement — RESOLVED
 
-**Damping drift and braking into the direction of motion both need a velocity *vector*.
-The sensor set we have confirmed only provides a scalar.**
+**Damping drift and braking into the direction of motion both need a velocity *vector*.**
+One `velocity_sensor` gives one axis, so this is a *wiring* requirement: mount three
+(right, up, forward) and `sensors.lua` assembles the vector.
 
-`velocity_sensor.getVelocity()` returns a single unsigned number. It cannot tell forward
-from sideways, or forward from backward. Nothing else on board supplies a horizontal
-velocity direction: the gimbal gives attitude, the lasers give distance, and vertical speed
-we already have to obtain by differentiating baro altitude.
+**The signed-ness question below is now SETTLED in our favour** (see
+`docs/MOD_API_RESEARCH.md`, verified from `VelocitySensorBlockEntity.tick()`):
+`getVelocity()` returns a **signed** float — the dot product of craft velocity onto the
+sensor's facing normal, `+` along it and `−` against it, with a ~0.05 m/s deadband. So
+`sensors.velocity.signed = true` is correct, `course` is meaningful, and the assistant,
+brake law, and the SELF AXIS CONFIG BIP all get a real direction. The paragraph below is
+kept for the record of the original concern.
+
+`velocity_sensor.getVelocity()` was feared to return a single unsigned number. It does not.
+The gimbal gives attitude, the lasers give distance, and vertical speed we still obtain by
+differentiating baro altitude.
 
 So, in preference order:
 

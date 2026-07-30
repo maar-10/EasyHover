@@ -169,11 +169,14 @@ function Config.defaults()
       velocity = {
         scale = 1.0,
         filterAlpha = 0.30,
-        -- Is getVelocity() SIGNED along the sensor's axis, or just a magnitude? Unknown
-        -- until the probe checks it by reversing. If it turns out to be unsigned, drift
-        -- damping cannot know which way to push -- set this false and the assistant
-        -- degrades instead of guessing. See docs/MODES.md section 6.
+        -- getVelocity() is SIGNED along the sensor's axis -- VERIFIED from source: it is the
+        -- dot of craft velocity onto the sensor's facing normal (+ along it, - against), with
+        -- a ~0.05 m/s deadband. See docs/MOD_API_RESEARCH.md. Left configurable only so an
+        -- oddly-behaving install can degrade the assistant rather than push the wrong way.
         signed = true,
+        -- Readings whose magnitude is <= this are the sensor's own deadband reporting 0, not a
+        -- true zero. SELF CONFIG treats a within-deadband response as "no movement seen".
+        deadband = 0.05,
       },
       optical = {
         maxRange = 32.0,
@@ -335,6 +338,31 @@ function Config.defaults()
       minSpeed = 0.4,           -- below this, no braking at all -- no twitching
       tiltRateDps = 25.0,       -- rate limit on tilting in
       holdPosition = true,      -- brake mode also holds position once stopped
+    },
+
+    -- SELF AXIS CONFIG BIP -- see lib/control/selfconfig.lua. Every magnitude here is a physical
+    -- constant that WILL need one in-game tuning pass: how much thrust floats this craft, how far a
+    -- nozzle must deflect to move it against its ropes, how fast it settles. They are config so
+    -- tuning is an edit, not a code change. The safety caps are deliberately conservative.
+    selfConfig = {
+      hoverHeight = 1.5,        -- blocks above the ground reference to float to before probing
+      landedHeight = 0.4,       -- back below this counts as landed
+      heightCeiling = 4.0,      -- ABORT if the craft climbs past this above the reference
+      baseCollective = 0.0,     -- lift collective the float ramp starts from
+      collectiveRamp = 0.05,    -- collective added per second while seeking the float
+      maxCollective = 0.9,      -- never ask the lift group for more than this
+      landRamp = 0.15,          -- collective shed per second while landing
+      floatTimeoutMs = 8000,    -- if pinned at maxCollective this long and still low, give up
+      probeThrust = 0.4,        -- thrust a non-lift thruster fires at while its nozzle is probed
+      settleMs = 2000,          -- longest wait for the craft to settle before/after a probe
+      settleSpeed = 0.1,        -- craft-frame speed considered "settled" (just above the deadband)
+      probeDeflection = 0.6,    -- raw nozzle deflection during a probe (capped by the thruster's maxVector)
+      probeMs = 1500,           -- how long a deflection is held while the response is measured
+      counterMs = 1200,         -- opposite deflection afterwards, to cancel the velocity it built
+      minResponse = 0.15,       -- craft-frame speed a probe must produce to be trusted (> deadband)
+      ambiguityRatio = 0.5,     -- |secondary axis| / |dominant| above this flags a diagonal mount
+      maxTiltDeg = 20.0,        -- ABORT if pitch or roll exceeds this
+      maxSpeed = 3.0,           -- ABORT if craft-frame speed exceeds this (a rope let go)
     },
 
     envelope = {

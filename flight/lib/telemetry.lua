@@ -46,6 +46,8 @@ local COMMANDS = {
   setSlot        = { kind = "enum:lift,main,lateral,velocity,altitude,gimbal,optical",
                      key = "string", peripheral = "string" },
   selfTest       = { action = "enum:start,abort" },
+  -- The SELF AXIS CONFIG BIP: check go/no-go, run it, stop it, or apply/discard its proposed map.
+  selfConfig     = { action = "enum:start,abort,checkPrereqs,accept,discard" },
   -- Latch one nozzle at full deflection so the pilot can see which way it really points, then
   -- name it with a/d/s/w. A LATCH rather than a held switch because CC gives a monitor
   -- `monitor_touch` and nothing at all for the release.
@@ -295,6 +297,8 @@ function Telemetry:build(extra, includeSlow)
     -- so the pre-flight screens can show real internal state rather than a guess.
     pilot = s:get("pilot"),
     selfTest = s:get("selfTest"),
+    selfConfig = s:get("selfConfig"),
+    selfConfigPrereqs = s:get("selfConfig.prereqs"),
     axisMap = s:get("axisMap"),
     oscillation = s:get("oscillation"),
     envelopeClipped = s:get("envelope.clipped"),

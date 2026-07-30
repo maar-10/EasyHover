@@ -1,0 +1,620 @@
+--[[ SELF AXIS CONFIG BIP -- discover each nozzle's craft-frame mapping by MEASURING it.
+
+     The problem this automates is the one AXIS MAP solves by hand: which way does the craft move
+     when the software deflects a given nozzle? AXIS MAP answers it by latching one nozzle, walking
+     outside, and naming the direction. This does the same thing with sensors instead of eyes.
+
+     WHY IT NEEDS TO FLY. A deflected nozzle only produces a force while the thruster is making
+     thrust, and that force only produces measurable motion while the craft is light on its
+     constraints. So -- unlike the SELF TEST, which never commands thrust -- this BIP floats the
+     craft a little way off the ground (roped, as the pilot secures it) and reads the response. The
+     pilot asked for exactly this: "the craft needs to actually take off" to get feedback.
+
+     THE MEASUREMENT. Create: Simulated's velocity sensors are SIGNED (verified from source, see
+     docs/MOD_API_RESEARCH.md): each returns the dot of craft velocity onto its facing axis, with a
+     ~0.05 m/s deadband. Three of them give a signed craft-frame velocity VECTOR. So for each
+     nozzle axis we: settle to a baseline, deflect the nozzle, and watch which craft axis the
+     velocity grows along and with what sign. That direction IS the mapping -- fed straight into the
+     same AxisMap.assign that the manual screen uses, so the plane rules live in one place.
+
+     WHAT IT WRITES. Nothing, until the pilot accepts. The run produces a PROPOSAL -- one
+     {vectorMap, invertVectorX, invertVectorY} per thruster, with a confidence flag -- and publishes
+     it for review. Accepting applies it to config and saves; discarding drops it. No optimistic
+     write, here least of all: a wrong mapping is the exact divergence the whole control design
+     exists to prevent.
+
+     SCOPE (v1). This discovers the nozzle vectoring map only. A thruster's GROUP and QUADRANT are
+     left as configured -- the craft already flies with them. Discovering the quadrant from a
+     differential-thrust bump is a later extension; the phase machine below leaves room for it.
+
+     Like the self test, it is driven entirely from the flight loop's clock via tick(); it never
+     sleeps, the loop hands it the thrusters instead of the mixer while it runs, and it disarms the
+     moment anything goes past a safety limit.
+]]
+
+local Util = require("lib.util")
+local Thrusters = require("lib.io.thrusters")
+local AxisMap = require("lib.control.axismap")
+
+local SelfConfig = {}
+SelfConfig.__index = SelfConfig
+
+--- Longer than any plausible loop period; short enough a pilot notices a wedged run. Same reason
+--- and value as the self test: three seconds without a tick is stopped, not slow.
+local STALL_MS = 3000
+
+function SelfConfig.new(thrusters, peripherals, cfg, log, state)
+  local self = setmetatable({}, SelfConfig)
+  self.thrusters = thrusters
+  self.per = peripherals
+  self.cfg = cfg
+  self.log = log
+  self.state = state
+  self.run = nil
+  self.lastRun = nil
+  return self
+end
+
+function SelfConfig:params()
+  return self.cfg.selfConfig or {}
+end
+
+function SelfConfig:isRunning()
+  return self.run ~= nil
+end
+
+--- Every vector-capable thruster, sorted, with the two craft axes its nozzle can address.
+function SelfConfig:probeTargets()
+  local out = {}
+  for _, entry in ipairs(self.per:thrusterList()) do
+    if entry.canVector == nil then
+      entry.canVector = type(entry.dev.setVector) == "function"
+    end
+    if entry.canVector then
+      out[#out + 1] = {
+        id = entry.id,
+        group = entry.spec.group,
+        plane = AxisMap.planeFor(entry.spec),   -- e.g. { "x", "z" }
+      }
+    end
+  end
+  table.sort(out, function(a, b) return a.id < b.id end)
+  return out
+end
+
+-- ---------------------------------------------------------------- prerequisites
+
+--- The go/no-go gate. Returns { ok, missing = { ... } }. The BIP has to actually FLY the craft, so
+--- its prerequisites are the opposite of the self test's: the engine MUST be on and fuel MUST be
+--- reaching the thrusters, because a probe with no thrust reads nothing.
+---
+---   facts (supplied by the app, which owns the policy reads):
+---     engineOn        engine master is on
+---     fuelled         the thruster supply has fuel (app checks the fuel model)
+---     onGround        a down-facing laser positively reports ground contact
+---     velocityVector  velocity capability is "vector" (three signed axes)
+function SelfConfig:checkPrereqs(facts)
+  facts = facts or {}
+  local missing = {}
+  if not facts.engineOn then missing[#missing + 1] = "ENGINE OFF" end
+  if not facts.fuelled then missing[#missing + 1] = "NO FUEL" end
+  if facts.onGround == false then missing[#missing + 1] = "NOT ON GROUND" end
+  if self:isRunning() then missing[#missing + 1] = "BIP RUNNING" end
+  if facts.otherBip then missing[#missing + 1] = "TEST RUNNING" end
+  if facts.velocityVector ~= "vector" then missing[#missing + 1] = "NO VEL VECTOR" end
+
+  local targets = self:probeTargets()
+  if #targets == 0 then missing[#missing + 1] = "NO NOZZLES" end
+
+  local ok = #missing == 0
+  self:publishPrereqs(ok, missing, #targets)
+  return { ok = ok, missing = missing, nozzles = #targets }
+end
+
+function SelfConfig:publishPrereqs(ok, missing, nozzles)
+  if not self.state then return end
+  self.state:set("selfConfig.prereqs", {
+    ok = ok, missing = missing or {}, nozzles = nozzles or 0,
+    checkedAt = os.epoch("utc"),
+  })
+end
+
+-- ---------------------------------------------------------------- lifecycle
+
+--- Begin. `facts` is the same table checkPrereqs takes; start REFUSES on any missing item, so the
+--- decision is made once, from the craft's own reads, rather than trusted from the UI.
+--- `ctx` carries the first sensor snapshot so the ground-altitude reference is taken at rest.
+function SelfConfig:start(facts, ctx)
+  local now = (ctx and ctx.now) or os.epoch("utc")
+  if self.run then
+    if self:isStalled(now) then
+      self.log:warn("self config: taking over a stalled run (no tick for %.1fs)",
+        (now - (self.run.lastTickAt or now)) / 1000)
+      self:abort("aborted: the previous run stalled", "PREV STALLED")
+    else
+      return false, "a self config is already running", "ALREADY RUNNING"
+    end
+  end
+
+  local check = self:checkPrereqs(facts)
+  if not check.ok then
+    local first = check.missing[1] or "NOT READY"
+    return false, "prerequisites not met: " .. table.concat(check.missing, ", "), first
+  end
+
+  local p = self:params()
+  local groundRef = ctx and ctx.altitude
+  self.run = {
+    startedAt = now,
+    lastTickAt = now,
+    phase = "float",
+    phaseSince = now,
+    groundRef = groundRef,          -- baro altitude at rest; height is measured against this
+    targets = self:probeTargets(),
+    index = 1,                      -- which target
+    axisStep = 1,                   -- 1 = nozzle x, 2 = nozzle y
+    collective = p.baseCollective or 0,
+    findings = {},                  -- id -> { x = {...}, y = {...} }
+    proposal = {},                  -- id -> { vectorMap, invertVectorX, invertVectorY, confidence }
+    baseline = nil,                 -- craft-frame velocity at the last settle
+    peak = nil,                     -- largest velocity delta seen during the current probe
+    beats = 0,
+  }
+  self.log:info("self config started: %d nozzle(s) to map", #self.run.targets)
+  self:publish()
+  return true
+end
+
+--- Stop now, safely: everything to zero, nozzles centred, and remember why for the screen.
+function SelfConfig:abort(reason, short)
+  if not self.run then return false end
+  self.thrusters:allStop()
+  self.thrusters:centreNozzles()
+  self.log:warn("self config %s", reason or "aborted")
+  self.run.aborted = reason or "aborted"
+  self.run.abortedShort = short
+  self.run.finishedAt = os.epoch("utc")
+  local finished = self.run
+  self.run = nil
+  self.lastRun = finished
+  self:publish()
+  return true
+end
+
+--- Reached the end and produced a proposal. Thrust is already zero (the land phase); centre once
+--- more, unconditionally, and keep the proposal for review.
+function SelfConfig:finish()
+  if not self.run then return false end
+  self.thrusters:allStop()
+  self.thrusters:centreNozzles()
+  self.run.finishedAt = os.epoch("utc")
+  self.run.complete = true
+  local finished = self.run
+  self.run = nil
+  self.lastRun = finished
+  self.log:info("self config complete: %d mapping(s) proposed", self:proposalCount(finished))
+  self:publish()
+  return true
+end
+
+function SelfConfig:proposalCount(run)
+  run = run or self.lastRun
+  if not run or not run.proposal then return 0 end
+  local n = 0
+  for _ in pairs(run.proposal) do n = n + 1 end
+  return n
+end
+
+--- The proposal from the last completed run, for the app to apply on accept. nil if the last run
+--- did not complete (aborted runs propose nothing).
+function SelfConfig:pendingProposal()
+  if self.lastRun and self.lastRun.complete then return self.lastRun.proposal end
+  return nil
+end
+
+--- The pilot discarded the proposal. Nothing was written; just forget it so the screen clears.
+function SelfConfig:discard()
+  if self.lastRun then self.lastRun.proposal = nil; self.lastRun.discarded = true end
+  self:publish()
+end
+
+function SelfConfig:isStalled(now)
+  if not self.run then return false end
+  now = now or os.epoch("utc")
+  return (now - (self.run.lastTickAt or self.run.startedAt or now)) > STALL_MS
+end
+
+-- ---------------------------------------------------------------- the run
+
+--- height above the ground reference taken at start, or nil if we cannot tell.
+function SelfConfig:height(ctx)
+  if not self.run or self.run.groundRef == nil then return nil end
+  if not ctx or type(ctx.altitude) ~= "number" then return nil end
+  return ctx.altitude - self.run.groundRef
+end
+
+--- Craft-frame speed magnitude from the velocity vector, or nil.
+local function speedOf(vel)
+  if type(vel) ~= "table" then return nil end
+  local x, y, z = vel.x or 0, vel.y or 0, vel.z or 0
+  return math.sqrt(x * x + y * y + z * z)
+end
+
+--- The safety envelope, checked every tick regardless of phase. Any breach aborts. Returns a short
+--- reason when it trips, nil when all clear.
+function SelfConfig:safetyBreach(ctx)
+  local p = self:params()
+  local att = ctx and ctx.attitude
+  if type(att) == "table" then
+    if type(att.pitch) == "number" and math.abs(att.pitch) > (p.maxTiltDeg or 20) then
+      return ("TILT %d deg"):format(math.floor(math.abs(att.pitch))), "OVER TILT"
+    end
+    if type(att.roll) == "number" and math.abs(att.roll) > (p.maxTiltDeg or 20) then
+      return ("ROLL %d deg"):format(math.floor(math.abs(att.roll))), "OVER TILT"
+    end
+  end
+  local h = self:height(ctx)
+  if type(h) == "number" and h > (p.heightCeiling or 4.0) then
+    return ("HEIGHT %.1f"):format(h), "TOO HIGH"
+  end
+  local speed = speedOf(ctx and ctx.velocity)
+  if type(speed) == "number" and speed > (p.maxSpeed or 3.0) then
+    return ("SPEED %.1f"):format(speed), "RUNAWAY"
+  end
+  return nil
+end
+
+--- Command the float: every LIFT thruster at the current collective, nozzles centred. The probed
+--- thruster's own thrust and nozzle are overridden by the caller AFTER this, so ordering matters.
+function SelfConfig:holdFloat(exceptId)
+  for _, entry in ipairs(self.per:thrusterList()) do
+    if entry.spec.group == "lift" then
+      self.thrusters:setThrustRaw(entry.id, self.run.collective)
+      if entry.id ~= exceptId then
+        self.thrusters:setVectorRaw(entry.id, 0, 0)
+      end
+    end
+  end
+end
+
+--- Drive one loop's worth. ctx = { now, altitude, attitude = {pitch,roll,yaw}, velocity = {x,y,z},
+--- groundContact, engineOn }. Returns true while the BIP owns the thrusters.
+function SelfConfig:tick(ctx)
+  if not self.run then return false end
+  local now = (ctx and ctx.now) or os.epoch("utc")
+  self.run.lastTickAt = now
+  local p = self:params()
+
+  -- The engine going off mid-run removes the thrust the whole measurement depends on -- and is the
+  -- pilot's most likely "stop now". Treat it as an abort, not a silent stall.
+  if ctx and ctx.engineOn == false then
+    self:abort("aborted: the engine was switched off", "ENGINE OFF")
+    return false
+  end
+
+  -- The envelope wins over every phase.
+  local breach, breachShort = self:safetyBreach(ctx)
+  if breach then
+    self:abort("aborted: safety limit -- " .. breach, breachShort)
+    return false
+  end
+
+  self:heartbeat(now)
+
+  local phase = self.run.phase
+  if phase == "float" then
+    self:tickFloat(ctx, now)
+  elseif phase == "settle" then
+    self:tickSettle(ctx, now)
+  elseif phase == "probe" then
+    self:tickProbe(ctx, now)
+  elseif phase == "counter" then
+    self:tickCounter(ctx, now)
+  elseif phase == "land" then
+    self:tickLand(ctx, now)
+  end
+
+  self:publish()
+  return self.run ~= nil
+end
+
+function SelfConfig:enter(phase, now)
+  self.run.phase = phase
+  self.run.phaseSince = now
+end
+
+function SelfConfig:heartbeat(now)
+  self.run.beats = (self.run.beats or 0) + 1
+  if (now - (self.run.lastBeatAt or 0)) >= 1000 then
+    self.run.lastBeatAt = now
+    local target = self.run.targets[self.run.index]
+    self.log:info("self config tick %d: phase %s, nozzle %d/%d (%s)", self.run.beats,
+      self.run.phase, self.run.index, #self.run.targets, target and target.id or "-")
+  end
+end
+
+--- FLOAT: ramp the lift collective until the craft rises to the target hover height, then settle.
+function SelfConfig:tickFloat(ctx, now)
+  local p = self:params()
+  local dt = ((now - (self.run.lastFloatAt or now)) / 1000)
+  self.run.lastFloatAt = now
+
+  local h = self:height(ctx)
+  local target = p.hoverHeight or 1.5
+  if type(h) == "number" and h >= target then
+    -- Floating. Hold this collective and settle before the first probe.
+    self:holdFloat()
+    self:enter("settle", now)
+    return
+  end
+
+  -- Not yet up. Ramp collective, capped. A proportional term on height error makes the approach
+  -- gentle near the target rather than slamming the ceiling.
+  local err = (type(h) == "number") and (target - h) or target
+  local ramp = (p.collectiveRamp or 0.05) * math.max(dt, 0)
+  local wanted = self.run.collective + ramp + (p.climbGain or 0.15) * 0 -- ramp dominates the seek
+  self.run.collective = Util.clamp(math.min(wanted, self.run.collective + ramp),
+    0, p.maxCollective or 0.9)
+  self:holdFloat()
+
+  -- A float that never lifts is a craft that cannot make enough thrust (too heavy, too little
+  -- fuel, ropes too tight). Give up rather than pin the collective at max forever.
+  if self.run.collective >= (p.maxCollective or 0.9) and
+     (now - self.run.phaseSince) > (p.floatTimeoutMs or 8000) then
+    self:abort("aborted: could not lift to hover height", "WONT LIFT")
+  end
+end
+
+--- SETTLE: hold the float (with the probed thruster firing centred, so its steady thrust is part
+--- of the baseline) until the craft-frame speed falls below the settle threshold, then record the
+--- baseline velocity and begin the probe.
+function SelfConfig:tickSettle(ctx, now)
+  local p = self:params()
+  local target = self.run.targets[self.run.index]
+  if not target then self:enter("land", now); return end
+
+  -- Ensure the probed thruster is firing at its probe thrust with a CENTRED nozzle. For a lift
+  -- thruster that is just the float; for a lateral/main it spins the thruster up so the coming
+  -- deflection has thrust to steer.
+  self:holdFloat(target.id)
+  local probeThrust = (target.group == "lift") and self.run.collective or (p.probeThrust or 0.4)
+  self.thrusters:setThrustRaw(target.id, probeThrust)
+  self.thrusters:setVectorRaw(target.id, 0, 0)
+
+  local speed = speedOf(ctx and ctx.velocity)
+  local settled = type(speed) == "number" and speed <= (p.settleSpeed or 0.1)
+  local waited = (now - self.run.phaseSince) >= (p.settleMs or 2000)
+  if settled or waited then
+    self.run.baseline = self:velCopy(ctx and ctx.velocity)
+    self.run.peak = nil
+    self:enter("probe", now)
+  end
+end
+
+function SelfConfig:velCopy(vel)
+  if type(vel) ~= "table" then return { x = 0, y = 0, z = 0 } end
+  return { x = vel.x or 0, y = vel.y or 0, z = vel.z or 0 }
+end
+
+--- PROBE: deflect the current nozzle axis to the probe deflection and hold it, tracking the LARGEST
+--- velocity delta from baseline (the transient, before the ropes arrest it). When the window ends,
+--- decide the direction and move on.
+function SelfConfig:tickProbe(ctx, now)
+  local p = self:params()
+  local target = self.run.targets[self.run.index]
+  if not target then self:enter("land", now); return end
+
+  self:holdFloat(target.id)
+  local probeThrust = (target.group == "lift") and self.run.collective or (p.probeThrust or 0.4)
+  self.thrusters:setThrustRaw(target.id, probeThrust)
+
+  -- Deflect the current nozzle axis, quantised to the grid the block stores, capped by authority.
+  local spec = self.per.thrusters[target.id].spec
+  local limit = Util.clamp(spec.maxVector or 0.6, 0, 1)
+  local mag = math.min(p.probeDeflection or 0.6, limit)
+  local value = Thrusters.quantiseVector(mag)
+  local nx = (self.run.axisStep == 1) and value or 0
+  local ny = (self.run.axisStep == 2) and value or 0
+  self.thrusters:setVectorRaw(target.id, nx, ny)
+
+  -- Track the peak velocity delta on the two plane axes.
+  local base = self.run.baseline or { x = 0, y = 0, z = 0 }
+  local vel = self:velCopy(ctx and ctx.velocity)
+  local a1, a2 = target.plane[1], target.plane[2]
+  local d1 = (vel[a1] or 0) - (base[a1] or 0)
+  local d2 = (vel[a2] or 0) - (base[a2] or 0)
+  local mag2 = d1 * d1 + d2 * d2
+  if not self.run.peak or mag2 > self.run.peak.mag2 then
+    self.run.peak = { mag2 = mag2, d1 = d1, d2 = d2, a1 = a1, a2 = a2 }
+  end
+
+  if (now - self.run.phaseSince) >= (p.probeMs or 1500) then
+    self:recordProbe(target, ctx)
+    self:enter("counter", now)
+  end
+end
+
+--- Turn the peak velocity delta into a measured direction for this nozzle axis, and stash it.
+function SelfConfig:recordProbe(target, ctx)
+  local p = self:params()
+  local peak = self.run.peak or { d1 = 0, d2 = 0, a1 = target.plane[1], a2 = target.plane[2] }
+  local nozzleAxis = (self.run.axisStep == 1) and "x" or "y"
+
+  local m1, m2 = math.abs(peak.d1), math.abs(peak.d2)
+  local response = math.sqrt(m1 * m1 + m2 * m2)
+  local finding = { nozzleAxis = nozzleAxis, response = response }
+
+  if response < (p.minResponse or 0.15) then
+    -- Nothing moved enough to trust. Leave the mapping alone for this axis; the pilot is told.
+    finding.result = "no-response"
+  else
+    local dominant, other, craftAxis, craftSign
+    if m1 >= m2 then
+      dominant, other, craftAxis, craftSign = m1, m2, peak.a1, (peak.d1 >= 0) and 1 or -1
+    else
+      dominant, other, craftAxis, craftSign = m2, m1, peak.a2, (peak.d2 >= 0) and 1 or -1
+    end
+    finding.result = "ok"
+    finding.craftAxis = craftAxis
+    finding.craftSign = craftSign
+    -- Two comparable axes means a diagonal mounting the one-axis-per-nozzle model cannot represent
+    -- cleanly. Record it so the proposal can flag low confidence rather than commit a coin toss.
+    finding.ambiguous = (dominant > 0) and (other / dominant) > (p.ambiguityRatio or 0.5)
+  end
+
+  self.run.findings[target.id] = self.run.findings[target.id] or {}
+  self.run.findings[target.id][nozzleAxis] = finding
+  self.log:info("self config: %s nozzle %s -> %s", target.id, nozzleAxis,
+    finding.result == "ok"
+      and ("%s%s%s"):format(finding.craftSign > 0 and "+" or "-", tostring(finding.craftAxis),
+        finding.ambiguous and " (weak)" or "")
+      or "no response")
+end
+
+--- COUNTER: deflect the opposite way briefly to cancel the velocity the probe built up, so the
+--- next settle starts from near rest rather than fighting a drift. Then advance.
+function SelfConfig:tickCounter(ctx, now)
+  local p = self:params()
+  local target = self.run.targets[self.run.index]
+  if not target then self:enter("land", now); return end
+
+  self:holdFloat(target.id)
+  local probeThrust = (target.group == "lift") and self.run.collective or (p.probeThrust or 0.4)
+  self.thrusters:setThrustRaw(target.id, probeThrust)
+
+  local spec = self.per.thrusters[target.id].spec
+  local limit = Util.clamp(spec.maxVector or 0.6, 0, 1)
+  local mag = math.min(p.probeDeflection or 0.6, limit)
+  local value = -Thrusters.quantiseVector(mag)     -- opposite of the probe
+  local nx = (self.run.axisStep == 1) and value or 0
+  local ny = (self.run.axisStep == 2) and value or 0
+  self.thrusters:setVectorRaw(target.id, nx, ny)
+
+  if (now - self.run.phaseSince) >= (p.counterMs or 1200) then
+    self.thrusters:setVectorRaw(target.id, 0, 0)
+    self:advance(now)
+  end
+end
+
+--- Move to the next nozzle axis, then the next thruster; when both are exhausted, build the
+--- proposal and land.
+function SelfConfig:advance(now)
+  if self.run.axisStep == 1 then
+    self.run.axisStep = 2
+    self:enter("settle", now)
+    return
+  end
+  -- Both axes of this thruster are done: turn the two findings into a proposed mapping.
+  self:buildProposalFor(self.run.targets[self.run.index])
+  self.run.axisStep = 1
+  self.run.index = self.run.index + 1
+  if self.run.index > #self.run.targets then
+    self:enter("land", now)
+  else
+    self:enter("settle", now)
+  end
+end
+
+--- Fold this thruster's two axis findings into a {vectorMap, invert flags} proposal, reusing
+--- AxisMap.assign on a SCRATCH spec so the plane rules are applied in exactly one place and the
+--- live config is never touched mid-run.
+function SelfConfig:buildProposalFor(target)
+  if not target then return end
+  local found = self.run.findings[target.id] or {}
+  local spec = self.per.thrusters[target.id].spec
+  local scratch = {
+    group = spec.group,
+    thrustAxis = spec.thrustAxis,
+    vectorMap = { x = (spec.vectorMap or {}).x, y = (spec.vectorMap or {}).y },
+    invertVectorX = spec.invertVectorX,
+    invertVectorY = spec.invertVectorY,
+  }
+
+  local applied, weak, failed = 0, false, {}
+  for _, nozzleAxis in ipairs({ "x", "y" }) do
+    local f = found[nozzleAxis]
+    if f and f.result == "ok" then
+      local ok = AxisMap.assign(scratch, nozzleAxis, 1, f.craftAxis, f.craftSign)
+      if ok then
+        applied = applied + 1
+        if f.ambiguous then weak = true end
+      else
+        failed[#failed + 1] = nozzleAxis
+      end
+    else
+      failed[#failed + 1] = nozzleAxis
+    end
+  end
+
+  if applied == 0 then
+    -- Learned nothing about this nozzle. Do not propose a change for it.
+    return
+  end
+  self.run.proposal[target.id] = {
+    id = target.id,
+    group = spec.group,
+    vectorMap = scratch.vectorMap,
+    invertVectorX = scratch.invertVectorX,
+    invertVectorY = scratch.invertVectorY,
+    confidence = (weak or #failed > 0) and "low" or "ok",
+    partial = #failed > 0,
+  }
+end
+
+--- LAND: ramp the collective down and centre nozzles; when thrust is essentially gone, finish.
+function SelfConfig:tickLand(ctx, now)
+  local p = self:params()
+  local dt = ((now - (self.run.lastLandAt or now)) / 1000)
+  self.run.lastLandAt = now
+  self.run.collective = math.max(0, self.run.collective - (p.landRamp or 0.15) * math.max(dt, 0))
+
+  for _, entry in ipairs(self.per:thrusterList()) do
+    self.thrusters:setVectorRaw(entry.id, 0, 0)
+    if entry.spec.group == "lift" then
+      self.thrusters:setThrustRaw(entry.id, self.run.collective)
+    else
+      self.thrusters:setThrustRaw(entry.id, 0)
+    end
+  end
+
+  local h = self:height(ctx)
+  local downEnough = (type(h) ~= "number") or h <= (p.landedHeight or 0.4)
+  if self.run.collective <= 1e-6 and (downEnough or (now - self.run.phaseSince) > 6000) then
+    self:finish()
+  end
+end
+
+-- ---------------------------------------------------------------- publish
+
+function SelfConfig:publish()
+  if not self.state then return end
+  if self.run then
+    local target = self.run.targets[self.run.index]
+    self.state:set("selfConfig", {
+      running = true,
+      phase = self.run.phase,
+      index = self.run.index,
+      total = #self.run.targets,
+      current = target and target.id or nil,
+      axisStep = self.run.axisStep,
+      collective = self.run.collective,
+      proposed = self:proposalCount(self.run),
+      sinceTickMs = math.max(0, os.epoch("utc") - (self.run.lastTickAt or self.run.startedAt)),
+    })
+  else
+    local last = self.lastRun
+    self.state:set("selfConfig", {
+      running = false,
+      complete = last and last.complete or false,
+      aborted = last and last.aborted or nil,
+      abortedShort = last and last.abortedShort or nil,
+      discarded = last and last.discarded or false,
+      proposal = last and last.complete and last.proposal or nil,
+      proposed = last and last.complete and self:proposalCount(last) or nil,
+    })
+  end
+end
+
+SelfConfig.STALL_MS = STALL_MS
+
+return SelfConfig

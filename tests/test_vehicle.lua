@@ -2142,4 +2142,142 @@ T.it("a remap REBUILDS the mixer, so it applies without a reboot", function()
   fs.delete(path)
 end)
 
+-- ---------------------------------------------------------------- SELF AXIS CONFIG BIP
+
+local SelfConfig = require("lib.control.selfconfig")
+
+T.suite("self axis config BIP")
+
+--- A two-lift-thruster craft, with fast BIP timings so the phase machine converges in a test loop.
+local function scRig(scOverrides)
+  mock.reset()
+  _G.peripheral = mock.install()
+  local cfg = vehicleCfg({
+    hardware = { thrusters = {
+      { id = "lift_fl", peripheral = "vector_thruster_0", group = "lift",
+        thrustAxis = "down", maxVector = 0.6 },
+      { id = "lift_fr", peripheral = "vector_thruster_1", group = "lift",
+        thrustAxis = "down", maxVector = 0.6 },
+    } },
+    selfConfig = require("lib.util").deepMerge({
+      hoverHeight = 1.0, collectiveRamp = 0.6, maxCollective = 0.9,
+      settleMs = 250, settleSpeed = 0.05, probeMs = 500, counterMs = 250,
+      probeDeflection = 0.6, minResponse = 0.1, landRamp = 0.6, maxTiltDeg = 45,
+    }, scOverrides or {}),
+  })
+  local log = quietLog()
+  local state = State.new({})
+  local per = Peripherals.new(cfg, log):scan()
+  local thrusters = Thrusters.new(per, cfg, log, state)
+  local sc = SelfConfig.new(thrusters, per, cfg, log, state)
+  return { cfg = cfg, log = log, state = state, per = per, thrusters = thrusters, sc = sc }
+end
+
+--- The TRUE nozzle mounting the sim enforces -- deliberately rotated and mirrored -- which the BIP
+--- must recover from the velocity response ALONE, never seeing this table.
+local TRUE_MOUNT = {
+  lift_fl = { x = { axis = "z", sign = 1 },  y = { axis = "x", sign = -1 } },
+  lift_fr = { x = { axis = "x", sign = 1 },  y = { axis = "z", sign = 1 } },
+}
+
+--- One physics step: craft-frame horizontal velocity from whatever nozzles are deflected (mapped
+--- through the true mounting), and altitude from the lift collective's buoyancy. Gain is kept below
+--- the BIP's runaway-speed cap so a good probe never trips the safety envelope.
+local function stepPhysics(per)
+  local vx, vz, collective = 0, 0, 0
+  local gain = 2.0
+  for id, mount in pairs(TRUE_MOUNT) do
+    local n = per.thrusters[id].dev._nozzle
+    collective = math.max(collective, n.power)
+    for _, nozzleAxis in ipairs({ "x", "y" }) do
+      local defl = (nozzleAxis == "x") and n.tx or n.ty
+      local m = mount[nozzleAxis]
+      if m.axis == "x" then vx = vx + m.sign * defl * gain
+      elseif m.axis == "z" then vz = vz + m.sign * defl * gain end
+    end
+  end
+  return vx, vz, 74.5 + math.max(0, (collective - 0.35)) * 20
+end
+
+--- Drive the BIP from a fresh float to its end. `ctxTweak(ctx, now)` can jam a fault in.
+local function runBip(sc, per, ctxTweak)
+  local now = 100000
+  local ok = sc:start({ engineOn = true, fuelled = true, onGround = true,
+    velocityVector = "vector" }, { now = now, altitude = 74.5 })
+  T.isTrue(ok, "the BIP started with prerequisites met")
+  local vx, vz, alt = 0, 0, 74.5
+  for _ = 1, 4000 do
+    now = now + 100
+    local ctx = {
+      now = now, altitude = alt,
+      attitude = { pitch = 0, roll = 0, yaw = 0 },
+      velocity = { x = vx, y = 0, z = vz },
+      groundContact = alt <= 74.8, engineOn = true,
+    }
+    if ctxTweak then ctxTweak(ctx, now) end
+    local alive = sc:tick(ctx)
+    vx, vz, alt = stepPhysics(per)
+    if not alive then break end
+  end
+end
+
+T.it("recovers each nozzle's craft-frame mapping from the velocity response", function()
+  local r = scRig()
+  runBip(r.sc, r.per)
+  T.isFalse(r.sc:isRunning(), "the run completed")
+  local proposal = r.sc:pendingProposal()
+  T.isTrue(type(proposal) == "table", "a proposal was produced")
+
+  local fl = proposal.lift_fl
+  T.isTrue(type(fl) == "table", "lift_fl was mapped")
+  T.eq(fl.vectorMap.x, "z", "fl nozzle x drives craft z")
+  T.eq(fl.vectorMap.y, "x", "fl nozzle y drives craft x")
+  T.isFalse(fl.invertVectorX, "fl x not inverted (nozzle x+ -> craft z+)")
+  T.isTrue(fl.invertVectorY, "fl y IS inverted (nozzle y+ -> craft x-)")
+
+  local fr = proposal.lift_fr
+  T.eq(fr.vectorMap.x, "x", "fr nozzle x drives craft x")
+  T.eq(fr.vectorMap.y, "z", "fr nozzle y drives craft z")
+  T.isFalse(fr.invertVectorX, "fr x not inverted")
+  T.isFalse(fr.invertVectorY, "fr y not inverted")
+end)
+
+T.it("checkPrereqs refuses with the engine off, and names what is missing", function()
+  local r = scRig()
+  local check = r.sc:checkPrereqs({ engineOn = false, fuelled = true,
+    onGround = true, velocityVector = "vector" })
+  T.isFalse(check.ok, "not ready with the engine off")
+  local named = false
+  for _, m in ipairs(check.missing) do if m == "ENGINE OFF" then named = true end end
+  T.isTrue(named, "the missing engine is listed")
+end)
+
+T.it("refuses to start without a signed velocity vector", function()
+  local r = scRig()
+  local ok, _, short = r.sc:start({ engineOn = true, fuelled = true,
+    onGround = true, velocityVector = "partial" }, { now = 1, altitude = 74.5 })
+  T.isFalse(ok, "no start without a real velocity vector")
+  T.eq(short, "NO VEL VECTOR", "and it says why")
+end)
+
+T.it("aborts and centres when the craft tilts past the safety cap", function()
+  local r = scRig()
+  runBip(r.sc, r.per, function(ctx)
+    if r.sc.run and r.sc.run.phase ~= "float" then ctx.attitude.pitch = 90 end
+  end)
+  T.isFalse(r.sc:isRunning(), "the run stopped")
+  T.isTrue(r.sc.lastRun ~= nil and r.sc.lastRun.aborted ~= nil, "it aborted")
+  T.eq(r.sc.lastRun.abortedShort, "OVER TILT", "for the tilt limit")
+  T.isTrue(r.sc:pendingProposal() == nil, "an aborted run proposes nothing")
+end)
+
+T.it("aborts if the engine is switched off mid-run", function()
+  local r = scRig()
+  runBip(r.sc, r.per, function(ctx)
+    if r.sc.run and r.sc.run.phase ~= "float" then ctx.engineOn = false end
+  end)
+  T.isFalse(r.sc:isRunning(), "the run stopped")
+  T.eq(r.sc.lastRun.abortedShort, "ENGINE OFF", "and names the engine")
+end)
+
 return true

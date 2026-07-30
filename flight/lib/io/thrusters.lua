@@ -275,6 +275,25 @@ function Thrusters:setVectorRaw(id, nx, ny)
   return true
 end
 
+--- Command ONE thruster's thrust directly, on the 16-step grid the mod stores, bypassing the
+--- mixer's per-cycle apply(). The self-axis-config BIP needs to hold a float and pulse individual
+--- thrusters without routing through mapVector() -- the very mapping it exists to discover -- so it
+--- owns thrust and nozzle at the raw level, exactly as the self test owns nozzles with setVectorRaw.
+---
+--- `normalized` is 0..1. Quantised the same way apply() does, so what is asked is what is stored.
+--- The cached belief is dropped, because the next mixer pass must re-evaluate from the block rather
+--- than from a step this BIP wrote while it owned the craft.
+function Thrusters:setThrustRaw(id, normalized)
+  local entry = self.per.thrusters[id]
+  if not entry then return false, "no such thruster: " .. tostring(id) end
+  if type(entry.dev.setThrust) ~= "function" then return false, "no thrust control" end
+  local step = Thrusters.thrustStep(normalized or 0)
+  local ok = callDevice(self, id, entry.dev, "setThrust", step)
+  self.last[id] = nil
+  if not ok then return false, "the thruster refused setThrust" end
+  return true
+end
+
 --- What one nozzle is ACTUALLY doing: target (what the block accepted) and current (where the
 --- nozzle has slewed to). Both getters are plain @LuaFunction on the vector peripherals, so this
 --- costs no server tick and can run every cycle.

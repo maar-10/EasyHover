@@ -40,7 +40,7 @@ constants from the bytecode.
 |---|---|---|
 | `altitude_sensor` | `getHeight() → float`, `getAirPressure() → double` | Altimeter. UI-configurable min/max altitude affects only its redstone output, not these. |
 | `gimbal_sensor` | `getAngles() → table (list of numbers)` | **Attitude.** Per-axis, "each axis operates independently". Order/units/sign NOT determinable from bytecode — probe. |
-| `velocity_sensor` | `getVelocity() → float` | **Scalar** speed, not a vector. Axis is set by the block's scroll value box. |
+| `velocity_sensor` | `getVelocity() → float` | **SIGNED scalar** along ONE axis — the block's facing, not the scroll box (that only sets the redstone max-speed). **VERIFIED from source** (`VelocitySensorBlockEntity.tick()`): value = `globalVelocity · sensorNormal`, a dot product stored without `abs()`; +ve along the normal, −ve against it. **~0.05 m/s deadband** → smaller reads exactly `0`. Mount three (right/up/fwd) for a full craft-frame vector. |
 | `optical_sensor` | `getDistance() → float`, `getBlock() → string` | **Laser rangefinder** — distance to the obstructing block *and its block id*. Range configurable; filterable. |
 | `navigation_table` | `getRelativeAngle() → float\|nil` | Heading relative to the table's nav target. Boxed `Float` → **can return nil**. |
 | `linked_typewriter` | `getPressedKeyCodes() → table` | The ONLY method. Confirms structurally why `key`/`key_up` events are useless (see DriveByWire v9). |
@@ -280,8 +280,10 @@ A ~30-line probe on the assembled craft settles all of these:
 
 1. `gimbal_sensor.getAngles()` — how many values, which axis is which, degrees or radians,
    sign convention, and whether it's ship-relative or world-relative.
-2. `velocity_sensor.getVelocity()` — units (blocks/tick vs blocks/s), and whether the scroll
-   value box selects the measured axis.
+2. `velocity_sensor.getVelocity()` — units (blocks/tick vs blocks/s) still to confirm in-game.
+   **RESOLVED from source:** it is SIGNED (dot of craft velocity onto the sensor's facing
+   normal), with a ~0.05 deadband; the scroll box sets only the redstone max-speed, NOT the
+   axis (the axis is which way the block faces). So `sensors.velocity.signed = true` is correct.
 3. `altitude_sensor.getHeight()` — world Y, or height above the configured minimum?
 4. Actual peripheral **type strings** as seen by `peripheral.getType()` — especially the Vista
    view finder (`vista:view_finder` vs `view_finder`).
