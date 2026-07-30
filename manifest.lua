@@ -359,15 +359,15 @@
       ["files"] = {
         {
           ["dst"] = "nav/app.lua",
-          ["size"] = 18530,
+          ["size"] = 22979,
           ["src"] = "nav/app.lua",
-          ["sum"] = "58552e10",
+          ["sum"] = "2512cc47",
         },
         {
           ["dst"] = "nav/lib/config.lua",
-          ["size"] = 7501,
+          ["size"] = 7864,
           ["src"] = "nav/lib/config.lua",
-          ["sum"] = "4fd009f4",
+          ["sum"] = "d81a5fcb",
         },
         {
           ["dst"] = "nav/lib/disk.lua",
@@ -394,6 +394,12 @@
           ["sum"] = "e911889b",
         },
         {
+          ["dst"] = "nav/lib/navcommand.lua",
+          ["size"] = 3317,
+          ["src"] = "nav/lib/navcommand.lua",
+          ["sum"] = "4b0a0668",
+        },
+        {
           ["dst"] = "nav/lib/navtable.lua",
           ["size"] = 3093,
           ["src"] = "nav/lib/navtable.lua",
@@ -401,9 +407,9 @@
         },
         {
           ["dst"] = "nav/lib/relay.lua",
-          ["size"] = 4532,
+          ["size"] = 4882,
           ["src"] = "nav/lib/relay.lua",
-          ["sum"] = "092b2f67",
+          ["sum"] = "967aee01",
         },
         {
           ["dst"] = "nav/lib/sources.lua",
@@ -515,21 +521,21 @@
         },
         {
           ["dst"] = "ui_main/app.lua",
-          ["size"] = 13934,
+          ["size"] = 14511,
           ["src"] = "ui_main/app.lua",
-          ["sum"] = "6083748f",
+          ["sum"] = "1f7ea891",
         },
         {
           ["dst"] = "ui_main/lib/config.lua",
-          ["size"] = 9784,
+          ["size"] = 9994,
           ["src"] = "ui_main/lib/config.lua",
-          ["sum"] = "325ba039",
+          ["sum"] = "50af65f3",
         },
         {
           ["dst"] = "ui_main/lib/link.lua",
-          ["size"] = 6880,
+          ["size"] = 8353,
           ["src"] = "ui_main/lib/link.lua",
-          ["sum"] = "43297d70",
+          ["sum"] = "049a1ac0",
         },
         {
           ["dst"] = "ui_main/lib/monitors.lua",
@@ -618,5 +624,5 @@
     ["size"] = 36872,
     ["sum"] = "305c58ce",
   },
-  ["version"] = "1752470f",
+  ["version"] = "b4196ce8",
 }

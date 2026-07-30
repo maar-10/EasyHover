@@ -91,6 +91,18 @@ function Link:onMessage(sender, message, protocol)
     self.navReceivedAt = os.epoch("utc")
     self.navId = sender
     return "navfix"
+  elseif protocol == self.cfg.comms.navCommandProtocol then
+    -- A reply to a nav command we sent. Kept apart from the flight ack so a nav refusal and a
+    -- flight refusal cannot overwrite each other on screen.
+    if type(message) == "table" and message.ack ~= nil then
+      self.lastNavAck = message
+      self.navPending = nil
+      if not message.ack then
+        self.log:warn("nav command rejected: %s",
+          textutils.serialise(message.detail or message.error or {}))
+      end
+      return "navack"
+    end
   elseif protocol == self.cfg.comms.commandProtocol then
     if type(message) == "table" and message.ack ~= nil then
       self.lastAck = message
@@ -130,9 +142,11 @@ function Link:nav()
     navId = self.navId,
     position = self.navFix.position,
     heading = self.navFix.heading,           -- degrees number, from the nav relay
-    headingSource = self.navFix.headingSource,   -- navtable|backup|gimbal
+    headingSource = self.navFix.headingSource,   -- navtable|backup|gimbal (what it RESTS on)
     headingAligned = self.navFix.headingAligned,
     waypointCount = self.navFix.waypointCount,
+    config = self.navFix.config,             -- what the pilot CHOSE: source, table, signs
+    navTables = self.navFix.navTables,       -- candidate tables, for the picker
   }
 end
 
@@ -168,6 +182,24 @@ function Link:send(cmd)
     ok = pcall(rednet.broadcast, cmd, self.cfg.comms.commandProtocol)
   end
   if not ok then self.log:warn("could not send %s", tostring(cmd.cmd)) end
+  return ok
+end
+
+--- Send a command to the NAV computer, on its own protocol. Targets the nav computer we have heard
+--- fixes from; broadcasts if we have not, so the first command need not wait for a fix. Tracks its
+--- ack separately from the flight one -- two different computers, two different answers.
+function Link:sendNav(cmd)
+  if not self.modem then return false, "link not open" end
+  self.lastNavAck = nil
+  self.navPending = { cmd = cmd.cmd, at = os.epoch("utc") }
+  local proto = self.cfg.comms.navCommandProtocol
+  local ok
+  if self.navId then
+    ok = pcall(rednet.send, self.navId, cmd, proto)
+  else
+    ok = pcall(rednet.broadcast, cmd, proto)
+  end
+  if not ok then self.log:warn("could not send nav command %s", tostring(cmd.cmd)) end
   return ok
 end
 

@@ -1025,4 +1025,72 @@ T.it("load from a disk with no EasyHover data refuses rather than wiping local w
   T.eq(files["/eh_waypoints.tbl"], "PRECIOUS", "and the local set is untouched")
 end)
 
+-- ------------------------------------------------------------------ commands
+
+T.suite("nav command validation")
+
+local NavCommand = require("lib.navcommand")
+
+T.it("accepts a whitelisted, well-typed command and keeps only its fields", function()
+  local cmd = NavCommand.parse({ cmd = "setHeadingSource", source = "navtable", junk = 1 }, 7)
+  T.notNil(cmd, "accepted")
+  T.eq(cmd.cmd, "setHeadingSource")
+  T.eq(cmd.source, "navtable")
+  T.eq(cmd.sender, 7, "the sender is recorded")
+  T.isNil(cmd.junk, "unlisted fields are dropped, never passed through")
+end)
+
+T.it("rejects an unknown command, a bad enum, and a wrong type", function()
+  T.isNil((NavCommand.parse({ cmd = "flyAway" })), "unknown command")
+  T.isNil((NavCommand.parse({ cmd = "setHeadingSource", source = "north" })), "not an enum member")
+  T.isNil((NavCommand.parse({ cmd = "setNavSign", sign = "left" })), "sign must be a number")
+  T.isNil((NavCommand.parse({})), "no cmd field")
+  T.isNil((NavCommand.parse("nope")), "not a table at all")
+end)
+
+T.it("a no-field command needs only its name", function()
+  local cmd = NavCommand.parse({ cmd = "selfAlign" }, 3)
+  T.notNil(cmd, "selfAlign accepted")
+  T.eq(cmd.cmd, "selfAlign")
+end)
+
+T.suite("nav command handling")
+
+local App = require("app")
+
+local function appRig()
+  local path = "/eh_nav_cmdtest.tbl"
+  if fs.exists(path) then fs.delete(path) end
+  return App.new({ configPath = path }), path
+end
+
+T.it("setHeadingSource applies, re-wires the heading model, and saves", function()
+  local app, path = appRig()
+  local ok = app:handleCommand({ cmd = "setHeadingSource", source = "gimbal" })
+  T.isTrue(ok, "accepted")
+  T.eq(app.cfg.headingSource, "gimbal", "config updated")
+  T.isTrue(app.heading.rawGimbalOk, "gimbal mode lets the raw yaw stand in as a relative heading")
+  T.isTrue(fs.exists(path), "the choice was persisted")
+  fs.delete(path)
+end)
+
+T.it("setNavSign flips the sign and clears the calibration for a re-align", function()
+  local app, path = appRig()
+  app.heading.offset = 42               -- pretend we were aligned
+  local ok = app:handleCommand({ cmd = "setNavSign", sign = -1 })
+  T.isTrue(ok)
+  T.eq(app.cfg.navSign, -1, "config sign flipped")
+  T.eq(app.heading.navSign, -1, "heading model sign flipped")
+  T.isNil(app.heading.offset, "the old calibration is cleared -- a SELF ALIGN must re-true it")
+  fs.delete(path)
+end)
+
+T.it("an unhandled command is refused, not thrown", function()
+  local app, path = appRig()
+  local ok, detail = app:handleCommand({ cmd = "wat" })
+  T.isFalse(ok, "refused")
+  T.isTrue(tostring(detail.error):find("unhandled") ~= nil, "and says why")
+  fs.delete(path)
+end)
+
 return true

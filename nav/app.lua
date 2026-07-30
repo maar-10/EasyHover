@@ -27,6 +27,7 @@ local Waypoints = require("lib.waypoints")
 local Geo = require("lib.geo")
 local Heading = require("lib.heading")
 local NavTable = require("lib.navtable")
+local NavCommand = require("lib.navcommand")
 local Disk = require("lib.disk")
 local Console = require("ui.console")
 local Log = require("shared.log")
@@ -97,21 +98,11 @@ function App:boot()
   for _, source in ipairs(built) do self.fix:addSource(source) end
   for _, problem in ipairs(problems) do self.problems[#self.problems + 1] = problem end
 
-  -- Wire the navigation table into the heading model, unless we are in gimbal-only mode. The
-  -- reader re-resolves lazily, so a table plugged in after boot begins working without a restart.
-  if self.cfg.headingSource ~= "gimbal" then
-    local dev, err, picked = NavTable.resolve(self.cfg.navTable)
-    if dev then
-      self.heading:setSource(NavTable.reader(self.cfg.navTable))
-      self.log:info("navigation table: %s", tostring(picked))
-    else
-      -- In "navtable" mode this is a real problem; in "auto" it just means gimbal-only for now.
-      if self.cfg.headingSource == "navtable" then
-        self.problems[#self.problems + 1] = "heading source is 'navtable' but " .. tostring(err)
-      else
-        self.log:warn("no navigation table (%s); heading falls back to the gimbal", tostring(err))
-      end
-    end
+  local ok, msg = self:wireHeadingSource()
+  if ok then
+    self.log:info("heading: %s", msg)
+  else
+    self.problems[#self.problems + 1] = msg
   end
 
   local loaded, count, dropped = self.waypoints:load()
@@ -142,9 +133,110 @@ function App:onTelemetry(sender, message, protocol)
   return true
 end
 
+--- Point the heading model at the configured source. Returns ok, message. Shared by boot and by
+--- the setHeadingSource / setNavTable commands, so a change takes effect without a reboot. The
+--- reader re-resolves lazily, so a table plugged in later begins working on its own.
+function App:wireHeadingSource()
+  -- In gimbal-only mode the raw yaw stands in as a relative heading; otherwise an un-aligned craft
+  -- honestly has no heading rather than a plausible-looking wrong one. See lib/heading.lua.
+  self.heading.rawGimbalOk = (self.cfg.headingSource ~= "navtable")
+
+  if self.cfg.headingSource == "gimbal" then
+    self.heading:setSource(nil)
+    return true, "gimbal only (relative heading)"
+  end
+
+  local dev, err, picked = NavTable.resolve(self.cfg.navTable)
+  if dev then
+    self.heading:setSource(NavTable.reader(self.cfg.navTable))
+    return true, ("navigation table: %s"):format(tostring(picked))
+  end
+
+  -- No table. In "navtable" mode that is a real problem; in "auto" it just means gimbal for now.
+  self.heading:setSource(nil)
+  if self.cfg.headingSource == "navtable" then
+    return false, "heading source is 'navtable' but " .. tostring(err)
+  end
+  return true, ("no navigation table (%s); using the gimbal"):format(tostring(err))
+end
+
 --- SELF ALIGN: force a fresh navigation-table read and re-true the heading to it. Returns ok, msg.
 function App:selfAlign(now)
   return self.heading:align(now or os.epoch("utc"))
+end
+
+--- A validated command from the UI computer. Returns ok, detail. Config-changing commands SAVE
+--- immediately, exactly as the flight side does, so a choice survives a reboot.
+function App:handleCommand(cmd)
+  local now = os.epoch("utc")
+  if cmd.cmd == "navPing" then
+    return true, { role = "nav" }
+
+  elseif cmd.cmd == "setHeadingSource" then
+    self.cfg.headingSource = cmd.source
+    local ok, msg = self:wireHeadingSource()
+    self:saveConfig()
+    self.dirty = true
+    return ok, { headingSource = cmd.source, detail = msg,
+      errorShort = ok and nil or "NO TABLE" }
+
+  elseif cmd.cmd == "setNavTable" then
+    self.cfg.navTable = cmd.peripheral
+    local ok, msg = self:wireHeadingSource()
+    self:saveConfig()
+    self.dirty = true
+    return ok, { navTable = cmd.peripheral, detail = msg,
+      errorShort = ok and nil or "NO TABLE" }
+
+  elseif cmd.cmd == "setNavSign" then
+    local sign = (cmd.sign < 0) and -1 or 1
+    self.cfg.navSign = sign
+    self.heading:setNavSign(sign)          -- clears the calibration; a SELF ALIGN re-trues it
+    self:saveConfig()
+    self.dirty = true
+    return true, { navSign = sign, detail = "sign set -- SELF ALIGN to re-true" }
+
+  elseif cmd.cmd == "setGimbalSign" then
+    local sign = (cmd.sign < 0) and -1 or 1
+    self.cfg.gimbalSign = sign
+    self.heading:setGimbalSign(sign)
+    self:saveConfig()
+    self.dirty = true
+    return true, { gimbalSign = sign, detail = "sign set -- SELF ALIGN to re-true" }
+
+  elseif cmd.cmd == "selfAlign" then
+    local ok, msg = self:selfAlign(now)
+    self.dirty = true
+    return ok, { detail = msg, errorShort = ok and nil or "NO TABLE" }
+  end
+
+  return false, { error = "unhandled command: " .. tostring(cmd.cmd) }
+end
+
+--- A message on the wired command protocol. Validate, apply, and ALWAYS reply -- a UI waiting on an
+--- ack must never hang because a command was malformed or a handler threw. Returns whether it acted.
+function App:onCommand(sender, message)
+  local proto = self.cfg.navCommandProtocol
+  local cmd, reason = NavCommand.parse(message, sender)
+  if not cmd then
+    self.log:warn("nav command rejected: %s", tostring(reason))
+    self.relay:reply(sender, { ack = false,
+      cmd = type(message) == "table" and message.cmd or nil,
+      detail = { error = reason, errorShort = "BAD CMD" } }, proto)
+    return false
+  end
+
+  local caught, ok, detail = pcall(self.handleCommand, self, cmd)
+  if not caught then
+    self.log:error("nav command %s FAILED: %s", tostring(cmd.cmd), tostring(ok))
+    self.relay:reply(sender, { ack = false, cmd = cmd.cmd,
+      detail = { error = tostring(ok), errorShort = "CMD ERROR" } }, proto)
+    return false
+  end
+
+  self.log:info("nav command %s -> %s", cmd.cmd, ok and "ok" or "refused")
+  self.relay:reply(sender, { ack = ok, cmd = cmd.cmd, detail = detail }, proto)
+  return ok
 end
 
 --- The best position we can offer, altimeter altitude preferred over the fix's coarse block y.
@@ -184,6 +276,17 @@ function App:tick(now)
       headingSource = headingInfo and headingInfo.source or nil,  -- navtable|backup|gimbal
       headingAligned = headingInfo and headingInfo.aligned or nil,
       waypointCount = self.waypoints:count(),
+      -- The nav CONFIG and the tables available, so the UI's NAV submenu can show what is selected
+      -- and offer the alternatives without a request/response -- the same read-from-broadcast the
+      -- rest of the cockpit uses. `config.headingSource` is what the pilot CHOSE; `headingSource`
+      -- above is what the heading currently RESTS on, which differ when auto falls back to gimbal.
+      config = {
+        headingSource = self.cfg.headingSource,
+        navTable = self.cfg.navTable,
+        navSign = self.cfg.navSign,
+        gimbalSign = self.cfg.gimbalSign,
+      },
+      navTables = NavTable.list(),                   -- candidate tables, for the picker
     })
   end
   return position
@@ -220,7 +323,13 @@ function App:service()
     local name = event[1]
 
     if name == "rednet_message" then
-      if self:onTelemetry(event[2], event[3], event[4]) then self.dirty = true end
+      local sender, message, protocol = event[2], event[3], event[4]
+      if protocol == self.cfg.navCommandProtocol then
+        -- A command from the UI. onCommand replies on its own; we only note a redraw is due.
+        if self:onCommand(sender, message) then self.dirty = true end
+      elseif self:onTelemetry(sender, message, protocol) then
+        self.dirty = true
+      end
     elseif name == "timer" and event[2] == self.timer then
       self:tick()
       self.timer = os.startTimer(TICK_SECONDS)

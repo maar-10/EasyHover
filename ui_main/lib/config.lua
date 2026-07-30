@@ -67,6 +67,9 @@ function Config.defaults()
       -- The nav computer's position/heading broadcast (see nav/lib/relay.lua). Must match the nav
       -- computer's comms.navFixProtocol. The nav monitor's heading tape and map read from it.
       navFixProtocol = "eh_navfix",
+      -- Commands TO the nav computer (heading source, which table, sign flips, SELF ALIGN). Must
+      -- match the nav computer's comms.navCommandProtocol. Wired only.
+      navCommandProtocol = "eh_navcmd",
       staleMs = 2000,                         -- no telemetry for this long = show STALE
       -- Nav fixes arrive slower than flight telemetry, so a longer grace before the tape blanks.
       navStaleMs = 4000,

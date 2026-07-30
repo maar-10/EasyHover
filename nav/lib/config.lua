@@ -55,6 +55,10 @@ function Config.defaults()
     --- carried this name since phase 5, so nothing on the craft needs changing to listen.
     navFixProtocol = "eh_navfix",
     telemetryProtocol = "eh_telemetry",
+    --- Commands FROM the UI computer (heading source, which nav table, sign flips, SELF ALIGN).
+    --- WIRED ONLY, like the flight computer's command channel -- the radio never carries a command
+    --- (docs/WIRING.md). Whitelisted and type-checked in lib/navcommand.lua before anything applies.
+    navCommandProtocol = "eh_navcmd",
 
     --- Where the waypoint and route files live. Both are PROTECTED paths, so the Suite never
     --- deletes them and an update cannot cost the operator a waypoint set.
@@ -109,7 +113,8 @@ function Config.validate(cfg)
   if type(cfg.reckonUsefulMs) ~= "number" or cfg.reckonUsefulMs <= 0 then
     err("reckonUsefulMs must be positive")
   end
-  for _, key in ipairs({ "navFixProtocol", "telemetryProtocol", "waypointsPath", "routesPath" }) do
+  for _, key in ipairs({ "navFixProtocol", "telemetryProtocol", "navCommandProtocol",
+    "waypointsPath", "routesPath" }) do
     if type(cfg[key]) ~= "string" or cfg[key] == "" then err("%s must be set", key) end
   end
   if type(cfg.markMinQuality) ~= "number" or cfg.markMinQuality < 0

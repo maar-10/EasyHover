@@ -2200,6 +2200,33 @@ T.it("records a command acknowledgement", function()
   T.isTrue(link.lastAck.ack, "stored")
 end)
 
+T.it("keeps nav fixes and their config apart from the flight frame", function()
+  local cfg = UiConfig.withDefaults({})
+  local link = Link.new(cfg, quietLog())
+  local kind = link:onMessage(9, {
+    proto = "ehnav1", position = { x = 1, y = 2, z = 3 }, heading = 90,
+    config = { headingSource = "auto", navTable = "" },
+    navTables = { "navigation_table_0", "navigation_table_1" },
+  }, cfg.comms.navFixProtocol)
+  T.eq(kind, "navfix", "recognised as a nav fix, not telemetry")
+  local nav = link:nav()
+  T.notNil(nav, "exposed in the model")
+  T.eq(nav.heading, 90, "heading carried")
+  T.eq(nav.config.headingSource, "auto", "the chosen source is available to a picker")
+  T.eq(#nav.navTables, 2, "and the candidate tables")
+  T.isNil(link.latest, "the flight telemetry frame is untouched")
+end)
+
+T.it("records a nav command ack separately from the flight ack", function()
+  local cfg = UiConfig.withDefaults({})
+  local link = Link.new(cfg, quietLog())
+  local kind = link:onMessage(9, { ack = true, cmd = "setHeadingSource",
+    detail = { headingSource = "navtable" } }, cfg.comms.navCommandProtocol)
+  T.eq(kind, "navack", "recognised")
+  T.eq(link.lastNavAck.cmd, "setHeadingSource", "stored")
+  T.isNil(link.lastAck, "the flight ack is untouched -- two computers, two answers")
+end)
+
 T.it("the model always says whether its numbers can be trusted", function()
   local cfg = UiConfig.withDefaults({})
   local link = Link.new(cfg, quietLog())

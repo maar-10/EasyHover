@@ -117,6 +117,13 @@ function Relay:publish(position, extra)
   return ok
 end
 
+--- Send a direct reply (a command ack) to one computer on the wired modem. The relay owns that
+--- modem, so acks go out the same way fixes do -- wired only, never the radio.
+function Relay:reply(recipient, payload, protocol)
+  if not self.wired then return false, "no wired modem" end
+  return pcall(rednet.send, recipient, payload, protocol)
+end
+
 function Relay:status()
   return {
     wired = self.wired,

@@ -105,6 +105,14 @@ function App:buildActions()
     -- UI-LOCAL: re-themes this computer's own monitors for day/night reading. Not a flight command
     -- -- it never leaves this computer -- so it goes straight to the app rather than the link.
     dayNight = function() self:toggleDayNight() end,
+    -- Commands to the NAV computer (its own protocol, not the flight command channel).
+    setHeadingSource = function(source) link:sendNav({ cmd = "setHeadingSource", source = source }) end,
+    setNavTable = function(peripheral)
+      link:sendNav({ cmd = "setNavTable", peripheral = peripheral or "" })
+    end,
+    setNavSign = function(sign) link:sendNav({ cmd = "setNavSign", sign = sign or 1 }) end,
+    setGimbalSign = function(sign) link:sendNav({ cmd = "setGimbalSign", sign = sign or 1 }) end,
+    navSelfAlign = function() link:sendNav({ cmd = "selfAlign" }) end,
   }
 end
 
