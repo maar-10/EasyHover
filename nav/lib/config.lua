@@ -65,6 +65,22 @@ function Config.defaults()
     --- is worse than no pad: you would fly to it and find open air.
     markMaxAgeMs = 3000,
     markMinQuality = 0.5,
+
+    --- HEADING. The navigation table is an absolute reference -- aim it at true north with a
+    --- magnet -- and the gimbal yaw from telemetry carries the heading between reads. See
+    --- lib/heading.lua for the model and lib/navtable.lua for the peripheral.
+    ---   headingSource  "navtable" -- table, with the gimbal as the Backup basic heading
+    ---                  "gimbal"   -- telemetry yaw only; NO true-north reference (relative)
+    ---                  "auto"     -- navtable if one is present, else gimbal
+    ---   navTable       peripheral name of the table; "" auto-picks the first found
+    ---   navSign        +1 or -1, flips the table angle if it reads backwards in-game
+    ---   gimbalSign     +1 or -1, flips the gimbal yaw likewise
+    ---   navHeadingStaleMs  a table reading older than this falls back to the Backup basic heading
+    headingSource = "auto",
+    navTable = "",
+    navSign = 1,
+    gimbalSign = 1,
+    navHeadingStaleMs = 3000,
   }
 end
 
@@ -99,6 +115,17 @@ function Config.validate(cfg)
   if type(cfg.markMinQuality) ~= "number" or cfg.markMinQuality < 0
     or cfg.markMinQuality > 1 then
     err("markMinQuality must be between 0 and 1")
+  end
+
+  local HEADING_SOURCES = { navtable = true, gimbal = true, auto = true }
+  if not HEADING_SOURCES[cfg.headingSource] then
+    err("headingSource must be 'navtable', 'gimbal' or 'auto'")
+  end
+  if type(cfg.navTable) ~= "string" then err("navTable must be a peripheral name or \"\"") end
+  if cfg.navSign ~= 1 and cfg.navSign ~= -1 then err("navSign must be +1 or -1") end
+  if cfg.gimbalSign ~= 1 and cfg.gimbalSign ~= -1 then err("gimbalSign must be +1 or -1") end
+  if type(cfg.navHeadingStaleMs) ~= "number" or cfg.navHeadingStaleMs < 200 then
+    err("navHeadingStaleMs must be at least 200")
   end
 
   -- A fix taken less often than it goes stale means the position is stale more of the time than

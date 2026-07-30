@@ -229,3 +229,43 @@ into world axes without it and `Fix:reckon` refuses rather than integrating garb
 
 Both `/eh_waypoints.tbl` and `/eh_routes.tbl` are **protected paths**: the Suite never deletes
 them, and the e2e suite asserts a `--repair` leaves them intact with their contents.
+
+---
+
+## Heading: the navigation table, and the Backup basic heading
+
+The craft's heading now comes from **two inputs of very different character**, fused on the nav
+computer (`nav/lib/heading.lua`):
+
+| Input | What it is | Character |
+|---|---|---|
+| `navigation_table.getRelativeAngle()` | the craft's angle to the table's target -- a magnet aims it at **true north**, so this is an ABSOLUTE heading | can return `nil`, only as fresh as the last poll, **free** to call |
+| `attitude.yaw` (telemetry) | the gimbal's yaw | continuous and fast, but **relative** -- its zero is arbitrary and it drifts |
+
+**The model.** The table is the truth whenever it answers. Each time it does, the offset between it
+and the gimbal is recorded. When the table is silent, `heading = gimbal + offset` -- the **Backup
+basic heading** (this is the rename of what used to be called "dead reckoning" on this screen).
+So the fast gimbal carries the bearing moment to moment and the table keeps it true to north.
+
+`headingSource` chooses the character:
+
+- **`navtable`** -- the table is required; the gimbal is only the backup between reads. An
+  un-aligned craft honestly reports NO heading rather than a plausible wrong one.
+- **`auto`** (default) -- the table if one is present, else the raw gimbal, flagged `rel`.
+- **`gimbal`** -- the raw gimbal only; relative, never referenced to north.
+
+### SELF ALIGN (`[S]`)
+
+Forces an immediate sync: read the table now and re-true the offset to it. It exists because a
+pilot who has watched the heading drift wants to re-true on demand, not wait for the next poll.
+
+It also carries the **sign calibration**, because Simulated's bytecode does not pin down which way
+`getRelativeAngle` counts (docs/MOD_API_RESEARCH.md). If the heading runs *backwards* as the craft
+turns, `[N]` flips the nav sign; `[G]` flips the gimbal sign. A flip drops the calibration (it was
+computed against the old sign), so re-align with `[A]` after.
+
+### Disk (`[K]`)
+
+Save the waypoint set (and routes, once they exist) to a floppy, or load one back. Both are
+explicit -- an inserted disk never clobbers a waypoint set on its own, and a save never fires on
+eject. A load that finds no EasyHover data refuses rather than wiping the local set.

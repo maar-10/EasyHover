@@ -19,6 +19,8 @@ Console.ACTIONS = {
   d = "delete",
   l = "list",
   f = "fixNow",
+  s = "selfAlign",      -- re-true the heading to the navigation table
+  k = "disk",           -- save/load waypoints and routes to a floppy
   q = "quit",
 }
 
@@ -78,11 +80,12 @@ function Console.render(cfg, model, width, height)
   else
     row(("position  %s %s %s"):format(num(position.x), num(position.y), num(position.z)),
       position.dead and "bad" or "good")
-    -- DEAD RECKONED GOES FIRST, and on its own line. It was appended to the end of the detail
+    -- THE ESTIMATE FLAG GOES FIRST, on its own line. It was appended to the end of the detail
     -- line, which on a 51-column screen truncated away the single most important word on the
-    -- page: the flag saying these numbers are a guess.
+    -- page: the flag saying these numbers are a guess. "Backup basic heading" is the pilot's
+    -- name for this fallback -- an estimate carried on the gimbal heading between real fixes.
     if position.dead then
-      row("  DEAD RECKONED -- this is an estimate", "bad")
+      row("  BACKUP BASIC HEADING -- estimated", "bad")
     elseif position.stale then
       row("  STALE -- no fresh fix and nothing to reckon from", "bad")
     end
@@ -92,11 +95,19 @@ function Console.render(cfg, model, width, height)
       tostring(position.source), (position.ageMs or 0) / 1000, position.quality or 0), "dim")
   end
 
-  -- heading, and whether we have one at all
-  if type(model.heading) == "number" then
-    row(("heading   %s  %s"):format(num(model.heading), Geo.compassPoint(model.heading)), "good")
+  -- heading, its bearing, and WHAT IT RESTS ON -- the source is as important as the number:
+  --   true N   a current navigation-table reading, referenced to true north
+  --   backup   the Backup basic heading: gimbal carried forward from the last alignment
+  --   rel      raw gimbal yaw, RELATIVE -- consistent but not referenced to north
+  local h = model.heading
+  if type(h) == "table" and type(h.degrees) == "number" then
+    local tag = (h.source == "navtable" and "true N")
+      or (h.source == "backup" and "backup")
+      or "rel"
+    local tone = (h.source == "navtable" and "good") or (h.source == "backup" and "normal") or "bad"
+    row(("heading   %s  %s  %s"):format(num(h.degrees), Geo.compassPoint(h.degrees), tag), tone)
   else
-    row("heading   NONE -- dead reckoning cannot run", "bad")
+    row("heading   NONE -- no table and no gimbal", "bad")
   end
 
   row(("-"):rep(width), "dim")
@@ -144,7 +155,8 @@ function Console.render(cfg, model, width, height)
   local pairsWanted = {
     { "[M] mark here", "[A] add coords", "normal" },
     { "[D] delete", "[L] list all", "normal" },
-    { "[F] fix now", "[Q] quit", "dim" },
+    { "[F] fix now", "[S] self align", "normal" },
+    { "[K] disk", "[Q] quit", "dim" },
   }
   for _, entry in ipairs(pairsWanted) do
     local combined = legend(entry[1], entry[2], entry[3])

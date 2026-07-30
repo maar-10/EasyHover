@@ -25,6 +25,9 @@ local Sources = require("lib.sources")
 local Relay = require("lib.relay")
 local Waypoints = require("lib.waypoints")
 local Geo = require("lib.geo")
+local Heading = require("lib.heading")
+local NavTable = require("lib.navtable")
+local Disk = require("lib.disk")
 local Console = require("ui.console")
 local Log = require("shared.log")
 
@@ -59,9 +62,18 @@ function App.new(opts)
   self.relay = Relay.new(cfg, self.log)
   self.waypoints = Waypoints.new(cfg.waypointsPath, self.log)
 
-  -- What the flight computer last told us. Dead reckoning needs the heading; without it the
-  -- estimate cannot exist, which is a state to report rather than paper over.
-  self.craft = { heading = nil, forward = 0, right = 0, altitude = nil, at = nil }
+  -- Heading model. In "gimbal" mode the raw telemetry yaw stands in as a relative heading; in
+  -- "navtable"/"auto" the navigation table gives an absolute true-north reference and the gimbal
+  -- is the Backup basic heading between reads. See lib/heading.lua.
+  self.heading = Heading.new({
+    navSign = cfg.navSign,
+    gimbalSign = cfg.gimbalSign,
+    staleMs = cfg.navHeadingStaleMs,
+    rawGimbalOk = (cfg.headingSource ~= "navtable"),
+  })
+
+  -- Craft-frame velocity from telemetry, for dead reckoning. Heading now lives in self.heading.
+  self.craft = { forward = 0, right = 0, altitude = nil, at = nil }
 
   self.lastFixAt = 0
   self.lastReckonAt = nil
@@ -85,6 +97,23 @@ function App:boot()
   for _, source in ipairs(built) do self.fix:addSource(source) end
   for _, problem in ipairs(problems) do self.problems[#self.problems + 1] = problem end
 
+  -- Wire the navigation table into the heading model, unless we are in gimbal-only mode. The
+  -- reader re-resolves lazily, so a table plugged in after boot begins working without a restart.
+  if self.cfg.headingSource ~= "gimbal" then
+    local dev, err, picked = NavTable.resolve(self.cfg.navTable)
+    if dev then
+      self.heading:setSource(NavTable.reader(self.cfg.navTable))
+      self.log:info("navigation table: %s", tostring(picked))
+    else
+      -- In "navtable" mode this is a real problem; in "auto" it just means gimbal-only for now.
+      if self.cfg.headingSource == "navtable" then
+        self.problems[#self.problems + 1] = "heading source is 'navtable' but " .. tostring(err)
+      else
+        self.log:warn("no navigation table (%s); heading falls back to the gimbal", tostring(err))
+      end
+    end
+  end
+
   local loaded, count, dropped = self.waypoints:load()
   if loaded then
     self.log:info("%d waypoint(s) loaded%s", count,
@@ -103,13 +132,19 @@ function App:onTelemetry(sender, message, protocol)
 
   local attitude = message.attitude or {}
   local velocity = message.velocity or {}
-  self.craft.heading = type(attitude.yaw) == "number" and attitude.yaw or nil
+  -- The gimbal yaw feeds the heading model, which owns sign and true-north calibration.
+  self.heading:updateGimbal(type(attitude.yaw) == "number" and attitude.yaw or nil)
   -- The velocity sensors read along the craft's own axes; z is forward, x is right.
   self.craft.forward = type(velocity.z) == "number" and velocity.z or 0
   self.craft.right = type(velocity.x) == "number" and velocity.x or 0
   self.craft.altitude = (message.altitude or {}).baro
   self.craft.at = os.epoch("utc")
   return true
+end
+
+--- SELF ALIGN: force a fresh navigation-table read and re-true the heading to it. Returns ok, msg.
+function App:selfAlign(now)
+  return self.heading:align(now or os.epoch("utc"))
 end
 
 --- The best position we can offer, altimeter altitude preferred over the fix's coarse block y.
@@ -121,6 +156,10 @@ end
 function App:tick(now)
   now = now or os.epoch("utc")
 
+  -- Keep the heading trued: poll the navigation table (free) and re-calibrate the gimbal offset.
+  self.heading:tick(now)
+  local heading = self.heading:degrees(now)
+
   if now - self.lastFixAt >= self.cfg.fixEverySeconds * 1000 then
     self.lastFixAt = now
     -- This BLOCKS. It is why the service loop exists and why nav is its own computer.
@@ -129,10 +168,10 @@ function App:tick(now)
   end
 
   -- Dead reckoning between fixes, when there is a heading to rotate by.
-  if self.lastReckonAt ~= nil and self.craft.heading ~= nil then
+  if self.lastReckonAt ~= nil and heading ~= nil then
     local dt = (now - self.lastReckonAt) / 1000
     if dt > 0 then
-      self.fix:reckon(dt, self.craft.forward, self.craft.right, self.craft.heading, now)
+      self.fix:reckon(dt, self.craft.forward, self.craft.right, heading, now)
     end
   end
   self.lastReckonAt = now
@@ -140,7 +179,7 @@ function App:tick(now)
   local position = self:position(now)
   if position then
     self.relay:publish(position, {
-      heading = self.craft.heading,
+      heading = heading,
       waypointCount = self.waypoints:count(),
     })
   end
@@ -153,7 +192,7 @@ function App:model(now)
   local position = self:position(now)
   return {
     position = position,
-    heading = self.craft.heading,
+    heading = self.heading:current(now),   -- { degrees, source, ageMs, aligned } or nil
     link = self.relay:status(),
     stats = self.fix:stats(),
     waypointCount = self.waypoints:count(),
@@ -212,6 +251,12 @@ function App:ui()
     elseif action == "list" then
       self:showList()
       self:redraw()
+    elseif action == "selfAlign" then
+      self:promptSelfAlign()
+      self:redraw()
+    elseif action == "disk" then
+      self:promptDisk()
+      self:redraw()
     end
   end
 end
@@ -246,7 +291,7 @@ function App:promptMark()
   print(("at %s %s %s  from %s, %.1fs old"):format(
     Console.num(position.x), Console.num(position.y), Console.num(position.z),
     tostring(position.source), (position.ageMs or 0) / 1000))
-  if position.dead then print("This is a DEAD-RECKONED estimate, not a fix.") end
+  if position.dead then print("This is a BACKUP (estimated) position, not a fix.") end
   print("")
 
   local name, cancelled = Console.readName(read)
@@ -355,6 +400,106 @@ function App:showList()
   end
   pause()
   self.prompting = false
+end
+
+--- SELF ALIGN: show the current heading and let the operator force a fresh sync with the
+--- navigation table. "Realigning" here means re-truing the heading reference to north, not turning
+--- the craft -- the nav computer cannot move anything.
+function App:promptSelfAlign()
+  self:beginPrompt("SELF ALIGN -- re-true the heading to the navigation table")
+  local h = self.heading:current()
+  if type(h) == "table" and type(h.degrees) == "number" then
+    local tag = (h.source == "navtable" and "true north")
+      or (h.source == "backup" and "Backup basic heading (gimbal)")
+      or "relative gimbal -- NOT referenced to north"
+    print(("current heading  %s deg  (%s)"):format(Console.num(h.degrees), tag))
+  else
+    print("current heading  NONE -- no navigation table and no gimbal yet")
+  end
+  print(("signs: nav %+d  gimbal %+d"):format(self.cfg.navSign, self.cfg.gimbalSign))
+  print("")
+  print("[A] align to the table now")
+  print("[N] flip nav sign     (if the heading runs BACKWARDS)")
+  print("[G] flip gimbal sign  (if the backup heading runs backwards)")
+  print("[Enter] back")
+  term.write("> ")
+  local answer = tostring(read() or ""):lower()
+  print()
+
+  if answer == "a" then
+    local ok, msg = self:selfAlign()
+    print(ok and ("ALIGNED: " .. tostring(msg)) or ("could not align: " .. tostring(msg)))
+  elseif answer == "n" then
+    self.cfg.navSign = -self.cfg.navSign
+    self.heading:setNavSign(self.cfg.navSign)
+    self:saveConfig()
+    print(("nav sign is now %+d -- re-align (A) to re-true the offset"):format(self.cfg.navSign))
+  elseif answer == "g" then
+    self.cfg.gimbalSign = -self.cfg.gimbalSign
+    self.heading:setGimbalSign(self.cfg.gimbalSign)
+    self:saveConfig()
+    print(("gimbal sign is now %+d -- re-align (A)"):format(self.cfg.gimbalSign))
+  else
+    print("no change")
+  end
+  pause()
+  self.prompting = false
+  return true
+end
+
+--- Persist the config after an in-menu change (a sign flip). Best-effort: a failed save is
+--- reported but the running change still stands for this session.
+function App:saveConfig()
+  local ok, err = Config.save(self.configPath, self.cfg)
+  if not ok then self.log:warn("could not save config: %s", tostring(err)) end
+  return ok
+end
+
+--- DISK: check for a floppy, and save or load the waypoint (and route) set. Explicit both ways --
+--- nothing is written or read without a keypress, so an inserted disk never clobbers anything.
+function App:promptDisk()
+  self:beginPrompt("DISK -- save or load waypoints")
+  local drives = Disk.drives()
+  if #drives == 0 then
+    print("No drive on the network.")
+    pause(); self.prompting = false; return false
+  end
+  for _, d in ipairs(drives) do
+    if d.present then
+      print(("  %s  disk present%s"):format(d.name, d.label and (" (" .. d.label .. ")") or ""))
+    else
+      print(("  %s  NO DISK"):format(d.name))
+    end
+  end
+  print("")
+  print("Press S to SAVE to disk, L to LOAD from disk, or Enter to go back.")
+  term.write("> ")
+  local answer = tostring(read() or ""):lower()
+  print()
+
+  local ready, reason = Disk.firstReady()
+  if answer == "s" then
+    if not ready then print("cannot save: " .. tostring(reason)); pause()
+      self.prompting = false; return false end
+    local ok, saved, err = Disk.save(ready.mount, self.cfg)
+    print(ok and ("saved to disk: " .. table.concat(saved, ", ")) or ("save failed: " .. tostring(err)))
+  elseif answer == "l" then
+    if not ready then print("cannot load: " .. tostring(reason)); pause()
+      self.prompting = false; return false end
+    local ok, loaded, err = Disk.load(ready.mount, self.cfg)
+    if ok then
+      -- The files on disk are now the local files; reload the store so the change takes effect.
+      self.waypoints:load()
+      print("loaded from disk: " .. table.concat(loaded, ", "))
+    else
+      print("load failed: " .. tostring(err))
+    end
+  else
+    print("no change")
+  end
+  pause()
+  self.prompting = false
+  return true
 end
 
 function App:run()

@@ -353,15 +353,21 @@
       ["files"] = {
         {
           ["dst"] = "nav/app.lua",
-          ["size"] = 12293,
+          ["size"] = 18192,
           ["src"] = "nav/app.lua",
-          ["sum"] = "eb6d7d74",
+          ["sum"] = "62b6c748",
         },
         {
           ["dst"] = "nav/lib/config.lua",
-          ["size"] = 5917,
+          ["size"] = 7501,
           ["src"] = "nav/lib/config.lua",
-          ["sum"] = "0494685e",
+          ["sum"] = "4fd009f4",
+        },
+        {
+          ["dst"] = "nav/lib/disk.lua",
+          ["size"] = 4780,
+          ["src"] = "nav/lib/disk.lua",
+          ["sum"] = "93099c3c",
         },
         {
           ["dst"] = "nav/lib/fix.lua",
@@ -374,6 +380,18 @@
           ["size"] = 5588,
           ["src"] = "nav/lib/geo.lua",
           ["sum"] = "c7353e5a",
+        },
+        {
+          ["dst"] = "nav/lib/heading.lua",
+          ["size"] = 8501,
+          ["src"] = "nav/lib/heading.lua",
+          ["sum"] = "e911889b",
+        },
+        {
+          ["dst"] = "nav/lib/navtable.lua",
+          ["size"] = 3093,
+          ["src"] = "nav/lib/navtable.lua",
+          ["sum"] = "378ecbaa",
         },
         {
           ["dst"] = "nav/lib/relay.lua",
@@ -401,9 +419,9 @@
         },
         {
           ["dst"] = "nav/ui/console.lua",
-          ["size"] = 8022,
+          ["size"] = 8894,
           ["src"] = "nav/ui/console.lua",
-          ["sum"] = "66ed3bb2",
+          ["sum"] = "7a0cc35d",
         },
         {
           ["dst"] = "shared/install.lua",
@@ -594,5 +612,5 @@
     ["size"] = 36872,
     ["sum"] = "305c58ce",
   },
-  ["version"] = "cead5e67",
+  ["version"] = "3f252f69",
 }

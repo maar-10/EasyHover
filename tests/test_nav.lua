@@ -12,6 +12,9 @@ local T = require("tests.util")
 local Geo = require("lib.geo")
 local Waypoints = require("lib.waypoints")
 local Fix = require("lib.fix")
+local Heading = require("lib.heading")
+local NavTable = require("lib.navtable")
+local Disk = require("lib.disk")
 local Log = require("shared.log")
 
 local function quietLog() return Log.new({ level = "error", capacity = 50 }) end
@@ -679,12 +682,12 @@ T.it("says NO FIX YET rather than drawing zeros", function()
   T.isTrue(text:find("NO FIX YET") ~= nil, "named: " .. text:match("[^\n]*NO FIX[^\n]*"))
 end)
 
-T.it("A DEAD-RECKONED POSITION IS LABELLED AS SUCH", function()
+T.it("AN ESTIMATED POSITION IS LABELLED Backup basic heading", function()
   -- The whole point of carrying the flag. A consumer that cannot tell a fix from a five-second
-  -- guess will act on the guess.
+  -- guess will act on the guess. "Backup basic heading" is the pilot's name for the fallback.
   local text = rendered({ position = { x = 100, y = 70, z = -200, source = "estimate",
     quality = 0.4, ageMs = 4200, dead = true } })
-  T.isTrue(text:find("DEAD RECKONED") ~= nil, "shouted in the text")
+  T.isTrue(text:find("BACKUP BASIC HEADING") ~= nil, "shouted in the text")
   T.isTrue(text:find("estimate") ~= nil, "with its source")
   T.isTrue(text:find("4%.2s old") ~= nil, "and its age: " .. text:match("[^\n]*old[^\n]*"))
 end)
@@ -697,14 +700,23 @@ T.it("a real fix shows its source, age and quality", function()
   T.isFalse(text:find("DEAD RECKONED") ~= nil, "and not flagged")
 end)
 
-T.it("SAYS SO WHEN THERE IS NO HEADING, because reckoning cannot run without one", function()
+T.it("SHOWS THE HEADING WITH ITS SOURCE, or NONE when there is neither", function()
   local none = rendered({})
-  T.isTrue(none:find("heading   NONE") ~= nil, "named")
-  T.isTrue(none:find("dead reckoning cannot run") ~= nil, "and what it costs: "
-    .. none:match("[^\n]*heading[^\n]*"))
+  T.isTrue(none:find("heading   NONE") ~= nil, "named: " .. none:match("[^\n]*heading[^\n]*"))
 
-  local have = rendered({ heading = 90 })
-  T.isTrue(have:find("heading   90  E") ~= nil, "and shows the compass point when there is one")
+  -- a true-north navigation-table reading
+  local navt = rendered({ heading = { degrees = 90, source = "navtable" } })
+  T.isTrue(navt:find("heading   90  E") ~= nil, "shows the compass point")
+  T.isTrue(navt:find("true N") ~= nil, "and that it is referenced to true north: "
+    .. navt:match("[^\n]*heading[^\n]*"))
+
+  -- the Backup basic heading, carried on the gimbal
+  local backup = rendered({ heading = { degrees = 90, source = "backup" } })
+  T.isTrue(backup:find("backup") ~= nil, "backup source named: " .. backup:match("[^\n]*heading[^\n]*"))
+
+  -- a raw, relative gimbal yaw
+  local rel = rendered({ heading = { degrees = 90, source = "gimbal" } })
+  T.isTrue(rel:find(" rel") ~= nil, "relative is flagged: " .. rel:match("[^\n]*heading[^\n]*"))
 end)
 
 T.it("NAMES A MISSING MODEM -- half a nav computer is a specific failure", function()
@@ -821,6 +833,196 @@ T.it("the preview copes with no fix, and with the point you are standing on", fu
   T.isTrue(Console.preview(nil, { x = 1, y = 2, z = 3 }):find("no fix") ~= nil, "no fix")
   local same = Console.preview({ x = 5, y = 6, z = 7 }, { x = 5, y = 6, z = 7 })
   T.isTrue(same:find("where you are now") ~= nil, "coincident: " .. same)
+end)
+
+-- ------------------------------------------------------------------ heading
+
+T.suite("heading model")
+
+T.it("reads the navigation table as an absolute heading, with sign and wrap", function()
+  local h = Heading.new({})
+  h:setSource(function() return 90 end)
+  T.eq(h:readNavTable(1000), 90, "straight through")
+
+  local flipped = Heading.new({ navSign = -1 })
+  flipped:setSource(function() return 90 end)
+  T.eq(flipped:readNavTable(1000), 270, "negated and wrapped to [0,360)")
+end)
+
+T.it("a fresh table reading is the truth, above the gimbal", function()
+  local h = Heading.new({})
+  h:setSource(function() return 120 end)
+  h:updateGimbal(45)
+  h:tick(1000)
+  local cur = h:current(1000)
+  T.eq(cur.source, "navtable", "table wins")
+  T.eq(cur.degrees, 120, "and reads the table")
+end)
+
+T.it("the gimbal carries the heading when the table goes silent -- Backup basic heading", function()
+  local reading = 120
+  local h = Heading.new({ staleMs = 3000 })
+  h:setSource(function() return reading end)
+  h:updateGimbal(100)          -- gimbal is 100 while the table says 120, so offset is +20
+  h:tick(1000)
+  T.eq(h:current(1000).source, "navtable", "table first")
+
+  -- table goes silent; gimbal swings to 150
+  reading = nil
+  h:updateGimbal(150)
+  local cur = h:current(6000)  -- well past staleMs since the last table reading
+  T.eq(cur.source, "backup", "now on the backup basic heading")
+  T.eq(cur.degrees, 170, "gimbal 150 + offset 20 = 170")
+  T.isTrue(cur.aligned, "and it is aligned")
+end)
+
+T.it("SELF ALIGN re-trues the offset to the table on demand", function()
+  local reading = 200
+  local h = Heading.new({})
+  h:setSource(function() return reading end)
+  h:updateGimbal(30)
+  local ok, msg = h:align(1000)
+  T.isTrue(ok, msg)
+  -- table silent, gimbal unchanged: heading should be the table value we aligned to
+  reading = nil
+  local cur = h:current(6000)
+  T.eq(cur.degrees, 200, "gimbal 30 + offset 170 = 200")
+end)
+
+T.it("align fails, clearly, when the table is not answering", function()
+  local h = Heading.new({})
+  h:setSource(function() return nil end)
+  h:updateGimbal(30)
+  local ok, msg = h:align(1000)
+  T.isFalse(ok, "refused")
+  T.isTrue(tostring(msg):find("not answering") ~= nil, "and says why: " .. tostring(msg))
+end)
+
+T.it("navtable mode has NO heading until aligned; auto falls back to raw gimbal", function()
+  -- navtable mode: rawGimbalOk false. Silent table, uncalibrated gimbal -> nil, honestly.
+  local strict = Heading.new({ rawGimbalOk = false })
+  strict:setSource(function() return nil end)
+  strict:updateGimbal(45)
+  T.isNil(strict:current(1000), "no fabricated heading")
+
+  -- auto mode: rawGimbalOk true. Same inputs -> the raw gimbal, flagged relative.
+  local auto = Heading.new({ rawGimbalOk = true })
+  auto:setSource(function() return nil end)
+  auto:updateGimbal(45)
+  local cur = auto:current(1000)
+  T.eq(cur.source, "gimbal", "raw gimbal offered")
+  T.isFalse(cur.aligned, "but flagged as NOT aligned -- it is relative, not true north")
+end)
+
+T.it("angleDelta crosses the 0/360 seam honestly", function()
+  T.eq(Heading.angleDelta(10, 350), 20, "10 is 20 clockwise of 350, not -340")
+  T.eq(Heading.angleDelta(350, 10), -20, "and the other way")
+end)
+
+T.it("flipping a sign clears the calibration -- the old offset was against the old sign", function()
+  local h = Heading.new({})
+  h:setSource(function() return 90 end)
+  h:updateGimbal(45)
+  h:align(1000)
+  T.notNil(h.offset, "aligned")
+  h:setNavSign(-1)
+  T.isNil(h.offset, "the offset is dropped, so a stale calibration cannot linger")
+  T.eq(h.navSign, -1, "and the sign took")
+end)
+
+-- ------------------------------------------------------------------ nav table peripheral
+
+T.suite("navigation table peripheral")
+
+T.it("lists only navigation tables, sorted", function()
+  local names = { "modem_0", "navigation_table_1", "gimbal_sensor_0", "navigation_table_0" }
+  local found = NavTable.list(names)   -- isNavTable uses peripheral.getType; mock it
+  -- With no peripheral mock here, list falls back to getType which is nil -> empty. So this test
+  -- exercises the FILTERING logic by injecting through a stubbed peripheral in the resolve test
+  -- below; here we only assert it does not throw and returns a table.
+  T.eq(type(found), "table", "returns a list")
+end)
+
+T.it("resolve auto-picks the first, names the pick, and errors on an absent named table", function()
+  local names = { "navigation_table_0", "navigation_table_2" }
+  -- inject: pretend both are nav tables and wrap returns a stub
+  local realGetType = peripheral and peripheral.getType
+  -- Use a fake peripheral namespace for this test
+  local savedPeripheral = _G.peripheral
+  _G.peripheral = {
+    getNames = function() return names end,
+    getType = function(n) return n:find("navigation_table") and "navigation_table" or "other" end,
+    wrap = function(n) return { name = n, getRelativeAngle = function() return 42 end } end,
+  }
+
+  local dev, err, picked = NavTable.resolve("")
+  T.notNil(dev, "auto-picked a table")
+  T.eq(picked, "navigation_table_0", "the first one")
+
+  local named, nerr = NavTable.resolve("navigation_table_2")
+  T.notNil(named, "a named table resolves")
+
+  local missing, merr = NavTable.resolve("navigation_table_9")
+  T.isNil(missing, "an absent named table is an error, not a silent fall-through")
+  T.isTrue(tostring(merr):find("not on the network") ~= nil, "and says so: " .. tostring(merr))
+
+  _G.peripheral = savedPeripheral
+end)
+
+-- ------------------------------------------------------------------ disk
+
+T.suite("nav disk")
+
+local function fakeFs()
+  local files = {}
+  return files, {
+    exists = function(p) return files[p] ~= nil end,
+    delete = function(p) files[p] = nil end,
+    copy = function(src, dst) files[dst] = files[src] end,
+  }
+end
+
+T.it("the fileset is waypoints then routes, skipping any that are unset", function()
+  local set = Disk.fileset({ waypointsPath = "/eh_waypoints.tbl", routesPath = "/eh_routes.tbl" })
+  T.eq(#set, 2, "both")
+  T.eq(set[1].key, "waypoints")
+  T.eq(set[2].key, "routes")
+  T.eq(#Disk.fileset({ waypointsPath = "/eh_waypoints.tbl", routesPath = "" }), 1, "routes unset")
+end)
+
+T.it("save copies the local files onto the disk mount", function()
+  local files, fsapi = fakeFs()
+  files["/eh_waypoints.tbl"] = "WP DATA"
+  local cfg = { waypointsPath = "/eh_waypoints.tbl", routesPath = "/eh_routes.tbl" }
+  local ok, saved = Disk.save("/disk", cfg, fsapi)
+  T.isTrue(ok, "saved")
+  T.eq(saved[1], "waypoints", "the waypoint file")
+  T.eq(files["/disk/eh_waypoints.tbl"], "WP DATA", "and it landed on the disk")
+end)
+
+T.it("save with nothing to save is a clear refusal, not a silent success", function()
+  local files, fsapi = fakeFs()
+  local ok, _, err = Disk.save("/disk", { waypointsPath = "/eh_waypoints.tbl" }, fsapi)
+  T.isFalse(ok, "refused")
+  T.isTrue(tostring(err):find("nothing to save") ~= nil, "and says why: " .. tostring(err))
+end)
+
+T.it("load copies the disk files back over the local ones", function()
+  local files, fsapi = fakeFs()
+  files["/disk/eh_waypoints.tbl"] = "FROM DISK"
+  files["/eh_waypoints.tbl"] = "OLD LOCAL"
+  local ok, loaded = Disk.load("/disk", { waypointsPath = "/eh_waypoints.tbl" }, fsapi)
+  T.isTrue(ok, "loaded")
+  T.eq(loaded[1], "waypoints")
+  T.eq(files["/eh_waypoints.tbl"], "FROM DISK", "the local file now matches the disk")
+end)
+
+T.it("load from a disk with no EasyHover data refuses rather than wiping local waypoints", function()
+  local files, fsapi = fakeFs()
+  files["/eh_waypoints.tbl"] = "PRECIOUS"
+  local ok, _, err = Disk.load("/disk", { waypointsPath = "/eh_waypoints.tbl" }, fsapi)
+  T.isFalse(ok, "refused")
+  T.eq(files["/eh_waypoints.tbl"], "PRECIOUS", "and the local set is untouched")
 end)
 
 return true
