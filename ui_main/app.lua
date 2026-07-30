@@ -138,6 +138,8 @@ function App:panelOptions()
     monitors = self.monitors,
     log = self.log,
     lastAck = function() return self.link.lastAck end,
+    -- The nav computer answers on its own channel; a panel that commands nav reads THIS ack.
+    lastNavAck = function() return self.link.lastNavAck end,
     --- Which panels the terminal may cycle a monitor through. Derived from the builder table,
     --- never hand-listed.
     panelNames = App.implementedPanels(),

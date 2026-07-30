@@ -166,8 +166,9 @@ function ConfigPanel.build(frame, opts)
     return { update = function() end, elements = {}, pages = {} }
   end
 
-  -- The craft's last reported state. Every page reads THIS, never what it asked for.
-  local live = { candidates = {}, slots = {}, config = {}, disk = {}, stale = true }
+  -- The craft's last reported state. Every page reads THIS, never what it asked for. `nav` is the
+  -- NAV computer's broadcast (config + candidate tables), a different source from the flight config.
+  local live = { candidates = {}, slots = {}, config = {}, disk = {}, nav = {}, stale = true }
 
   local pages = {}
   local function page()
@@ -181,7 +182,7 @@ function ConfigPanel.build(frame, opts)
   local home = page()
   local enginePage, timesPage = page(), page()
   local flightPage, diskPage, tankPage, keysPage = page(), page(), page(), page()
-  local axesPage = page()
+  local axesPage, navPage = page(), page()
   local slotPages = {}
   for _, name in ipairs({ "lift", "accel", "lateral", "velocity", "attitude", "optical" }) do
     slotPages[name] = page()
@@ -207,6 +208,7 @@ function ConfigPanel.build(frame, opts)
     { label = "LAT THR",    page = function() return slotPages.lateral end },
     { label = "VELOCITY",   page = function() return slotPages.velocity end },
     { label = "ALT+GIMBAL", page = function() return slotPages.attitude end },
+    { label = "NAV SRC",    page = function() return navPage end },
     { label = "FUEL TANK",  page = function() return tankPage end },
     { label = "OPTICAL",    page = function() return slotPages.optical end },
     { label = "THR AXES",   page = function() return axesPage end },
@@ -600,6 +602,58 @@ function ConfigPanel.build(frame, opts)
   end)
   backButton(diskPage)
 
+  -- ---------------------------------------------------------------- nav source
+  --
+  -- The one place a craft setting lives on ANOTHER computer: heading is the nav computer's job, so
+  -- these commands go to it (actions.setHeadingSource et al -> Link:sendNav), not to the flight
+  -- computer. Everything shown is the nav computer's REPORTED config (live.nav.config), read from
+  -- its broadcast -- so a change only appears once the nav computer has actually applied it.
+
+  Theme.line(navPage, 1, width, Theme.centre("NAV SOURCE", width), Theme.accent)
+  -- The current heading and what it RESTS on -- the proof a source change took.
+  local navHeading = Theme.line(navPage, 2, width, "", Theme.dim)
+
+  local navLabelW = math.max(3, math.min(5, width - 8))
+  local navBtnW = math.max(6, width - navLabelW - 1)
+
+  --- Cycle a value through a list. Each tap sends the NEXT one; the display is driven by the
+  --- craft's reply, never by the tap -- so a refused change simply does not move.
+  local function cycleNext(options, current)
+    local index = 1
+    for i, option in ipairs(options) do if option == current then index = i end end
+    return options[index % #options + 1]
+  end
+
+  local HEADING_SOURCES = { "auto", "navtable", "gimbal" }
+  Theme.line(navPage, 3, navLabelW, "SRC", Theme.dim)
+  local srcButton = Theme.button(navPage, navLabelW + 1, 3, navBtnW, "--", function()
+    actions.setHeadingSource(cycleNext(HEADING_SOURCES, (live.nav.config or {}).headingSource or "auto"))
+  end)
+
+  Theme.line(navPage, 4, navLabelW, "TBL", Theme.dim)
+  local tblButton = Theme.button(navPage, navLabelW + 1, 4, navBtnW, "--", function()
+    -- "" is the AUTO choice (first table found); the reported candidates follow it.
+    local options = { "" }
+    for _, name in ipairs(live.nav.navTables or {}) do options[#options + 1] = name end
+    actions.setNavTable(cycleNext(options, (live.nav.config or {}).navTable or ""))
+  end)
+
+  -- Sign flips share a row. Each toggles to the opposite of what the nav computer reports.
+  local signW = math.max(6, math.floor((width - 1) / 2))
+  local navSignBtn = Theme.button(navPage, 1, 5, signW, "NAV +", function()
+    actions.setNavSign(((live.nav.config or {}).navSign or 1) < 0 and 1 or -1)
+  end)
+  local gmbSignBtn = Theme.button(navPage, signW + 2, 5, math.max(6, width - signW - 1), "GMB +",
+    function()
+      actions.setGimbalSign(((live.nav.config or {}).gimbalSign or 1) < 0 and 1 or -1)
+    end)
+
+  local navAckLine = Theme.line(navPage, 6, width, "", Theme.dim)
+
+  local navAlignBtn = Theme.button(navPage, 1, height - 1, math.min(12, width), "SELF ALIGN",
+    function() actions.navSelfAlign() end)
+  backButton(navPage)
+
   -- ---------------------------------------------------------------- update
 
   local staleBanner = Theme.staleBanner(frame, 1, width)
@@ -613,6 +667,7 @@ function ConfigPanel.build(frame, opts)
     [tankPage] = Theme.line(tankPage, height - 3, width, "", Theme.dim),
   }
   local lastSeenAck = nil
+  local lastSeenNavAck = nil
 
   local function update(model)
     local t = model.telemetry or {}
@@ -628,6 +683,7 @@ function ConfigPanel.build(frame, opts)
     live.thrusterAxes = t.thrusterAxes or {}
     live.config = t.config or {}
     live.disk = t.disk or {}
+    live.nav = model.nav or {}
 
     for _, section in pairs(sections) do section.update() end
     refreshAxes()
@@ -701,6 +757,44 @@ function ConfigPanel.build(frame, opts)
       diskResult:setText(Theme.fit(text, width))
       diskResult:setForeground(ack.ack and Theme.ok or Theme.warning)
     end
+
+    -- ---- nav source section
+    local nav = live.nav or {}
+    local navCfg = nav.config or {}
+    -- The heading readout, and what it currently rests on -- the proof a source change took.
+    if type(nav.heading) == "number" and not nav.stale then
+      local d = math.floor(nav.heading + 0.5) % 360
+      if d == 0 then d = 360 end
+      local rests = (nav.headingSource == "navtable" and "true N")
+        or (nav.headingSource == "backup" and "backup")
+        or (nav.headingSource == "gimbal" and "rel") or ""
+      navHeading:setText(Theme.fit(("HDG %03d %s"):format(d, rests), width))
+      navHeading:setForeground(Theme.fg)
+    else
+      navHeading:setText(Theme.fit(nav.stale and "HDG -- nav stale"
+        or (nav.config and "HDG -- no fix" or "no nav link"), width))
+      navHeading:setForeground(nav.stale and Theme.warning or Theme.dim)
+    end
+
+    srcButton:setText(Theme.fit(tostring(navCfg.headingSource or "--"), navBtnW))
+    local tbl = navCfg.navTable
+    tblButton:setText((tbl == nil or tbl == "") and Theme.fit("auto", navBtnW)
+      or Theme.fitEnd(tostring(tbl), navBtnW))
+    navSignBtn:setText(("NAV %s"):format((navCfg.navSign or 1) < 0 and "-" or "+"))
+    gmbSignBtn:setText(("GMB %s"):format((navCfg.gimbalSign or 1) < 0 and "-" or "+"))
+
+    -- What the nav computer said about the last command sent to it -- its OWN ack, not the flight
+    -- one, so a nav refusal shows here rather than being lost.
+    local nack = opts.lastNavAck and opts.lastNavAck()
+    if nack ~= lastSeenNavAck then
+      lastSeenNavAck = nack
+      if nack then
+        local d = nack.detail or {}
+        navAckLine:setText(Theme.fit(nack.ack and tostring(d.detail or "ok")
+          or tostring(d.errorShort or d.error or "refused"), width))
+        navAckLine:setForeground(nack.ack and Theme.ok or Theme.warning)
+      end
+    end
   end
 
   return {
@@ -713,7 +807,7 @@ function ConfigPanel.build(frame, opts)
     pages = {
       home = home, engine = enginePage, times = timesPage, flight = flightPage,
       disk = diskPage, tank = tankPage, keys = keysPage,
-      axes = axesPage,
+      axes = axesPage, nav = navPage,
       lift = slotPages.lift, accel = slotPages.accel, lateral = slotPages.lateral,
       velocity = slotPages.velocity, attitude = slotPages.attitude,
       optical = slotPages.optical,
@@ -729,6 +823,9 @@ function ConfigPanel.build(frame, opts)
       ackTimes = ackLines[timesPage], ackFlight = ackLines[flightPage],
       ackTank = ackLines[tankPage],
       axesRows = axesRows, axesFooter = axesFooter,
+      navHeading = navHeading, navSrc = srcButton, navTable = tblButton,
+      navSign = navSignBtn, gmbSign = gmbSignBtn, navAck = navAckLine,
+      navAlign = navAlignBtn,
     },
   }
 end

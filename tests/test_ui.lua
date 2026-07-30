@@ -118,6 +118,11 @@ local function sent()
     selfTest = function(action) out[#out + 1] = { cmd = "selfTest", action = action } end,
     selfConfig = function(action) out[#out + 1] = { cmd = "selfConfig", action = action } end,
     dayNight = function() out[#out + 1] = { cmd = "dayNight" } end,
+    setHeadingSource = function(s) out[#out + 1] = { cmd = "setHeadingSource", source = s } end,
+    setNavTable = function(p) out[#out + 1] = { cmd = "setNavTable", peripheral = p } end,
+    setNavSign = function(s) out[#out + 1] = { cmd = "setNavSign", sign = s } end,
+    setGimbalSign = function(s) out[#out + 1] = { cmd = "setGimbalSign", sign = s } end,
+    navSelfAlign = function() out[#out + 1] = { cmd = "navSelfAlign" } end,
     vectorHold = function(action, id, axis, sign)
       out[#out + 1] = { cmd = "vectorHold", action = action, id = id, axis = axis, sign = sign }
     end,
@@ -469,10 +474,12 @@ T.suite("config panel")
 
 local configAck = nil
 
+local configNavAck = nil
 local function configRig(width, height)
   mock.reset()
   _G.peripheral = mock.install()
   configAck = nil
+  configNavAck = nil
   local cfg = UiConfig.withDefaults({})
   local monitor = mock.monitor(width or 15, height or 20)
   local frame = basalt.createFrame()
@@ -484,6 +491,7 @@ local function configRig(width, height)
     cfg = cfg, actions = actions, monitors = monitors, log = quietLog(),
     savePanels = function() saved.count = saved.count + 1 end,
     lastAck = function() return configAck end,
+    lastNavAck = function() return configNavAck end,
   })
   return panel, commands, cfg, saved
 end
@@ -523,7 +531,7 @@ end)
 T.it("offers every config section the craft has", function()
   local panel = configRig()
   local wanted = { "ENGINE", "LIMITS", "LIFT THR", "ACCEL THR", "LAT THR", "VELOCITY",
-                   "ALT+GIMBAL", "FUEL TANK", "OPTICAL", "THR AXES", "KEYS", "DISK" }
+                   "ALT+GIMBAL", "NAV SRC", "FUEL TANK", "OPTICAL", "THR AXES", "KEYS", "DISK" }
   for _, label in ipairs(wanted) do
     local found = false
     for _, entry in ipairs(panel.menu) do if entry.label == label then found = true end end
@@ -555,6 +563,67 @@ T.it("tapping a menu entry opens its page", function()
   click(menuRowFor(panel, "LIMITS"))
   T.isTrue(panel.pages.flight:getVisible(), "the limits page is up")
   T.isFalse(panel.pages.home:getVisible(), "and the menu is not")
+end)
+
+-- --------------------------------------------------------------- NAV source
+
+--- A model carrying the nav computer's broadcast config, as the link exposes it.
+local function navConfigModel(navConfig, tables, extra)
+  local m = model()
+  m.nav = { config = navConfig, navTables = tables or {} }
+  if extra then for k, v in pairs(extra) do m.nav[k] = v end end
+  return m
+end
+
+T.it("the NAV source page shows the nav computer's reported config", function()
+  local panel = configRig()
+  panel.update(navConfigModel(
+    { headingSource = "navtable", navTable = "navigation_table_0", navSign = 1, gimbalSign = -1 },
+    { "navigation_table_0", "navigation_table_1" },
+    { heading = 271, headingSource = "navtable" }))
+  T.eq(panel.elements.navSrc:getText(), "navtable", "source shown from the craft")
+  T.isTrue(panel.elements.navTable:getText():find("table_0") ~= nil,
+    "selected table shown: " .. panel.elements.navTable:getText())
+  T.eq(panel.elements.navSign:getText(), "NAV +", "nav sign +")
+  T.eq(panel.elements.gmbSign:getText(), "GMB -", "gimbal sign -")
+  T.isTrue(panel.elements.navHeading:getText():find("271") ~= nil, "heading readout")
+  T.isTrue(panel.elements.navHeading:getText():find("true N") ~= nil, "what it rests on")
+end)
+
+T.it("cycling SRC sends the next heading source", function()
+  local panel, commands = configRig()
+  panel.update(navConfigModel({ headingSource = "auto" }))
+  click(panel.elements.navSrc)
+  T.eq(commands[#commands].cmd, "setHeadingSource", "a nav command")
+  T.eq(commands[#commands].source, "navtable", "auto -> navtable")
+end)
+
+T.it("cycling TBL steps through auto then the candidate tables", function()
+  local panel, commands = configRig()
+  panel.update(navConfigModel({ navTable = "" }, { "navigation_table_0", "navigation_table_1" }))
+  click(panel.elements.navTable)
+  T.eq(commands[#commands].cmd, "setNavTable")
+  T.eq(commands[#commands].peripheral, "navigation_table_0", "auto (\"\") -> the first table")
+end)
+
+T.it("the sign buttons flip to the opposite of what nav reports, and SELF ALIGN fires", function()
+  local panel, commands = configRig()
+  panel.update(navConfigModel({ navSign = 1, gimbalSign = 1 }))
+  click(panel.elements.navSign)
+  T.eq(commands[#commands].cmd, "setNavSign")
+  T.eq(commands[#commands].sign, -1, "nav sign flips to -1")
+  click(panel.elements.gmbSign)
+  T.eq(commands[#commands].sign, -1, "gimbal sign flips too")
+  click(panel.elements.navAlign)
+  T.eq(commands[#commands].cmd, "navSelfAlign", "SELF ALIGN fires the align command")
+end)
+
+T.it("the NAV page shows the nav computer's OWN refusal", function()
+  local panel = configRig()
+  configNavAck = { ack = false, cmd = "setHeadingSource", detail = { errorShort = "NO TABLE" } }
+  panel.update(navConfigModel({ headingSource = "navtable" }))
+  T.isTrue(panel.elements.navAck:getText():find("NO TABLE") ~= nil,
+    "the nav refusal is shown: " .. panel.elements.navAck:getText())
 end)
 
 T.it("the disk page reports what the craft sees", function()
