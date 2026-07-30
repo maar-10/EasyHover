@@ -922,45 +922,34 @@ T.it("does NOT abort for thrust that fades once the throttles are zeroed", funct
   fs.delete(path)
 end)
 
---- THE FALSE POSITIVE THE PILOT HIT. Engine off, nothing burning, and the sweep still said
---- "CUT THE ENGINE" -- with no way to comply, because the reading came from the flight computer
---- own command rather than from the engine.
----
---- `Thrusters:apply` runs every control cycle regardless of the engine master, so the altitude
---- loop keeps asking the lift thrusters for lift while the craft sits on the ground. getPower
---- read that back as about 0.2 and the interlock called it thrust.
-T.it("ALLOWS the sweep on a parked craft whose throttles are commanded but unfuelled", function()
+--- The self test is a GROUND, ENGINE-OFF procedure, which is exactly the disarmed state. It must
+--- be permitted there. (This used to also assert that the mixer was holding a throttle with the
+--- engine off -- the old bug -- which the disarm removes: a disarmed controller does not steer,
+--- so there is no stray throttle to command in the first place.)
+T.it("ALLOWS the sweep on a parked, disarmed craft", function()
   local app, path = appRig(fullCraft())
-  app.engine.master = false
+  app.engine.master = false         -- disarmed
   app.state.mode = "GROUND"
-
-  -- no fuel is reaching anything: throttle holds, physics reads zero
   for _, entry in ipairs(app.per:thrusterList()) do
     if entry.dev.__setFuelled then entry.dev.__setFuelled(false) end
   end
-  -- let the control loop command lift, exactly as it does in game
   for _ = 1, 10 do app:cycle(0.05) end
-
-  local commanded = app.per.thrusters["lift_fl"].dev.getPower()
-  T.isTrue(commanded > 0.001,
-    "precondition: the mixer really is holding a throttle (" .. tostring(commanded) .. ")")
-  T.eq(app.per.thrusters["lift_fl"].dev.getCurrentThrustKN(), 0, "but nothing is firing")
+  T.eq(app.per.thrusters["lift_fl"].dev.getCurrentThrustKN(), 0, "nothing is firing")
 
   local ok, detail = app:handleCommand({ cmd = "selfTest", action = "start" })
   T.isTrue(ok, "permitted: " .. tostring((detail or {}).error))
   fs.delete(path)
 end)
 
-T.it("and takes those commanded throttles to zero once it owns the thrusters", function()
-  -- Otherwise the mixer last command stands for the whole 45 seconds, ready to become real
+T.it("takes any standing throttle to zero when the sweep starts", function()
+  -- However a nonzero throttle got onto the hardware, the sweep's allStop must clear it before it
+  -- owns the thrusters -- otherwise it would stand for the whole 45 seconds, ready to become real
   -- thrust the moment someone opens the fuel valve.
   local app, path = appRig(fullCraft())
   app.engine.master = false
   app.state.mode = "GROUND"
-  for _, entry in ipairs(app.per:thrusterList()) do
-    if entry.dev.__setFuelled then entry.dev.__setFuelled(false) end
-  end
-  for _ = 1, 10 do app:cycle(0.05) end
+  -- a stale throttle sitting on the hardware, set directly (the mixer no longer does this)
+  for _, entry in ipairs(app.per:thrusterList()) do entry.dev.setThrust(8) end
   T.isTrue(app.per.thrusters["lift_fl"].dev.getPower() > 0.001, "a throttle is standing")
 
   T.isTrue((app:handleCommand({ cmd = "selfTest", action = "start" })), "started")
@@ -1570,6 +1559,63 @@ T.it("a terminate inside the cycle stops the program", function()
 
   T.isFalse(ok, "the terminate left the loop instead of being logged and ignored")
   T.isTrue(tostring(err):find("Terminated") ~= nil, "and it is the terminate: " .. tostring(err))
+  fs.delete(path)
+end)
+
+--- THE TWITCHING NOZZLES. The mixer ran every cycle in every state, so on the ground with the
+--- engine off the attitude and altitude PIDs turned sensor noise into nozzle angles and wrote
+--- them -- a nozzle twitching continuously, others frozen at odd angles. Engine master off now
+--- means DISARMED: the controller holds neutral and does not steer.
+T.it("DISARMED: engine off holds neutral and does not run the mixer", function()
+  local app, path = appRig(fullCraft())
+  app.engine.master = false
+  mock.vehicle.groundDist = 12        -- even off the ground: engine off is engine off
+  local mixed, reset = 0, 0
+  local innerMix = app.mixer.mix
+  app.mixer.mix = function(...) mixed = mixed + 1; return innerMix(...) end
+  local innerReset = app.attitude.reset
+  app.attitude.reset = function(...) reset = reset + 1; return innerReset(...) end
+
+  for _ = 1, 10 do app:cycle(0.05) end
+
+  T.eq(mixed, 0, "the mixer never ran with the engine off")
+  T.isTrue(reset > 0, "and the loops were reset each cycle, so they cannot wind up")
+  local back = app.thrusters:readback()
+  T.near(back.lift_fl.targetX, 0, 1e-6, "the nozzle is held at neutral, not a PID angle")
+  T.eq(back.lift_fl.power or 0, 0, "and thrust is zero")
+  fs.delete(path)
+end)
+
+T.it("ARMED: engine on runs the closed loop", function()
+  local app, path = appRig(fullCraft())
+  app.engine.master = true            -- armed: the pilot intends to fly
+  mock.vehicle.groundDist = 12
+  app.modes.throttle = 0.6
+  local mixed = 0
+  local innerMix = app.mixer.mix
+  app.mixer.mix = function(...) mixed = mixed + 1; return innerMix(...) end
+  for _ = 1, 10 do app:cycle(0.05) end
+  T.isTrue(mixed > 0, "the mixer runs when armed")
+  fs.delete(path)
+end)
+
+T.it("the self test still runs on a disarmed craft -- it owns the thrusters", function()
+  local app, path = appRig(fullCraft())
+  app.engine.master = false           -- disarmed, and the self test requires exactly this
+  app.state.mode = "GROUND"
+  T.isTrue((app:handleCommand({ cmd = "selfTest", action = "start" })), "started")
+
+  local ticks, mixed = 0, 0
+  local it = app.selfTest.tick
+  app.selfTest.tick = function(sv, t) ticks = ticks + 1; return it(sv, t) end
+  local innerMix = app.mixer.mix
+  app.mixer.mix = function(...) mixed = mixed + 1; return innerMix(...) end
+
+  for _ = 1, 6 do app:cycle(0.05) end
+
+  T.isTrue(app.selfTest:isRunning(), "still running")
+  T.isTrue(ticks > 0, "the sweep is ticked (owner=selfTest, checked before disarmed)")
+  T.eq(mixed, 0, "and the mixer never runs while the sweep owns the thrusters")
   fs.delete(path)
 end)
 

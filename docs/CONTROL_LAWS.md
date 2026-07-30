@@ -633,3 +633,32 @@ jitter is suppressed — a change made by anything else writes immediately.
 > below, which silently handed `setThrust` a nozzle-grid fraction. Eleven tests caught it at once.
 > It is the exact class of fault this sweep was called to find, so it is worth recording that the
 > sweep produced one as well as finding them.
+
+---
+
+## DISARMED on the ground: the controller does not steer with the engine off
+
+The pilot's own diagnosis, and it was right: the mixer ran full PID **every cycle in every state**,
+so a craft parked with the engine off had its attitude and altitude loops turning sensor noise into
+nozzle angles and writing them. On the craft: **one nozzle twitching continuously, others frozen at
+odd angles.** And the integrators wound *up* against a vehicle that could not respond, so the
+instant the engine came on the controller would lunge.
+
+The arm signal is the engine master. Turning it on is the pilot saying "I intend to fly"; with it
+off the funnel is blocked and no thrust can be produced, so there is nothing to balance. So:
+
+> **`engine.master == false` ⇒ DISARMED.** Hold every nozzle at neutral, cut thrust, reset the
+> loops so they resume clean, and do not run the mixer at all.
+
+`allStop()` is cheap after the first cycle — the block already holds zero, so nothing is
+re-written (measured: **0 nozzle writes across 30 disarmed cycles**). The ownership check reports it
+directly, so the console now says which of the four it is doing:
+
+```
+cycle owner: disarmed  (state BRAKE)     <- parked, engine off: not steering
+cycle owner: selfTest  (state BRAKE)     <- a sweep has taken the thrusters
+cycle owner: mixer     (state FLIGHT)    <- armed and flying
+```
+
+The pre-flight sweep and the axis map are **unaffected**: they are owners *above* the disarm check
+(and both require the engine off anyway), so they still take exclusive control when running.

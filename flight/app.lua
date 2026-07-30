@@ -301,20 +301,28 @@ function App:cycle(dt)
   -- only the mixer produces -- the sweep does one group at a time) while handleCommand insists a
   -- sweep is running. Both cannot be true of the same object, and nothing so far distinguishes
   -- them. This line names the arm, from inside the branch, once per second.
-  local owner = self.axisMap:isHolding() and "axisMap"
+  --   axisMap / selfTest / identify  a tool has taken exclusive control (handled ABOVE the
+  --                                    DAMPED/FAILSAFE return, so it runs in any flight state)
+  --   disarmed                        engine master off: the pilot is not trying to fly, so the
+  --                                    controller must NOT steer
+  --   mixer                           normal closed-loop flight
+  local owner = (self.axisMap:isHolding() and "axisMap")
     or (self.selfTest:isRunning() and "selfTest")
     or (self.thrusters:isIdentifying() and "identify")
+    or ((not self.engine.master) and "disarmed")
     or "mixer"
-  if owner ~= "mixer" or self._lastOwner ~= owner then
-    if (now - (self._ownerLoggedAt or 0)) >= 1000 then
-      self._ownerLoggedAt = now
-      self.log:info("cycle owner: %s (state %s)", owner, tostring(state))
-    end
+  -- Log on every CHANGE (unmissable), and periodically while an owner other than the mixer holds.
+  if self._lastOwner ~= owner then
+    self.log:info("cycle owner: %s (state %s)", owner, tostring(state))
+    self._ownerLoggedAt = now
+  elseif owner ~= "mixer" and (now - (self._ownerLoggedAt or 0)) >= 3000 then
+    self.log:info("cycle owner: %s (state %s)", owner, tostring(state))
+    self._ownerLoggedAt = now
   end
   self._lastOwner = owner
 
   local activelyFlying = (state == "FLIGHT" or state == "HOVER" or state == "REVERSE")
-  if self.axisMap:isHolding() then
+  if owner == "axisMap" then
     if activelyFlying then
       self.axisMap:release("the craft is flying")
     else
@@ -322,7 +330,7 @@ function App:cycle(dt)
     end
     self:publish(measured, capability, dt, overrun)
     return state
-  elseif self.selfTest:isRunning() then
+  elseif owner == "selfTest" then
     -- Only ACTIVE flight aborts. DAMPED and FAILSAFE are not flight -- they are a craft whose
     -- sensors this test exists to help set up.
     if activelyFlying then
@@ -332,8 +340,25 @@ function App:cycle(dt)
     end
     self:publish(measured, capability, dt, overrun)
     return state
-  elseif self.thrusters:isIdentifying() then
+  elseif owner == "identify" then
     self.thrusters:tickIdentify()
+    self:publish(measured, capability, dt, overrun)
+    return state
+  elseif owner == "disarmed" then
+    -- DISARMED. The funnel is blocked and no thrust can be produced, so there is nothing to
+    -- balance -- yet the attitude and altitude PIDs still turn sensor noise into nozzle angles and
+    -- write them every cycle. On the craft that is a nozzle twitching continuously while parked,
+    -- others frozen at odd angles, and integrators winding UP against a vehicle that cannot
+    -- respond -- so the instant the engine came on, the controller would lunge.
+    --
+    -- Hold every nozzle at neutral, cut thrust, and reset the loops so they resume clean when
+    -- armed. allStop is cheap after the first cycle (the block already holds zero, so nothing is
+    -- re-written). The pre-flight sweep and the axis map are unaffected: they are owners above,
+    -- and both require the engine off anyway.
+    self.thrusters:allStop()
+    self.attitude:reset()
+    self.altitude:reset()
+    self.assist:reset()
     self:publish(measured, capability, dt, overrun)
     return state
   end

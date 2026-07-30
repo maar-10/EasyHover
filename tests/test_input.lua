@@ -316,6 +316,7 @@ T.it("a full-throttle cycle commands the main thrusters and lift together", func
   local app = App.new({ configPath = path })
   app:boot()
   -- lift off the ground first, then open the throttle
+  app.engine.master = true          -- ARMED: the controller only steers when the pilot is flying
   mock.vehicle.groundDist = 12
   app.modes.throttle = 0.8
   for _ = 1, 20 do app:cycle(0.05) end
@@ -334,6 +335,7 @@ T.it("DAMPED hover neutralises the nozzles and holds thrust", function()
   Config.save(path, baseCfg())
   local app = App.new({ configPath = path })
   app:boot()
+  app.engine.master = true          -- ARMED, so the closed loop runs and can enter DAMPED
   mock.vehicle.groundDist = 12
   app.modes.throttle = 0.5
   for _ = 1, 10 do app:cycle(0.05) end
