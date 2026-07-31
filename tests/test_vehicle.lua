@@ -2462,11 +2462,11 @@ local function scRig(scOverrides)
         thrustAxis = "down", maxVector = 0.6 },
     } },
     selfConfig = require("lib.util").deepMerge({
-      hoverHeight = 1.0, maxCollective = 1.0,
-      -- Float gains for the tests: fast enough to converge quickly against the momentum sim, damped
-      -- enough not to oscillate. The in-game defaults (config.lua) are gentler.
-      hoverLearn = 1.2, heightP = 0.15, heightD = 0.4, maxCorrection = 0.5, collectiveRamp = 0.6,
-      settleMs = 250, settleSpeed = 0.08, probeMs = 500, counterMs = 250, floatSettleMs = 1500,
+      hoverHeight = 2.0, hoverTolerance = 0.6, maxCollective = 1.0,
+      -- Float gains for the tests: quick to converge against the momentum sim, damped enough not to
+      -- oscillate around the (close) target. The in-game defaults (config.lua) are gentler still.
+      approachSpeed = 0.5, approachGain = 0.6, hoverLearn = 0.6, velP = 0.35, maxCorrection = 0.35,
+      settleMs = 300, settleSpeed = 0.1, probeMs = 500, counterMs = 250, floatSettleMs = 1500,
       probeDeflection = 0.6, minResponse = 0.1, landRamp = 0.6, maxTiltDeg = 45,
     }, scOverrides or {}),
   })
@@ -2671,14 +2671,14 @@ end)
 --- altitude is instantaneous (no momentum), so this is unit-tested on regulateHeight directly.
 T.it("float regulation is velocity-damped: below target but rising fast eases the collective off", function()
   local r = scRig({ hoverHeight = 2.0, hoverTolerance = 0.5,
-    approachSpeed = 0.5, approachGain = 0.5, collectiveGain = 0.3 })
+    approachSpeed = 0.4, approachGain = 0.5, hoverLearn = 0.15, velP = 0.3, maxCorrection = 0.25 })
   local now = 100000
   r.sc:start({ engineOn = true, fuelled = true, onGround = true, velocityVector = "vector" },
     { now = now, altitude = 74.5 })
   r.sc.run.collective = 0.6
   r.sc.run.lastRegAt = now
   local before = r.sc.run.collective
-  -- 1 block up (below the 1.5 band bottom) but climbing at 1.5 m/s -- 3x the 0.5 approach speed.
+  -- 1 block up but climbing at 1.5 m/s -- far over the 0.4 approach speed, so it must ease off.
   r.sc:regulateHeight({ altitude = 74.5 + 1.0, velocity = { x = 0, y = 1.5, z = 0 } }, now + 100)
   T.isTrue(r.sc.run.collective < before,
     "eased off despite being below target: " .. before .. " -> " .. r.sc.run.collective)
@@ -2686,7 +2686,7 @@ end)
 
 T.it("float regulation still adds lift when below target and not yet climbing", function()
   local r = scRig({ hoverHeight = 2.0, hoverTolerance = 0.5,
-    approachSpeed = 0.5, approachGain = 0.5, collectiveGain = 0.3 })
+    approachSpeed = 0.4, approachGain = 0.5, hoverLearn = 0.15, velP = 0.3, maxCorrection = 0.25 })
   local now = 100000
   r.sc:start({ engineOn = true, fuelled = true, onGround = true, velocityVector = "vector" },
     { now = now, altitude = 74.5 })
@@ -2699,14 +2699,34 @@ T.it("float regulation still adds lift when below target and not yet climbing", 
     "adds lift to start rising: " .. before .. " -> " .. r.sc.run.collective)
 end)
 
+--- The reported LEAP: a DISTANT target (a 5-10 block hover, a long rope) must NOT slam the throttle
+--- to full and fling the craft into the rope. The capped approach speed means a far target is
+--- approached no harder than a near one. Contrast a 1-block gap with an 8-block gap: the collective
+--- move must be essentially the same, not 8x.
+T.it("a distant hover target does NOT over-drive the throttle (no rope-leaping)", function()
+  local function moveFor(gap)
+    local r = scRig({ hoverHeight = gap, hoverTolerance = 0.5,
+      approachSpeed = 0.4, approachGain = 0.5, hoverLearn = 0.3, velP = 0.3, maxCorrection = 0.25 })
+    local now = 100000
+    r.sc:start({ engineOn = true, fuelled = true, onGround = true, velocityVector = "vector" },
+      { now = now, altitude = 74.5 })
+    r.sc.run.lastRegAt = now
+    r.sc:regulateHeight({ altitude = 74.5, velocity = { x = 0, y = 0, z = 0 } }, now + 100)
+    return r.sc.run.collective
+  end
+  local near, far = moveFor(1.0), moveFor(8.0)
+  T.isTrue(math.abs(far - near) < 1e-9,
+    "8-block target commands the same gentle throttle as a 1-block one: " .. near .. " vs " .. far)
+end)
+
 --- THE FIX, end to end against a plant WITH momentum (a heavy craft, hover at 0.7 -- the reported
---- case): using the GENTLE in-game defaults, the float must GLIDE into the band and hold, never
---- overshooting high and slamming back to the ground (the reported limit cycle). Driven on
---- regulateHeight with a real double-integrator so the damping is actually exercised.
-T.it("float converges to the band and HOLDS in a momentum plant, no slam to the ground", function()
-  local r = scRig({ hoverHeight = 2.0, hoverTolerance = 0.6,
+--- case) and a DISTANT target (7 blocks, the reported 5-10 block hover): using the GENTLE in-game
+--- defaults, the float must GLIDE up and hold, never over-driving to full and leaping high, and
+--- never slamming back to the ground. Driven on regulateHeight with a real double-integrator.
+T.it("float converges to a distant target in a momentum plant, no leap and no slam", function()
+  local r = scRig({ hoverHeight = 7.0, hoverTolerance = 0.8,
     -- the shipping defaults, on purpose: this proves the config we ACTUALLY fly is stable
-    hoverLearn = 0.15, heightP = 0.06, heightD = 0.18, maxCorrection = 0.25 })
+    approachSpeed = 0.4, approachGain = 0.5, hoverLearn = 0.3, velP = 0.3, maxCorrection = 0.25 })
   local now = 100000
   r.sc:start({ engineOn = true, fuelled = true, onGround = true, velocityVector = "vector" },
     { now = now, altitude = 74.5 })
@@ -2714,7 +2734,7 @@ T.it("float converges to the band and HOLDS in a momentum plant, no slam to the 
   local alt, vy = 74.5, 0
   local hoverC, liftGain, drag, ground = 0.7, 10.0, 1.6, 74.5   -- heavy: needs 70% to hover
   local lifted, landedAfterLift, peak = false, false, 0
-  for _ = 1, 600 do                                             -- 60 s of float
+  for _ = 1, 1500 do                                            -- 150 s of float (distant target)
     now = now + 100
     r.sc.run.lastRegAt = now - 100
     r.sc:regulateHeight({ altitude = alt, velocity = { x = 0, y = vy, z = 0 } }, now)
@@ -2723,13 +2743,13 @@ T.it("float converges to the band and HOLDS in a momentum plant, no slam to the 
     alt = alt + vy * 0.1
     if alt <= ground then alt = ground; if vy < 0 then vy = 0 end end
     local h = alt - ground
-    if h > 1.0 then lifted = true end
-    if lifted then peak = math.max(peak, h); if h < 0.1 then landedAfterLift = true end end
+    if h > 3.0 then lifted = true end
+    if lifted then peak = math.max(peak, h); if h < 0.5 then landedAfterLift = true end end
   end
   local finalH = alt - ground
-  T.isTrue(finalH > 1.3 and finalH < 2.7, "settles near the 2.0 target, got " .. finalH)
+  T.isTrue(finalH > 6.0 and finalH < 8.0, "settles near the 7.0 target, got " .. finalH)
   T.isFalse(landedAfterLift, "never slams back onto the ground after lifting")
-  T.isTrue(peak < 3.6, "no runaway overshoot, peak " .. peak)
+  T.isTrue(peak < 8.5, "no leap past the target, peak " .. peak)
 end)
 
 T.it("after easing down into the band, the float settles and proceeds", function()

@@ -39,9 +39,9 @@
         },
         {
           ["dst"] = "flight/lib/config.lua",
-          ["size"] = 45862,
+          ["size"] = 46042,
           ["src"] = "flight/lib/config.lua",
-          ["sum"] = "e9b7f147",
+          ["sum"] = "6fb61a7c",
         },
         {
           ["dst"] = "flight/lib/control/altitude.lua",
@@ -105,9 +105,9 @@
         },
         {
           ["dst"] = "flight/lib/control/selfconfig.lua",
-          ["size"] = 30362,
+          ["size"] = 31547,
           ["src"] = "flight/lib/control/selfconfig.lua",
-          ["sum"] = "fc03f1d1",
+          ["sum"] = "901b4a87",
         },
         {
           ["dst"] = "flight/lib/control/selftest.lua",
@@ -624,5 +624,5 @@
     ["size"] = 36872,
     ["sum"] = "305c58ce",
   },
-  ["version"] = "bfac8a03",
+  ["version"] = "af317b21",
 }

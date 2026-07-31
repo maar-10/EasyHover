@@ -270,9 +270,16 @@ function SelfConfig:safetyBreach(ctx)
   -- NO height ceiling here, deliberately. Climbing above the target is not a fault on a roped
   -- craft -- the float REGULATES it back down (tickFloat), it does not abort. What IS dangerous is
   -- fast motion (a rope letting go), and that is caught by the speed cap below regardless of height.
-  local speed = speedOf(ctx and ctx.velocity)
-  if type(speed) == "number" and speed > (p.maxSpeed or 3.0) then
-    return ("SPEED %.1f"):format(speed), "RUNAWAY"
+  --
+  -- Except during LAND: cutting thrust to set the craft down is a deliberate descent, and a hull
+  -- dropping the last couple of blocks legitimately passes the cap on the way to the pad. Aborting
+  -- there would just leave the craft in the air. The tilt cap still applies -- a landing that TIPS
+  -- is a real fault -- but the speed cap is a float/probe guard, not a landing one.
+  if self.run and self.run.phase ~= "land" then
+    local speed = speedOf(ctx and ctx.velocity)
+    if type(speed) == "number" and speed > (p.maxSpeed or 3.0) then
+      return ("SPEED %.1f"):format(speed), "RUNAWAY"
+    end
   end
   return nil
 end
@@ -351,21 +358,24 @@ end
 --- probing deflects a lift nozzle, which tilts its thrust off vertical and bleeds lift, so over many
 --- nozzles the craft crept down until the front touched.
 ---
---- ANCHORED, not free-running. Earlier tries drove the collective purely from the height/velocity
---- error, so when the craft sat above the band the collective was cut with no lower bound and
---- COLLAPSED toward zero -- the craft slammed onto the ground, then had to rebuild the collective
---- from scratch (seconds of "it won't hold altitude", the reported behaviour). Instead:
+--- CASCADED and ANCHORED. Two failure modes had to be designed out at once:
 ---
----   hoverEstimate += hoverLearn * (target - h) * dt         -- a SLOW integral that learns the
----                                                              throttle this craft hovers at
----   correction   = clamp(heightP*(target-h) - heightD*vy,   -- a small, BOUNDED PD correction
----                        +/- maxCorrection)
----   collective   = hoverEstimate + correction
+---   * OVER-DRIVE on a distant target. Driving the throttle straight from the height error means a
+---     high target (a 5-10 block hover, a long rope) starts with a huge error and slams the collective
+---     to FULL in a second -- the craft leaps into the rope and thrashes. So the height error first
+---     becomes a CAPPED desired vertical speed: no matter how far below, the craft only ever tries to
+---     rise at approachSpeed. A far target and a near one approach at the same gentle pace.
+---   * COLLAPSE to the ground. Driving the collective purely from the error also let it fall with no
+---     lower bound when above the band, so the craft slammed down and rebuilt thrust from scratch. So
+---     the collective is ANCHORED at a slow integral estimate of the hover throttle, plus a small
+---     BOUNDED correction -- it settles at hover and cannot collapse or slam to full.
 ---
---- Because the correction is clamped, the collective can never wander far from the hover estimate --
---- it cannot collapse to the ground or slam to full. heightD*vy damps the approach so it settles
---- into the band instead of overshooting, and the slow integral means once hover is found it is
---- HELD rather than rediscovered every cycle.
+---   desiredVy = clamp(approachGain * (target - h), +/- approachSpeed)   -- gentle, capped approach
+---   vErr      = desiredVy - vy
+---   hoverEstimate += hoverLearn * vErr * dt     -- learns hover throttle from the BOUNDED vErr, so a
+---                                                  distant target cannot wind it up to full
+---   correction = clamp(velP * vErr, +/- maxCorrection)
+---   collective = hoverEstimate + correction
 ---
 --- Returns the height (or nil) and whether it is below / above the band, so callers can layer
 --- their own policy (float's WONT-LIFT dwell, settle's baseline gate) on top.
@@ -386,14 +396,18 @@ function SelfConfig:regulateHeight(ctx, now)
   local target = p.hoverHeight or 2.0
   local tol = p.hoverTolerance or 0.5
   local vy = (ctx and ctx.velocity and ctx.velocity.y) or 0
-  local errH = target - h
 
-  self.run.hoverEstimate = self.run.hoverEstimate or self.run.collective or 0
-  self.run.hoverEstimate = Util.clamp(self.run.hoverEstimate + (p.hoverLearn or 0.15) * errH * dt,
-    0, maxC)
+  -- Outer: height error -> a gentle, CAPPED desired vertical speed. The cap is what stops a distant
+  -- target from over-driving the throttle to full and leaping the craft into the rope.
+  local approach = p.approachSpeed or 0.4
+  local desiredVy = Util.clamp((p.approachGain or 0.5) * (target - h), -approach, approach)
+  local vErr = desiredVy - vy
 
-  local corr = Util.clamp((p.heightP or 0.06) * errH - (p.heightD or 0.18) * vy,
-    -(p.maxCorrection or 0.25), (p.maxCorrection or 0.25))
+  -- Inner: an anchored integral learns the hover throttle from the BOUNDED velocity error (so it can
+  -- never wind up to full on a big height gap), plus a small bounded proportional correction.
+  self.run.hoverEstimate = Util.clamp((self.run.hoverEstimate or self.run.collective or 0)
+    + (p.hoverLearn or 0.3) * vErr * dt, 0, maxC)
+  local corr = Util.clamp((p.velP or 0.3) * vErr, -(p.maxCorrection or 0.25), (p.maxCorrection or 0.25))
 
   self.run.collective = Util.clamp(self.run.hoverEstimate + corr, 0, maxC)
   return h, (h < target - tol), (h > target + tol)

@@ -371,13 +371,15 @@ function Config.defaults()
       -- lets it sit perfectly still), settle anyway after this long in the band so the run proceeds.
       floatSettleMs = 3000,
       baseCollective = 0.0,     -- lift collective the float ramp starts from
-      -- FLOAT HEIGHT CONTROL. Not a ramp at the band (overshoots on momentum and slams down) and not
-      -- a free-running loop (the collective collapses to the ground when above the band). ANCHORED:
-      -- a slow integral learns the hover throttle, and a small BOUNDED PD correction maneuvers around
-      -- it -- so the collective stays near hover and cannot collapse. See selfconfig.lua regulateHeight.
-      hoverLearn = 0.15,        -- how fast the hover-throttle estimate integrates the height error
-      heightP = 0.06,           -- correction per block of height error
-      heightD = 0.18,           -- correction per (m/s) of vertical speed -- the damping term
+      -- FLOAT HEIGHT CONTROL -- cascaded and anchored (see selfconfig.lua regulateHeight). The height
+      -- error becomes a CAPPED desired vertical speed (approachSpeed) so a distant target -- a high
+      -- hover, a long rope -- cannot slam the throttle to full and leap the craft into the rope; and
+      -- the collective is anchored at a slow hover-throttle estimate plus a small bounded correction
+      -- so it settles at hover and cannot collapse to the ground.
+      approachSpeed = 0.4,      -- m/s: the gentle vertical speed the float rises/sinks at (the cap)
+      approachGain = 0.5,       -- desired vertical speed per block of height error, before the cap
+      hoverLearn = 0.3,         -- how fast the hover-throttle estimate integrates the (bounded) vErr
+      velP = 0.3,               -- correction per (m/s) of vertical-speed error
       maxCorrection = 0.25,     -- hard cap on how far the correction may move the collective off hover
       collectiveRamp = 0.1,     -- open-loop fallback rate, used only when NO altimeter reading exists
       maxCollective = 1.0,      -- ramp all the way to FULL power to get off the ground if needed
