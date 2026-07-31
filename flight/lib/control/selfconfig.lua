@@ -346,39 +346,55 @@ function SelfConfig:heartbeat(now)
   end
 end
 
---- FLOAT: REGULATE the lift collective to hold the craft in a band around the hover height, then
---- settle. This is a controller, not a one-way ramp:
+--- Nudge the shared lift collective ONE tick toward the hover band. This is the height controller
+--- used both to get airborne (float) and to HOLD height across the long probe run (settle) -- a
+--- frozen collective was the bug: probing deflects a lift nozzle, which tilts its thrust off
+--- vertical and bleeds lift, so over many nozzles the craft crept down until the front touched.
 ---
----   * below the band  -> ramp collective UP, all the way to full power if that is what it takes
----     (getting airborne comes first; a thrust margin is a later concern);
----   * above the band  -> ramp collective DOWN. Climbing too high is NOT a fault on a roped craft,
----     so the answer is to ease off until it drops back, never to abort;
----   * inside the band -> trim gently against any residual vertical drift, and settle once the
----     craft is also slow (or has simply sat in the band long enough that quantised thrust will
----     not let it get any stiller).
+---   * below the band -> ramp collective UP;
+---   * above the band -> ramp collective DOWN (never a fault -- easing off always converges);
+---   * inside        -> trim the small amount that arrests the residual vertical drift.
 ---
---- WONT LIFT is declared only after HOLDING full power a while and STILL being below the band --
---- a liquid thruster ramps its thrust, so full power needs a moment to mean full thrust, and at
---- that point the answer is more thrust (fuel upgrades / more nozzles), not more time.
-function SelfConfig:tickFloat(ctx, now)
+--- Returns the height (or nil) and whether it is below / above the band, so callers can layer
+--- their own policy (float's WONT-LIFT dwell, settle's baseline gate) on top.
+function SelfConfig:regulateHeight(ctx, now)
   local p = self:params()
-  local dt = ((now - (self.run.lastFloatAt or now)) / 1000)
-  self.run.lastFloatAt = now
-
+  local dt = ((now - (self.run.lastRegAt or now)) / 1000)
+  self.run.lastRegAt = now
   local maxC = p.maxCollective or 1.0
   local step = (p.collectiveRamp or 0.1) * math.max(dt, 0)
   local target = p.hoverHeight or 2.0
   local tol = p.hoverTolerance or 0.5
   local h = self:height(ctx)
 
-  -- No height reading (no altimeter): fall back to a one-way ramp so a sensorless craft still tries
-  -- to rise, and can still conclude WONT LIFT. It just cannot regulate or leave the float on its own.
+  -- No height reading (no altimeter): treat as below so a sensorless craft still tries to rise.
   local below = (type(h) ~= "number") or (h < target - tol)
   local above = (type(h) == "number") and (h > target + tol)
 
   if below then
-    self.run.bandSince = nil
     self.run.collective = Util.clamp(self.run.collective + step, 0, maxC)
+  elseif above then
+    self.run.collective = Util.clamp(self.run.collective - step, 0, maxC)
+  else
+    local vy = (ctx and ctx.velocity and ctx.velocity.y) or 0
+    self.run.collective = Util.clamp(self.run.collective - Util.clamp(vy, -1, 1) * step, 0, maxC)
+  end
+  return h, below, above
+end
+
+--- FLOAT: get airborne and hold the hover band, then settle. Regulation is shared with settle
+--- (regulateHeight); float layers on the WONT-LIFT dwell and the transition into the probe run.
+---
+--- WONT LIFT is declared only after HOLDING full power a while and STILL being below the band --
+--- a liquid thruster ramps its thrust, so full power needs a moment to mean full thrust, and at
+--- that point the answer is more thrust (fuel upgrades / more nozzles), not more time.
+function SelfConfig:tickFloat(ctx, now)
+  local p = self:params()
+  local maxC = p.maxCollective or 1.0
+  local _, below, above = self:regulateHeight(ctx, now)
+
+  if below then
+    self.run.bandSince = nil
     if self.run.collective >= maxC then
       self.run.atMaxSince = self.run.atMaxSince or now
       if (now - self.run.atMaxSince) > (p.fullPowerDwellMs or 5000) then
@@ -389,13 +405,11 @@ function SelfConfig:tickFloat(ctx, now)
       self.run.atMaxSince = nil
     end
   elseif above then
-    -- Too high: throttle down toward the band. Reducing lift below the craft's weight lets it sink
-    -- back even if a rope is taut, so this always converges. Never a WONT LIFT / abort case.
     self.run.bandSince = nil
     self.run.atMaxSince = nil
-    self.run.collective = Util.clamp(self.run.collective - step, 0, maxC)
   else
-    -- In the band. Settle once slow, or once we have held the band long enough.
+    -- In the band. Settle once slow, or once we have held the band long enough (quantised thrust
+    -- never lets it sit perfectly still).
     self.run.atMaxSince = nil
     self.run.bandSince = self.run.bandSince or now
     local vy = (ctx and ctx.velocity and ctx.velocity.y) or 0
@@ -406,20 +420,26 @@ function SelfConfig:tickFloat(ctx, now)
       self:enter("settle", now)
       return
     end
-    -- Not settled yet: nudge collective the small amount that arrests the residual vertical drift.
-    self.run.collective = Util.clamp(self.run.collective - Util.clamp(vy, -1, 1) * step, 0, maxC)
   end
 
   self:holdFloat()
 end
 
---- SETTLE: hold the float (with the probed thruster firing centred, so its steady thrust is part
---- of the baseline) until the craft-frame speed falls below the settle threshold, then record the
---- baseline velocity and begin the probe.
+--- SETTLE: re-establish the hover height (the probe run bleeds a little lift each cycle, so the
+--- craft must be flown back UP to the band before every nozzle, or it creeps down onto the ground),
+--- then wait for the craft-frame speed to fall below the settle threshold and record the baseline.
+---
+--- The baseline is only taken once the craft is BOTH back at height AND slow. A craft that cannot
+--- regain height within the settle window -- sinking, out of thrust -- must NOT silently probe from
+--- the ground (that reads garbage); it aborts with LOST HEIGHT instead, which is the abort the
+--- pilot expected when the front touched down.
 function SelfConfig:tickSettle(ctx, now)
   local p = self:params()
   local target = self.run.targets[self.run.index]
   if not target then self:enter("land", now); return end
+
+  -- Hold height across the run: climb back if the last probe cycle let the craft sink.
+  local h = self:regulateHeight(ctx, now)
 
   -- Ensure the probed thruster is firing at its probe thrust with a CENTRED nozzle. For a lift
   -- thruster that is just the float; for a lateral/main it spins the thruster up so the coming
@@ -429,13 +449,21 @@ function SelfConfig:tickSettle(ctx, now)
   self.thrusters:setThrustRaw(target.id, probeThrust)
   self.thrusters:setVectorRaw(target.id, 0, 0)
 
+  local hoverH = p.hoverHeight or 2.0
+  local tol = p.hoverTolerance or 0.5
+  local atHeight = (type(h) ~= "number") or (h >= hoverH - tol)
   local speed = speedOf(ctx and ctx.velocity)
   local settled = type(speed) == "number" and speed <= (p.settleSpeed or 0.1)
   local waited = (now - self.run.phaseSince) >= (p.settleMs or 2000)
-  if settled or waited then
+
+  if atHeight and (settled or waited) then
     self.run.baseline = self:velCopy(ctx and ctx.velocity)
     self.run.peak = nil
+    self.run.probeGrounded = false     -- track whether THIS probe ever touches the ground
     self:enter("probe", now)
+  elseif not atHeight and waited then
+    -- Had the whole settle window and still cannot get back to height: stop rather than probe low.
+    self:abort("aborted: lost height mid-run and could not climb back", "LOST HEIGHT")
   end
 end
 
@@ -465,6 +493,11 @@ function SelfConfig:tickProbe(ctx, now)
   local ny = (self.run.axisStep == 2) and value or 0
   self.thrusters:setVectorRaw(target.id, nx, ny)
 
+  -- If the craft is on the ground during the probe, the ground arrests the very motion we are
+  -- trying to measure -- so the reading understates (or misses) the response. Remember it, so the
+  -- finding can be flagged low-confidence rather than trusted like a clean airborne probe.
+  if ctx and ctx.groundContact == true then self.run.probeGrounded = true end
+
   -- Track the peak velocity delta on the two plane axes.
   local base = self.run.baseline or { x = 0, y = 0, z = 0 }
   local vel = self:velCopy(ctx and ctx.velocity)
@@ -490,7 +523,9 @@ function SelfConfig:recordProbe(target, ctx)
 
   local m1, m2 = math.abs(peak.d1), math.abs(peak.d2)
   local response = math.sqrt(m1 * m1 + m2 * m2)
-  local finding = { nozzleAxis = nozzleAxis, response = response }
+  -- Probed while touching the ground: the reading cannot be trusted like a clean airborne one.
+  local grounded = self.run.probeGrounded and true or false
+  local finding = { nozzleAxis = nozzleAxis, response = response, grounded = grounded }
 
   if response < (p.minResponse or 0.15) then
     -- Nothing moved enough to trust. Leave the mapping alone for this axis; the pilot is told.
@@ -507,16 +542,19 @@ function SelfConfig:recordProbe(target, ctx)
     finding.craftSign = craftSign
     -- Two comparable axes means a diagonal mounting the one-axis-per-nozzle model cannot represent
     -- cleanly. Record it so the proposal can flag low confidence rather than commit a coin toss.
-    finding.ambiguous = (dominant > 0) and (other / dominant) > (p.ambiguityRatio or 0.5)
+    -- A grounded probe is likewise untrustworthy, so it too counts as weak.
+    finding.ambiguous = grounded
+      or ((dominant > 0) and (other / dominant) > (p.ambiguityRatio or 0.5))
   end
 
   self.run.findings[target.id] = self.run.findings[target.id] or {}
   self.run.findings[target.id][nozzleAxis] = finding
-  self.log:info("self config: %s nozzle %s -> %s", target.id, nozzleAxis,
+  self.log:info("self config: %s nozzle %s -> %s%s", target.id, nozzleAxis,
     finding.result == "ok"
       and ("%s%s%s"):format(finding.craftSign > 0 and "+" or "-", tostring(finding.craftAxis),
         finding.ambiguous and " (weak)" or "")
-      or "no response")
+      or "no response",
+    grounded and " [grounded]" or "")
 end
 
 --- COUNTER: deflect the opposite way briefly to cancel the velocity the probe built up, so the

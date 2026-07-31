@@ -2521,4 +2521,38 @@ T.it("after easing down into the band, the float settles and proceeds", function
   T.eq(r.sc.run.phase, "settle", "in the band and slow -> settles and moves on")
 end)
 
+--- The probe run bleeds a little lift each cycle (a deflected lift nozzle tilts its thrust off
+--- vertical), so the craft must be flown back up to height before every nozzle. If it CANNOT climb
+--- back -- the reported symptom, the front touching down late in the run -- it must abort rather
+--- than silently probe from the ground.
+T.it("aborts LOST HEIGHT if it sinks mid-run and cannot climb back", function()
+  local r = scRig()
+  runBip(r.sc, r.per, function(ctx)
+    -- Once past the float, jam the altitude to the ground so no amount of collective regains height.
+    if r.sc.run and r.sc.run.phase ~= "float" then ctx.altitude = 74.5 end
+  end)
+  T.isFalse(r.sc:isRunning(), "the run stopped")
+  T.eq(r.sc.lastRun.abortedShort, "LOST HEIGHT", "and says it lost height")
+  T.isTrue(r.sc:pendingProposal() == nil, "an aborted run proposes nothing")
+end)
+
+--- A nozzle measured while the craft is touching down reads a suppressed response (the ground
+--- arrests the motion), so the run must FLAG it low-confidence rather than trust it -- this is why
+--- the reported ground-touch could have compromised the late nozzles' proposed mappings.
+T.it("flags a nozzle probed while touching the ground as low confidence", function()
+  local r = scRig()
+  runBip(r.sc, r.per, function(ctx)
+    if r.sc.run and r.sc.run.phase == "probe" then ctx.groundContact = true end
+  end)
+  T.isFalse(r.sc:isRunning(), "the run completed")
+  local proposal = r.sc:pendingProposal()
+  T.isTrue(type(proposal) == "table", "a proposal was still produced")
+  local checked = 0
+  for id, entry in pairs(proposal) do
+    T.eq(entry.confidence, "low", id .. " probed on the ground must be low confidence")
+    checked = checked + 1
+  end
+  T.isTrue(checked > 0, "at least one mapping was proposed and checked")
+end)
+
 return true
