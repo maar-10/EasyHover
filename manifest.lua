@@ -27,9 +27,9 @@
       ["files"] = {
         {
           ["dst"] = "flight/app.lua",
-          ["size"] = 54816,
+          ["size"] = 56343,
           ["src"] = "flight/app.lua",
-          ["sum"] = "32a36ea2",
+          ["sum"] = "bbdfc4d9",
         },
         {
           ["dst"] = "flight/diskmenu.lua",
@@ -165,9 +165,9 @@
         },
         {
           ["dst"] = "flight/lib/io/sensors.lua",
-          ["size"] = 11419,
+          ["size"] = 11831,
           ["src"] = "flight/lib/io/sensors.lua",
-          ["sum"] = "ded02a78",
+          ["sum"] = "3f713a3c",
         },
         {
           ["dst"] = "flight/lib/io/thrusters.lua",
@@ -624,5 +624,5 @@
     ["size"] = 36872,
     ["sum"] = "305c58ce",
   },
-  ["version"] = "d2cb4347",
+  ["version"] = "599cf29b",
 }

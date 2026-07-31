@@ -310,16 +310,35 @@ function App:cycle(dt)
   -- only the mixer produces -- the sweep does one group at a time) while handleCommand insists a
   -- sweep is running. Both cannot be true of the same object, and nothing so far distinguishes
   -- them. This line names the arm, from inside the branch, once per second.
-  --   axisMap / selfTest / identify  a tool has taken exclusive control (handled ABOVE the
-  --                                    DAMPED/FAILSAFE return, so it runs in any flight state)
-  --   disarmed                        engine master off: the pilot is not trying to fly, so the
-  --                                    controller must NOT steer
-  --   mixer                           normal closed-loop flight
+  --   axisMap / selfTest / selfConfig / identify   a tool has taken exclusive control (handled
+  --                                    ABOVE the DAMPED/FAILSAFE return, so it runs in any state)
+  --   disarmed                        NOT FLYING: engine off, or on the ground and not commanded to
+  --                                    take off. The controller must not steer, and NOTHING fires.
+  --   mixer                           the real closed-loop flight controller (the PID) -- runs ONLY
+  --                                    when actually flying
+  --
+  -- WHEN MAY THE MIXER RUN? Only when the craft is ACTUALLY FLYING. Engine ON is NOT flying:
+  -- starting the pump so the thrusters CAN make thrust is a separate act from committing to flight.
+  -- Before this, the owner fell straight from "engine on" to "mixer", so the PID began steering a
+  -- parked craft the instant the engine started -- thrusters firing on the pad with no takeoff ever
+  -- commanded. Now the craft is DISARMED (neutral nozzles, zero thrust, loops reset, nothing fires)
+  -- unless the engine is on AND either it is POSITIVELY airborne (the down laser says it is off the
+  -- ground) OR the pilot is giving a climb input (a deliberate takeoff). On the ground with no climb
+  -- command, the mixer never runs and no thruster fires.
+  --
+  -- POSITIVE evidence only, and from the RAW channel. `ground.contact` is true | false | nil, where
+  -- false means the laser SAYS we are off the ground and nil means no/unassigned laser -> UNKNOWN.
+  -- The local `measured.groundContact` above coerces nil -> false, so it CANNOT be used here: it
+  -- would read a missing laser as "airborne" and fire on the pad. A craft that cannot see the ground
+  -- stays disarmed until a climb input rather than being assumed in flight.
+  local flightInput = (axes.climb or 0) > 0.02
+  local flying = self.engine.master
+    and ((self.state:get("ground.contact") == false) or flightInput)
   local owner = (self.axisMap:isHolding() and "axisMap")
     or (self.selfTest:isRunning() and "selfTest")
     or (self.selfConfig:isRunning() and "selfConfig")
     or (self.thrusters:isIdentifying() and "identify")
-    or ((not self.engine.master) and "disarmed")
+    or ((not flying) and "disarmed")
     or "mixer"
   -- Log on every CHANGE (unmissable), and a slow heartbeat while a non-mixer owner holds so the
   -- console proves the loop is alive without burying everything else. 3 s filled the screen in half

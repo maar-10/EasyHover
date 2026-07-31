@@ -286,7 +286,14 @@ function Sensors:read(dt)
   -- re-check actual thrust before doing anything anyway.
   local sc = self.cfg.sensors
   local groundDist = rays[1] and rays[1].distance or nil
-  local contact = (groundDist ~= nil) and (groundDist <= (sc.groundContactDist or 2.0)) or false
+  -- nil, NOT false, when there is no down laser reading: "unknown", not "airborne". The arming
+  -- logic (App:cycle) treats an unknown ground state as grounded and keeps the craft disarmed, so a
+  -- missing or unassigned radar altimeter can never be misread as "in flight" and left to fire the
+  -- thrusters on the pad. true = on the ground, false = the laser positively says we are off it.
+  local contact = nil
+  if groundDist ~= nil then
+    contact = groundDist <= (sc.groundContactDist or 2.0)
+  end
   self.state:set("ground.contact", contact, now)
   result.groundContact = contact
 

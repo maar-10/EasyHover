@@ -960,6 +960,53 @@ T.it("ALLOWS the sweep on a parked, disarmed craft", function()
   fs.delete(path)
 end)
 
+--- THE ENGINE-ON-IS-NOT-FLYING RULE. Starting the pump so the thrusters CAN fire must not, on its
+--- own, hand the craft to the mixer -- the PID would then steer a parked craft and fire thrusters on
+--- the pad with no takeoff ever commanded. The craft stays DISARMED until it is positively airborne
+--- or the pilot gives a climb input.
+local function noPilotInput(app)
+  -- The test rig's mock controller feeds a live oscillating stick, so silence the pilot to isolate
+  -- the arming logic: nobody is touching the controls.
+  app.pilot.read = function() return { pitch = 0, roll = 0, yaw = 0, climb = 0, accel = 0 }, {}, {} end
+end
+
+T.it("engine ON but landed and hands-off stays DISARMED -- nothing fires on the pad", function()
+  local app, path = appRig(fullCraft())
+  noPilotInput(app)
+  mock.vehicle.groundDist = 1.0             -- landed: ~1 block under the down laser
+  app.engine.master = true                  -- engine started (pump running) -- NOT a takeoff
+  for _ = 1, 20 do app:cycle(0.05) end
+  T.eq(app._lastOwner, "disarmed",
+    "landed + engine on + hands-off = disarmed, not mixer")
+  for _, entry in ipairs(app.per:thrusterList()) do
+    T.eq(entry.dev.getCurrentThrustKN(), 0, tostring(entry.id) .. " is not firing on the ground")
+  end
+  fs.delete(path)
+end)
+
+--- A positively-airborne craft with the engine on IS the mixer's to fly -- otherwise it could never
+--- hold itself up. Proved with NO pilot input, so the airborne evidence alone is what arms it.
+T.it("positively airborne with the engine on hands control to the mixer", function()
+  local app, path = appRig(fullCraft())
+  noPilotInput(app)
+  mock.vehicle.groundDist = 10.0            -- well off the ground: the laser reads airborne
+  app.engine.master = true
+  for _ = 1, 5 do app:cycle(0.05) end
+  T.eq(app._lastOwner, "mixer", "airborne + engine on = the mixer flies it, even hands-off")
+  fs.delete(path)
+end)
+
+--- Takeoff: on the ground, a climb input is what commits to flight and hands the mixer control.
+T.it("a climb input on the ground arms the mixer -- that is the takeoff", function()
+  local app, path = appRig(fullCraft())
+  mock.vehicle.groundDist = 1.0                                  -- on the ground
+  app.pilot.read = function() return { climb = 1 }, {}, {} end   -- pilot pulls up
+  app.engine.master = true
+  for _ = 1, 5 do app:cycle(0.05) end
+  T.eq(app._lastOwner, "mixer", "pulling up on the ground with the engine on takes off")
+  fs.delete(path)
+end)
+
 T.it("takes any standing throttle to zero when the sweep starts", function()
   -- However a nonzero throttle got onto the hardware, the sweep's allStop must clear it before it
   -- owns the thrusters -- otherwise it would stand for the whole 45 seconds, ready to become real
