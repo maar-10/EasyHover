@@ -267,10 +267,9 @@ function SelfConfig:safetyBreach(ctx)
       return ("ROLL %d deg"):format(math.floor(math.abs(att.roll))), "OVER TILT"
     end
   end
-  local h = self:height(ctx)
-  if type(h) == "number" and h > (p.heightCeiling or 4.0) then
-    return ("HEIGHT %.1f"):format(h), "TOO HIGH"
-  end
+  -- NO height ceiling here, deliberately. Climbing above the target is not a fault on a roped
+  -- craft -- the float REGULATES it back down (tickFloat), it does not abort. What IS dangerous is
+  -- fast motion (a rope letting go), and that is caught by the speed cap below regardless of height.
   local speed = speedOf(ctx and ctx.velocity)
   if type(speed) == "number" and speed > (p.maxSpeed or 3.0) then
     return ("SPEED %.1f"):format(speed), "RUNAWAY"
@@ -347,44 +346,71 @@ function SelfConfig:heartbeat(now)
   end
 end
 
---- FLOAT: raise the lift collective until the craft rises to the hover height, THEN settle. The
---- craft is roped, so it rises to the rope's limit (set the ropes to ~hoverHeight) and settles
---- there. Ramp all the way to FULL power if that is what it takes -- getting airborne comes first;
---- a comfortable thrust margin is a later concern. Give up only after holding full power a while and
---- still sitting on the ground, because at that point the answer is more thrust, not more time.
+--- FLOAT: REGULATE the lift collective to hold the craft in a band around the hover height, then
+--- settle. This is a controller, not a one-way ramp:
+---
+---   * below the band  -> ramp collective UP, all the way to full power if that is what it takes
+---     (getting airborne comes first; a thrust margin is a later concern);
+---   * above the band  -> ramp collective DOWN. Climbing too high is NOT a fault on a roped craft,
+---     so the answer is to ease off until it drops back, never to abort;
+---   * inside the band -> trim gently against any residual vertical drift, and settle once the
+---     craft is also slow (or has simply sat in the band long enough that quantised thrust will
+---     not let it get any stiller).
+---
+--- WONT LIFT is declared only after HOLDING full power a while and STILL being below the band --
+--- a liquid thruster ramps its thrust, so full power needs a moment to mean full thrust, and at
+--- that point the answer is more thrust (fuel upgrades / more nozzles), not more time.
 function SelfConfig:tickFloat(ctx, now)
   local p = self:params()
   local dt = ((now - (self.run.lastFloatAt or now)) / 1000)
   self.run.lastFloatAt = now
 
-  local h = self:height(ctx)
-  local target = p.hoverHeight or 2.0
-  if type(h) == "number" and h >= target then
-    -- Airborne to the target height. Hold this collective (the ropes hold the height) and settle
-    -- before the first probe. This is the ONLY way out of the float toward the actual config loop.
-    self:holdFloat()
-    self:enter("settle", now)
-    return
-  end
-
-  -- Not up yet: keep ramping, all the way to full power if needed.
   local maxC = p.maxCollective or 1.0
-  self.run.collective = Util.clamp(self.run.collective + (p.collectiveRamp or 0.1) * math.max(dt, 0),
-    0, maxC)
-  self:holdFloat()
+  local step = (p.collectiveRamp or 0.1) * math.max(dt, 0)
+  local target = p.hoverHeight or 2.0
+  local tol = p.hoverTolerance or 0.5
+  local h = self:height(ctx)
 
-  -- WONT LIFT is declared ONLY at full power, and only after holding it -- a liquid thruster ramps
-  -- its thrust, so full power needs a moment to mean full thrust. Below full power we are still
-  -- climbing the throttle and must not give up. The safety envelope (tilt/height/runaway), checked
-  -- every tick before this, is what aborts a crash or a rope letting go.
-  if self.run.collective >= maxC then
-    self.run.atMaxSince = self.run.atMaxSince or now
-    if (now - self.run.atMaxSince) > (p.fullPowerDwellMs or 5000) then
-      self:abort("aborted: full thrust and still on the ground", "WONT LIFT")
+  -- No height reading (no altimeter): fall back to a one-way ramp so a sensorless craft still tries
+  -- to rise, and can still conclude WONT LIFT. It just cannot regulate or leave the float on its own.
+  local below = (type(h) ~= "number") or (h < target - tol)
+  local above = (type(h) == "number") and (h > target + tol)
+
+  if below then
+    self.run.bandSince = nil
+    self.run.collective = Util.clamp(self.run.collective + step, 0, maxC)
+    if self.run.collective >= maxC then
+      self.run.atMaxSince = self.run.atMaxSince or now
+      if (now - self.run.atMaxSince) > (p.fullPowerDwellMs or 5000) then
+        self:abort("aborted: full thrust and still on the ground", "WONT LIFT")
+        return
+      end
+    else
+      self.run.atMaxSince = nil
     end
-  else
+  elseif above then
+    -- Too high: throttle down toward the band. Reducing lift below the craft's weight lets it sink
+    -- back even if a rope is taut, so this always converges. Never a WONT LIFT / abort case.
+    self.run.bandSince = nil
     self.run.atMaxSince = nil
+    self.run.collective = Util.clamp(self.run.collective - step, 0, maxC)
+  else
+    -- In the band. Settle once slow, or once we have held the band long enough.
+    self.run.atMaxSince = nil
+    self.run.bandSince = self.run.bandSince or now
+    local vy = (ctx and ctx.velocity and ctx.velocity.y) or 0
+    local slow = math.abs(vy) <= (p.settleSpeed or 0.1)
+    local waited = (now - self.run.bandSince) >= (p.floatSettleMs or 3000)
+    if slow or waited then
+      self:holdFloat()
+      self:enter("settle", now)
+      return
+    end
+    -- Not settled yet: nudge collective the small amount that arrests the residual vertical drift.
+    self.run.collective = Util.clamp(self.run.collective - Util.clamp(vy, -1, 1) * step, 0, maxC)
   end
+
+  self:holdFloat()
 end
 
 --- SETTLE: hold the float (with the probed thruster firing centred, so its steady thrust is part

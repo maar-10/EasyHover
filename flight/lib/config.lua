@@ -350,10 +350,16 @@ function Config.defaults()
     -- tuning is an edit, not a code change. The safety caps are deliberately conservative.
     selfConfig = {
       hoverHeight = 2.0,        -- blocks above the ground to float to before probing (rope-limited)
+      -- Half-width of the height band the float regulates to. Reaching hoverHeight +/- this counts
+      -- as "at height"; above it the float THROTTLES DOWN rather than aborting -- climbing too high
+      -- is never dangerous on a roped craft, so easing off is the right response, not stopping.
+      hoverTolerance = 0.5,
       landedHeight = 0.4,       -- back below this counts as landed
-      heightCeiling = 5.0,      -- ABORT if the craft climbs past this above the reference
+      -- Fallback: if the craft reaches the band but never stops bobbing (quantised thrust never
+      -- lets it sit perfectly still), settle anyway after this long in the band so the run proceeds.
+      floatSettleMs = 3000,
       baseCollective = 0.0,     -- lift collective the float ramp starts from
-      collectiveRamp = 0.1,     -- collective added per second while seeking the float
+      collectiveRamp = 0.1,     -- collective added/shed per second while regulating the float height
       maxCollective = 1.0,      -- ramp all the way to FULL power to get off the ground if needed
       landRamp = 0.15,          -- collective shed per second while landing
       -- WONT LIFT is declared only after holding FULL power this long and still being on the ground:

@@ -2480,4 +2480,45 @@ T.it("float ramps to full power and only declares WONT LIFT after holding it", f
   T.eq(r.sc.lastRun.abortedShort, "WONT LIFT", "and says why")
 end)
 
+--- Climbing above the target is not a fault on a roped craft: the float must THROTTLE DOWN toward
+--- the band, never abort. This is the reported bug -- an overshoot tripped a "TOO HIGH" abort.
+T.it("float throttles DOWN when too high, and never aborts for it", function()
+  local r = scRig({ hoverHeight = 2.0, hoverTolerance = 0.5, collectiveRamp = 0.5,
+    maxCollective = 1.0 })
+  local now = 100000
+  r.sc:start({ engineOn = true, fuelled = true, onGround = true, velocityVector = "vector" },
+    { now = now, altitude = 74.5 })
+  r.sc.run.collective = 0.9                            -- came up too hard
+  local before = r.sc.run.collective
+  local function tickHigh()                            -- 6 blocks up: above even the OLD 5.0 ceiling
+    now = now + 100
+    r.sc:tick({ now = now, altitude = 74.5 + 6.0, attitude = { pitch = 0, roll = 0 },
+      velocity = { x = 0, y = 0, z = 0 }, engineOn = true })
+  end
+  for _ = 1, 8 do tickHigh() end
+  T.isTrue(r.sc:isRunning(), "still running -- too high is not an abort, even past the old ceiling")
+  T.eq(r.sc.run.phase, "float", "still floating, neither settled nor aborted")
+  T.isTrue(r.sc.run.collective < before, "and it eased the throttle down: "
+    .. before .. " -> " .. r.sc.run.collective)
+end)
+
+T.it("after easing down into the band, the float settles and proceeds", function()
+  local r = scRig({ hoverHeight = 2.0, hoverTolerance = 0.5 })
+  local now = 100000
+  r.sc:start({ engineOn = true, fuelled = true, onGround = true, velocityVector = "vector" },
+    { now = now, altitude = 74.5 })
+  r.sc.run.collective = 0.9
+  for _ = 1, 3 do                                      -- too high for a few ticks
+    now = now + 100
+    r.sc:tick({ now = now, altitude = 74.5 + 4.0, attitude = { pitch = 0, roll = 0 },
+      velocity = { x = 0, y = 0, z = 0 }, engineOn = true })
+  end
+  T.eq(r.sc.run.phase, "float", "still regulating while too high")
+
+  now = now + 100                                       -- now in the band (2.0) and slow
+  r.sc:tick({ now = now, altitude = 74.5 + 2.0, attitude = { pitch = 0, roll = 0 },
+    velocity = { x = 0, y = 0, z = 0 }, engineOn = true })
+  T.eq(r.sc.run.phase, "settle", "in the band and slow -> settles and moves on")
+end)
+
 return true
