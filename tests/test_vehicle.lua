@@ -1033,6 +1033,27 @@ T.it("the flightArm command engages and disengages flight control", function()
   fs.delete(path)
 end)
 
+--- THE CRASH: App:cycle built the BIP's context as if `measured` were the nested sensors:read
+--- result (measured.altitude.baro, measured.attitude, measured.velocity), but the cycle's local
+--- `measured` is FLAT -- altitude is the baro NUMBER -- so `measured.altitude.baro` indexed a number
+--- and threw every cycle, on any craft with an altitude sensor. It killed the whole loop: telemetry
+--- stopped, the run never ticked, and the panel just said ALREADY RUNNING. The unit tests missed it
+--- because they call SelfConfig:tick directly; only driving it through App:cycle catches it.
+T.it("App:cycle drives a running SELF CONFIG without crashing on the real measured shape", function()
+  local app, path = appRig(fullCraft())      -- an altitude sensor auto-assigns -> measured.altitude
+  app.engine.master = true                   -- is a NUMBER, which is what made the old code throw
+  mock.vehicle.groundDist = 1.0
+  local started = app.selfConfig:start({ engineOn = true, fuelled = true, onGround = true,
+    velocityVector = "vector" }, { now = os.epoch("utc"), altitude = 74.5 })
+  T.isTrue(started, "the BIP started")
+
+  for _ = 1, 10 do app:cycle(0.05) end        -- would have thrown at app.lua:388 before the fix
+
+  T.eq(app._lastOwner, "selfConfig", "the cycle handed control to the BIP")
+  T.isTrue(app.selfConfig:isRunning(), "and it is still running -- no cycle error killed it")
+  fs.delete(path)
+end)
+
 T.it("takes any standing throttle to zero when the sweep starts", function()
   -- However a nonzero throttle got onto the hardware, the sweep's allStop must clear it before it
   -- owns the thrusters -- otherwise it would stand for the whole 45 seconds, ready to become real

@@ -381,11 +381,18 @@ function App:cycle(dt)
     -- the self test: its own safety envelope (tilt, height, runaway speed, engine-off) is what stops
     -- it, checked inside tick every cycle. It owns thrust AND nozzles at the raw level, which is why
     -- it must run above the mixer -- two writers on the same nozzles is the one thing to never do.
+    -- Build the BIP's context from the cycle's FLAT `measured` (altitude is the baro NUMBER, and
+    -- pitch/roll/yaw sit directly on it -- there is no `.attitude`/`.velocity`/`.altitude.baro`).
+    -- The velocity VECTOR, including its vertical (y) component, comes straight from state.
     self.selfConfig:tick({
       now = now,
-      attitude = measured.attitude,
-      velocity = measured.velocity,
-      altitude = measured.altitude and measured.altitude.baro,
+      attitude = { pitch = measured.pitch, roll = measured.roll, yaw = measured.yaw },
+      velocity = {
+        x = self.state:get("velocity.x"),
+        y = self.state:get("velocity.y"),
+        z = self.state:get("velocity.z"),
+      },
+      altitude = measured.altitude,
       groundContact = measured.groundContact,
       engineOn = self.engine.master and true or false,
     })
