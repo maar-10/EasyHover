@@ -72,6 +72,10 @@ function Overhead.build(frame, opts)
     actions.flightArm(not flightArmed)
   end)
   y = y + 1
+  -- Why an ENGAGED craft is (or is not) firing. "ENGAGED" alone hid the pad-safety gate: the mixer
+  -- holds until the engine is on AND the craft is airborne or climbing, and a silent throttle then
+  -- looked broken. This line names the reason so the pilot knows what to do next.
+  local flightHoldLine = Theme.line(main, y, width, "", Theme.dim); y = y + 1
   Theme.rule(main, y, width); y = y + 1
 
   Theme.heading(main, y, width, "TANK"); y = y + 1
@@ -112,6 +116,7 @@ function Overhead.build(frame, opts)
       flightButton:setText("?")
       flightButton:setBackground(Theme.buttonBg)
       flightButton:setForeground(Theme.dim)
+      flightHoldLine:setText("")
       tankGauge.set(nil, "--")
       vaultLine:setText("--")
       if altLine then altLine:setText("") end
@@ -152,6 +157,27 @@ function Overhead.build(frame, opts)
     flightButton:setText(flightArmed and "ENGAGED" or "SAFE")
     flightButton:setBackground(flightArmed and Theme.caution or Theme.buttonBg)
     flightButton:setForeground(flightArmed and colours.black or Theme.buttonFg)
+
+    -- Why the mixer is or is not actuating. Only meaningful once ENGAGED -- SAFE explains itself.
+    -- `hold` is the craft's reported reason; absent while ENGAGED means the mixer IS flying it.
+    local hold = (t.flight or {}).hold
+    if not flightArmed then
+      flightHoldLine:setText("")
+    elseif hold == "ENGINE OFF" then
+      -- No "hold:" prefix -- it overflows a 15-wide monitor and the word is clear on its own.
+      flightHoldLine:setText(Theme.fit("ENGINE OFF", width))
+      flightHoldLine:setForeground(Theme.warning)
+    elseif hold == "ON GROUND" then
+      flightHoldLine:setText(Theme.fit("ready: CLIMB up", width))
+      flightHoldLine:setForeground(Theme.caution)
+    elseif hold then
+      -- DISENGAGED here would contradict flightArmed; any other hold is shown verbatim.
+      flightHoldLine:setText(Theme.fit(tostring(hold), width))
+      flightHoldLine:setForeground(Theme.warning)
+    else
+      flightHoldLine:setText(Theme.fit("LIVE", width))
+      flightHoldLine:setForeground(Theme.ok)
+    end
 
     -- liquid fuel
     local fuel = t.fuel or {}
@@ -197,7 +223,7 @@ function Overhead.build(frame, opts)
     elements = {
       modeLine = modeLine, stale = stale, engineState = engineState,
       engineButton = engineButton, engineFeed = engineFeedLine,
-      flightButton = flightButton,
+      flightButton = flightButton, flightHold = flightHoldLine,
       tankValue = tankGauge.value, tankBar = tankGauge.bar, vault = vaultLine,
       feed = primeButton,
     },

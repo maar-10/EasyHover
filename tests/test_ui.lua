@@ -423,6 +423,35 @@ T.it("the FLIGHT CTRL button reflects the arm state and toggles it", function()
   T.eq(commands[#commands].value, false, "tapping again disengages")
 end)
 
+T.it("FLIGHT CTRL says WHY an engaged craft is holding, or shows it LIVE", function()
+  local panel = overheadRig()
+  local m = model()
+
+  -- SAFE explains itself: no hold line.
+  m.telemetry.modes = { armed = false }
+  m.telemetry.flight = { owner = "disarmed", hold = "DISENGAGED" }
+  panel.update(m)
+  T.eq(panel.elements.flightHold:getText(), "", "SAFE shows no hold line")
+
+  -- Engaged but the engine is off: names it.
+  m.telemetry.modes = { armed = true }
+  m.telemetry.flight = { owner = "disarmed", hold = "ENGINE OFF" }
+  panel.update(m)
+  T.isTrue(panel.elements.flightHold:getText():find("ENGINE OFF") ~= nil,
+    "names the off engine: " .. panel.elements.flightHold:getText())
+
+  -- Engaged, engine on, parked: ready -- tells the pilot to climb.
+  m.telemetry.flight = { owner = "disarmed", hold = "ON GROUND" }
+  panel.update(m)
+  T.isTrue(panel.elements.flightHold:getText():find("CLIMB") ~= nil,
+    "tells the pilot to climb: " .. panel.elements.flightHold:getText())
+
+  -- Engaged and actually flying: LIVE.
+  m.telemetry.flight = { owner = "mixer", hold = nil }
+  panel.update(m)
+  T.eq(panel.elements.flightHold:getText(), "LIVE", "flying shows LIVE")
+end)
+
 T.it("says NO RELAY when the engine has no relay configured", function()
   local panel = overheadRig()
   local m = model()

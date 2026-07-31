@@ -1093,6 +1093,38 @@ T.it("a climb input while ENGAGED arms the mixer -- that is the takeoff", functi
   fs.delete(path)
 end)
 
+--- A silent-but-engaged craft must be explainable: the loop publishes WHY the mixer is holding, so
+--- the cockpit can tell "ready, give it a climb" from "the engine is off" from "actually broken".
+T.it("publishes WHY the mixer is holding, so an engaged-but-silent craft is explained", function()
+  local app, path = appRig(fullCraft())
+  noPilotInput(app)
+  mock.vehicle.groundDist = 1.0                      -- on the ground
+
+  -- Engaged, engine OFF: held for the engine.
+  app.modes:setArmed(true)
+  app.engine.master = false
+  for _ = 1, 3 do app:cycle(0.05) end
+  T.eq(app.state:get("flight.owner"), "disarmed", "owner is disarmed")
+  T.eq(app.state:get("flight.hold"), "ENGINE OFF", "and names the off engine")
+
+  -- Engine ON, still parked, hands-off: ready, held on the ground for a climb command.
+  app.engine.master = true
+  for _ = 1, 3 do app:cycle(0.05) end
+  T.eq(app.state:get("flight.hold"), "ON GROUND", "engine on + parked = held on the ground")
+
+  -- A climb input commits to flight: the mixer takes it and there is no hold.
+  app.pilot.read = function() return { climb = 1 }, {}, {} end
+  for _ = 1, 3 do app:cycle(0.05) end
+  T.eq(app.state:get("flight.owner"), "mixer", "climb hands it to the mixer")
+  T.isNil(app.state:get("flight.hold"), "no hold once actually flying")
+
+  -- Disengaged entirely: held DISENGAGED regardless of the stick.
+  app.modes:setArmed(false)
+  for _ = 1, 3 do app:cycle(0.05) end
+  T.eq(app.state:get("flight.hold"), "DISENGAGED", "SAFE reports disengaged")
+  fs.delete(path)
+end)
+
 T.it("the flightArm command engages and disengages flight control", function()
   local app, path = appRig(fullCraft())
   T.isFalse(app.modes:isArmed(), "SAFE at boot -- flight control off by default")

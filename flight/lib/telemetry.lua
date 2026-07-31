@@ -242,6 +242,13 @@ function Telemetry:build(extra, includeSlow)
       altitudeTarget = s:get("modes.altitudeTarget"),
     },
 
+    -- Who owns the thrusters this cycle, and -- when flight control is engaged but the mixer is
+    -- still holding -- WHY. Lets the cockpit tell a ready-but-silent craft from a broken one.
+    flight = {
+      owner = s:get("flight.owner"),
+      hold = s:get("flight.hold"),
+    },
+
     attitude = {
       pitch = s:get("attitude.pitch"),
       roll = s:get("attitude.roll"),

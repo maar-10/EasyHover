@@ -356,6 +356,26 @@ function App:cycle(dt)
   end
   self._lastOwner = owner
 
+  -- Publish the arbitration so the cockpit can explain a SILENT-BUT-ENGAGED craft. Flipping ENGAGE
+  -- is not the same as firing: the mixer still holds until the engine is on AND the craft is either
+  -- airborne or being commanded to climb. Without this the pilot sees "ENGAGED" and a dead throttle
+  -- with no reason -- the reported symptom. `hold` is WHY the mixer is not actuating (nil when it
+  -- actually is); it is only meaningful when no preflight owner has the thrusters.
+  local hold
+  if owner == "disarmed" then
+    if not self.modes:isArmed() then
+      hold = "DISENGAGED"
+    elseif not self.engine.master then
+      hold = "ENGINE OFF"
+    else
+      -- Armed and the engine is running, but parked and no climb command: the pad-safety gate. The
+      -- craft is READY; a climb input lifts it off. Nothing is wrong -- it just will not fire itself.
+      hold = "ON GROUND"
+    end
+  end
+  self.state:set("flight.owner", owner)
+  self.state:set("flight.hold", hold)
+
   local activelyFlying = (state == "FLIGHT" or state == "HOVER" or state == "REVERSE")
   if owner == "axisMap" then
     if activelyFlying then
