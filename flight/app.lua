@@ -321,11 +321,13 @@ function App:cycle(dt)
     or (self.thrusters:isIdentifying() and "identify")
     or ((not self.engine.master) and "disarmed")
     or "mixer"
-  -- Log on every CHANGE (unmissable), and periodically while an owner other than the mixer holds.
+  -- Log on every CHANGE (unmissable), and a slow heartbeat while a non-mixer owner holds so the
+  -- console proves the loop is alive without burying everything else. 3 s filled the screen in half
+  -- a minute; 30 s is a heartbeat, not a flood.
   if self._lastOwner ~= owner then
     self.log:info("cycle owner: %s (state %s)", owner, tostring(state))
     self._ownerLoggedAt = now
-  elseif owner ~= "mixer" and (now - (self._ownerLoggedAt or 0)) >= 3000 then
+  elseif owner ~= "mixer" and (now - (self._ownerLoggedAt or 0)) >= 30000 then
     self.log:info("cycle owner: %s (state %s)", owner, tostring(state))
     self._ownerLoggedAt = now
   end
