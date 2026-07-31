@@ -438,20 +438,28 @@ T.it("a dt spike does NOT produce a vertical-speed kick", function()
   T.near(r.state:get("altitude.vs"), before, 1e-9, "derivative skipped on overrun")
 end)
 
-T.it("ground contact needs BOTH proximity and near-zero vertical speed", function()
+T.it("ground contact is the down laser alone -- baro jitter cannot fake being airborne", function()
   mock.reset()
   _G.peripheral = mock.install()
   mock.vehicle.altitude = 70
   mock.vehicle.groundDist = 0.5
   local r = rig()
   local sensors = Sensors.new(r.per, r.cfg, r.log, r.state)
-  sensors:read(0.1)                    -- establishes altitude, vs = 0
   sensors:read(0.1)
-  T.isTrue(r.state:get("ground.contact"), "close and still = contact")
+  sensors:read(0.1)
+  T.isTrue(r.state:get("ground.contact"), "within range of the ground = contact")
 
-  mock.vehicle.altitude = 70.5         -- now descending fast past the ground
+  -- A jump in baro altitude gives a large differentiated vertical speed. The OLD logic read that
+  -- as flight and reported airborne -- the false positive that stopped SELF CONFIG on the ground.
+  -- The laser is still close, so the craft is still, correctly, on the ground.
+  mock.vehicle.altitude = 71.0
   sensors:read(0.1)
-  T.isFalse(r.state:get("ground.contact"), "a low fast pass is not a landing")
+  T.isTrue(r.state:get("ground.contact"), "still grounded: the laser is close, whatever vs says")
+
+  -- Actually up and away: the laser reads far, so now it is airborne.
+  mock.vehicle.groundDist = 6.0
+  sensors:read(0.1)
+  T.isFalse(r.state:get("ground.contact"), "laser far -> airborne")
 end)
 
 T.it("pad whitelist rejects anything not listed", function()

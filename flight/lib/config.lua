@@ -185,9 +185,13 @@ function Config.defaults()
         padWhitelist = { "minecraft:stone", "minecraft:smooth_stone", "minecraft:iron_block" },
       },
       staleMs = 500,        -- a channel older than this is not trusted
-      -- ground contact needs BOTH conditions: a low fast pass is not a landing,
-      -- and a stuck laser is not a runway
-      groundContactDist = 1.2,
+      -- ON THE GROUND when the down-facing laser reads within this many blocks of a surface. With
+      -- roughly one block of clearance under a landed craft the laser reads ~1, so 2.0 leaves margin
+      -- for the exact reading while still flagging airborne once the craft is well clear. Tune this
+      -- to your own hull: lower it if the craft reads "grounded" while hovering low.
+      groundContactDist = 2.0,
+      -- DEPRECATED: ground contact no longer uses vertical speed (differentiated baro jittered and
+      -- made a still, landed craft read as airborne). Kept so older configs still load.
       groundVsEpsilon = 0.15,
     },
 

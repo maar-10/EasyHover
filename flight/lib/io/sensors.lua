@@ -274,16 +274,19 @@ function Sensors:read(dt)
     result.rays = rays
   end
 
-  -- ground contact: close to a surface AND not moving vertically. Both, because a
-  -- low fast pass is not a landing, and a stuck laser is not a runway.
+  -- GROUND CONTACT is the DOWN-FACING LASER alone -- the radar altimeter under the hull. Within
+  -- `groundContactDist` of a surface is "on the ground".
+  --
+  -- The near-zero-vertical-speed AND-condition was REMOVED. It existed so a low fast pass would not
+  -- read as a landing, but vertical speed here is DIFFERENTIATED baro, which jitters -- so a craft
+  -- sitting still on the ground would intermittently show |vs| above the epsilon and be reported
+  -- AIRBORNE. That is the exact false positive that made SELF CONFIG refuse ("NOT ON GROUND") on a
+  -- landed craft with the thrusters cold. The laser is the honest answer to "is there ground right
+  -- under me"; a stuck laser is a far rarer fault than baro jitter, and the pre-flight interlocks
+  -- re-check actual thrust before doing anything anyway.
   local sc = self.cfg.sensors
   local groundDist = rays[1] and rays[1].distance or nil
-  local vs = altitude and altitude.vs or nil
-  local contact = false
-  if groundDist ~= nil and vs ~= nil then
-    contact = groundDist <= (sc.groundContactDist or 1.2)
-      and math.abs(vs) <= (sc.groundVsEpsilon or 0.15)
-  end
+  local contact = (groundDist ~= nil) and (groundDist <= (sc.groundContactDist or 2.0)) or false
   self.state:set("ground.contact", contact, now)
   result.groundContact = contact
 
