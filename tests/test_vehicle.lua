@@ -1103,10 +1103,12 @@ T.it("a climb command from the pad actually makes lift, not a deadlock", functio
   app.pilot.read = function() return { climb = 1 }, {}, {} end   -- pull up
   app.engine.master = true
   app.modes:setArmed(true)
-  for _ = 1, 40 do app:cycle(0.05) end
+  for _ = 1, 60 do app:cycle(0.05) end
   T.eq(app._lastOwner, "mixer", "the mixer owns it")
-  T.isTrue((app.lastAltitudeOut or {}).collective > 0,
-    "the altitude loop MAKES lift on a climb command, despite reading groundContact")
+  -- The whole point: the ramp must climb PAST the rate loop's ~0.5 authority ceiling toward full,
+  -- or a craft that needs more than half thrust to lift (like the reported one) never leaves the pad.
+  T.isTrue((app.lastAltitudeOut or {}).collective > 0.5,
+    "the collective ramps past the rate loop's cap: " .. tostring((app.lastAltitudeOut or {}).collective))
   local anyLift = false
   for _, entry in ipairs(app.per:thrusterList()) do
     if entry.spec.group == "lift" and entry.dev.getCurrentThrustKN() > 0 then anyLift = true end
@@ -1131,6 +1133,29 @@ T.it("the altitude loop: lift for a climb through the ground guard, zero without
     lifting = alt:update({ verticalSpeed = 2, ignoreGround = true }, grounded, 0.1)
   end
   T.isTrue(lifting.collective > 0, "a climb command with the takeoff flag MAKES lift on the ground")
+end)
+
+--- The ramp must climb PAST what the rate loop alone can command (~0.5 with hoverTrim 0), or a heavy
+--- craft never leaves the pad. And it must not persist a hover estimate until the craft truly lifts.
+T.it("takeoff ramp climbs toward full, and seeds hoverTrim only at liftoff", function()
+  local Altitude = require("lib.control.altitude")
+  local alt = Altitude.new(vehicleCfg(), quietLog(), nil)
+  local grounded = { altitude = 74.5, verticalSpeed = 0, groundContact = true }
+
+  local ramped
+  for _ = 1, 30 do
+    ramped = alt:update({ verticalSpeed = 4, ignoreGround = true }, grounded, 0.1)
+  end
+  T.isTrue(ramped.collective > 0.5,
+    "the open-loop ramp climbs past the rate loop's ~0.5 ceiling: " .. ramped.collective)
+  T.eq(select(1, alt:learnedTrim()), 0,
+    "but a ramp that has not lifted seeds NO hover trim (no runaway persist)")
+
+  -- Now it leaves the ground: the hover feedforward is seeded from the thrust that lifted it.
+  local airborne = { altitude = 76.5, verticalSpeed = 1, groundContact = false }
+  alt:update({ verticalSpeed = 4, ignoreGround = true }, airborne, 0.1)
+  T.eq(select(1, alt:learnedTrim()), ramped.collective,
+    "liftoff seeds hoverTrim = the collective that actually lifted the craft")
 end)
 
 --- A silent-but-engaged craft must be explainable: the loop publishes WHY the mixer is holding, so

@@ -245,6 +245,12 @@ function Config.defaults()
         -- Descent authority is plenty below this; the envelope limits sink rate anyway.
         minAirborneCollective = 0.20,
         hoverTrim = 0.0,   -- LEARNED and persisted; 0 = never learned yet
+        -- TAKEOFF. Until the craft has hovered, hoverTrim is 0 and the rate loop's authority
+        -- (p*err + iClamp ~= 0.5) tops out below the thrust a heavy craft needs to leave the ground,
+        -- so a climb command would sit at partial thrust forever. On the ground with a climb
+        -- commanded, the collective ramps open-loop toward full at this rate (per second) -- the same
+        -- way SELF CONFIG lifts the craft -- until it is airborne, then the rate loop takes over.
+        takeoffRamp = 0.5,
         trimLearnRate = 0.002,
         -- share of vertical authority given to symmetric nozzle trim (the continuous
         -- axis) rather than the 16-step thrust axis

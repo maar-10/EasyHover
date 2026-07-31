@@ -89,13 +89,41 @@ end
      Returns { collective = 0..1, verticalTrim = -1..1 }, debug.
 ]]
 function Altitude:update(target, measured, dt)
-  if measured.groundContact and not target.ignoreGround then
+  local ac = self.cfg.control.altitude
+
+  if measured.groundContact then
+    if target.ignoreGround then
+      -- TAKEOFF RAMP. A craft that has never hovered has hoverTrim 0, and the rate loop's authority
+      -- (p*err + iClamp ~= 0.5) tops out below the thrust a heavy craft needs to leave the ground --
+      -- so a climb command sat at partial thrust forever (the reported bug). While grounded and
+      -- commanded UP, ramp the collective open-loop toward full, exactly as SELF CONFIG's float does
+      -- (which is why SELF CONFIG lifts the craft when normal flight could not).
+      local floor = ac.minAirborneCollective or 0.20
+      local ramp = (ac.takeoffRamp or 0.5) * math.max(dt or 0, 0)
+      self.takeoffCollective = Util.clamp((self.takeoffCollective or floor) + ramp, floor, 1)
+      -- Hold integrators at zero: the ramp is the command, not the PID, so nothing may wind up.
+      -- hoverTrim is NOT touched here -- a ramp that never lifts (an underpowered craft held at
+      -- full) must not persist a runaway hover estimate. It is seeded at the liftoff moment below.
+      self.posPid:reset(true)
+      self.ratePid:reset(true)
+      return { collective = self.takeoffCollective, verticalTrim = 0 },
+        { takeoff = true, collective = self.takeoffCollective }
+    end
+    self.takeoffCollective = nil
     return self:groundHold()
   end
 
   local e = self.cfg.envelope
-  local ac = self.cfg.control.altitude
   local dbg = {}
+
+  -- LIFTOFF HANDOFF. We were ramping open-loop and the craft has just left the ground. Seed the
+  -- hover feedforward with the thrust that actually lifted it, so the rate loop takes over from a
+  -- real operating point instead of snapping back to a zero-trim PID (which would drop the craft).
+  if self.takeoffCollective ~= nil then
+    self.hoverTrim = self.takeoffCollective
+    self.trimLearned = true
+    self.takeoffCollective = nil
+  end
 
   -- ---- outer: altitude -> vertical-speed demand
   local vsDemand
