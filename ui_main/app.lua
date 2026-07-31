@@ -79,6 +79,7 @@ function App:buildActions()
     setFeel = function(value) link:send({ cmd = "setFeel", value = value }) end,
     setLateral = function(value) link:send({ cmd = "setLateral", value = value }) end,
     setAssist = function(value) link:send({ cmd = "setAssist", value = value }) end,
+    flightArm = function(value) link:send({ cmd = "flightArm", value = value and true or false }) end,
     setAltitude = function(value) link:send({ cmd = "setAltitude", value = value }) end,
     configSet = function(path, value) link:send({ cmd = "configSet", path = path, value = value }) end,
     setEngineRelay = function(peripheral, side)

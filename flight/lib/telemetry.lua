@@ -62,6 +62,8 @@ local COMMANDS = {
   setFeel       = { value = "enum:cruise,rate,stutter" },
   setLateral    = { value = "enum:flight,precision" },
   setAssist     = { value = "boolean" },
+  -- Engage/disengage flight control (the mixer). OFF at boot; the pilot arms it before takeoff.
+  flightArm     = { value = "boolean" },
   setAltitude   = { value = "number" },
   identify      = { id = "string" },
   configSet     = { path = "string", value = "any" },
@@ -227,6 +229,7 @@ function Telemetry:build(extra, includeSlow)
     modes = {
       feel = s:get("modes.feel"),
       lateral = s:get("modes.lateral"),
+      armed = s:get("modes.armed"),
       assist = s:get("modes.assist"),
       assistActive = s:get("modes.assistActive"),
       state = s:get("modes.state"),

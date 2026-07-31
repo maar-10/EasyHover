@@ -41,6 +41,12 @@ function Modes.new(cfg, log)
   self.lateral = cfg.modes.lateralDefault or "flight"
   self.assistEnabled = cfg.assist.enabled ~= false
 
+  -- FLIGHT CONTROL ARM. A master switch, OFF at boot: the mixer (the PID) may run only when the
+  -- pilot has deliberately ENGAGED flight control. Preflight -- SELF TEST, SELF CONFIG, AXIS MAP,
+  -- just standing on the pad with the engine warming -- happens with this OFF, so the controller
+  -- provably never steers until you say so. Not persisted: a reboot comes up SAFE, on purpose.
+  self.armed = false
+
   self.throttle = 0
   self.dwellUntil = nil        -- while set, the throttle is parked at zero
   self.state = "BOOT"
@@ -94,6 +100,22 @@ end
 
 function Modes:toggleAssist()
   self:setAssist(not self.assistEnabled)
+end
+
+--- Engage or disengage flight control. Engaging does NOT take off -- it only permits the mixer to
+--- run once the craft is actually flying (airborne, or a climb input). Disengaging is a hard cut:
+--- the mixer will not run whatever the sensors or the stick say.
+function Modes:setArmed(on)
+  self.armed = on and true or false
+  self.log:info("flight control -> %s", self.armed and "ENGAGED" or "SAFE")
+end
+
+function Modes:toggleArmed()
+  self:setArmed(not self.armed)
+end
+
+function Modes:isArmed()
+  return self.armed
 end
 
 --- Rate mode force-disables the assistant: holding an attitude is the point of it.
@@ -304,6 +326,7 @@ function Modes:snapshot()
   return {
     feel = self.feel,
     lateral = self.lateral,
+    armed = self.armed,
     assist = self.assistEnabled,
     assistActive = self:assistActive(),
     state = self.state,

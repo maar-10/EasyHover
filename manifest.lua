@@ -27,9 +27,9 @@
       ["files"] = {
         {
           ["dst"] = "flight/app.lua",
-          ["size"] = 56343,
+          ["size"] = 57065,
           ["src"] = "flight/app.lua",
-          ["sum"] = "bbdfc4d9",
+          ["sum"] = "bbf546d0",
         },
         {
           ["dst"] = "flight/diskmenu.lua",
@@ -183,9 +183,9 @@
         },
         {
           ["dst"] = "flight/lib/modes.lua",
-          ["size"] = 10577,
+          ["size"] = 11538,
           ["src"] = "flight/lib/modes.lua",
-          ["sum"] = "b6031675",
+          ["sum"] = "4a9b3b96",
         },
         {
           ["dst"] = "flight/lib/peripherals.lua",
@@ -201,9 +201,9 @@
         },
         {
           ["dst"] = "flight/lib/telemetry.lua",
-          ["size"] = 17551,
+          ["size"] = 17725,
           ["src"] = "flight/lib/telemetry.lua",
-          ["sum"] = "bc893a63",
+          ["sum"] = "ea05c1cb",
         },
         {
           ["dst"] = "flight/lib/util.lua",
@@ -521,9 +521,9 @@
         },
         {
           ["dst"] = "ui_main/app.lua",
-          ["size"] = 14666,
+          ["size"] = 14769,
           ["src"] = "ui_main/app.lua",
-          ["sum"] = "ebcd1b4a",
+          ["sum"] = "3a14286c",
         },
         {
           ["dst"] = "ui_main/lib/config.lua",
@@ -563,9 +563,9 @@
         },
         {
           ["dst"] = "ui_main/ui/overhead.lua",
-          ["size"] = 7545,
+          ["size"] = 8730,
           ["src"] = "ui_main/ui/overhead.lua",
-          ["sum"] = "819ff0d4",
+          ["sum"] = "dfb0f537",
         },
         {
           ["dst"] = "ui_main/ui/slots.lua",
@@ -624,5 +624,5 @@
     ["size"] = 36872,
     ["sum"] = "305c58ce",
   },
-  ["version"] = "599cf29b",
+  ["version"] = "d69b8752",
 }

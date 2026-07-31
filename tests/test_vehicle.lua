@@ -986,24 +986,50 @@ end)
 
 --- A positively-airborne craft with the engine on IS the mixer's to fly -- otherwise it could never
 --- hold itself up. Proved with NO pilot input, so the airborne evidence alone is what arms it.
-T.it("positively airborne with the engine on hands control to the mixer", function()
+T.it("positively airborne, ENGAGED, engine on hands control to the mixer", function()
   local app, path = appRig(fullCraft())
   noPilotInput(app)
   mock.vehicle.groundDist = 10.0            -- well off the ground: the laser reads airborne
   app.engine.master = true
+  app.modes:setArmed(true)
   for _ = 1, 5 do app:cycle(0.05) end
-  T.eq(app._lastOwner, "mixer", "airborne + engine on = the mixer flies it, even hands-off")
+  T.eq(app._lastOwner, "mixer", "airborne + engaged + engine on = the mixer flies it, hands-off")
   fs.delete(path)
 end)
 
---- Takeoff: on the ground, a climb input is what commits to flight and hands the mixer control.
-T.it("a climb input on the ground arms the mixer -- that is the takeoff", function()
+--- The MASTER SWITCH. Disengaged, the mixer never runs -- not airborne, not with the engine on,
+--- not with a stick input. This is what makes preflight provably safe.
+T.it("DISENGAGED stays disarmed even airborne with the engine on", function()
+  local app, path = appRig(fullCraft())
+  noPilotInput(app)
+  mock.vehicle.groundDist = 10.0            -- airborne
+  app.engine.master = true
+  -- flight control NOT armed (the boot default)
+  for _ = 1, 5 do app:cycle(0.05) end
+  T.eq(app._lastOwner, "disarmed", "flight control off -> disarmed no matter what")
+  fs.delete(path)
+end)
+
+--- Takeoff: ENGAGED, on the ground, a climb input commits to flight and hands the mixer control.
+T.it("a climb input while ENGAGED arms the mixer -- that is the takeoff", function()
   local app, path = appRig(fullCraft())
   mock.vehicle.groundDist = 1.0                                  -- on the ground
   app.pilot.read = function() return { climb = 1 }, {}, {} end   -- pilot pulls up
   app.engine.master = true
+  app.modes:setArmed(true)
   for _ = 1, 5 do app:cycle(0.05) end
-  T.eq(app._lastOwner, "mixer", "pulling up on the ground with the engine on takes off")
+  T.eq(app._lastOwner, "mixer", "engaged + pulling up on the ground = takeoff")
+  fs.delete(path)
+end)
+
+T.it("the flightArm command engages and disengages flight control", function()
+  local app, path = appRig(fullCraft())
+  T.isFalse(app.modes:isArmed(), "SAFE at boot -- flight control off by default")
+  local ok, detail = app:handleCommand({ cmd = "flightArm", value = true })
+  T.isTrue(ok and detail.armed, "engaged by command")
+  T.isTrue(app.modes:isArmed(), "and the modes reflect it")
+  app:handleCommand({ cmd = "flightArm", value = false })
+  T.isFalse(app.modes:isArmed(), "disengaged again")
   fs.delete(path)
 end)
 
@@ -1652,9 +1678,10 @@ T.it("DISARMED: engine off holds neutral and does not run the mixer", function()
   fs.delete(path)
 end)
 
-T.it("ARMED: engine on runs the closed loop", function()
+T.it("ENGAGED and flying: the closed loop runs", function()
   local app, path = appRig(fullCraft())
-  app.engine.master = true            -- armed: the pilot intends to fly
+  app.engine.master = true
+  app.modes:setArmed(true)            -- flight control engaged
   mock.vehicle.groundDist = 12
   app.modes.throttle = 0.6
   local mixed = 0

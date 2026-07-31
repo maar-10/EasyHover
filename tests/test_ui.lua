@@ -105,6 +105,7 @@ local function sent()
     setFeel = function(v) out[#out + 1] = { cmd = "setFeel", value = v } end,
     setLateral = function(v) out[#out + 1] = { cmd = "setLateral", value = v } end,
     setAssist = function(v) out[#out + 1] = { cmd = "setAssist", value = v } end,
+    flightArm = function(v) out[#out + 1] = { cmd = "flightArm", value = v } end,
     setAltitude = function(v) out[#out + 1] = { cmd = "setAltitude", value = v } end,
     setAux = function(l, v) out[#out + 1] = { cmd = "setAux", label = l, value = v } end,
     setEngineRelay = function(pe, side)
@@ -402,6 +403,23 @@ T.it("shows the engine off, and offers START", function()
   panel.update(m)
   T.eq(panel.elements.engineState:getText(), "OFF", "state")
   T.eq(panel.elements.engineButton:getText(), "START", "action")
+end)
+
+T.it("the FLIGHT CTRL button reflects the arm state and toggles it", function()
+  local panel, commands = overheadRig()
+  local m = model()
+  m.telemetry.modes = { armed = false }
+  panel.update(m)
+  T.eq(panel.elements.flightButton:getText(), "SAFE", "disengaged shows SAFE")
+  click(panel.elements.flightButton)
+  T.eq(commands[#commands].cmd, "flightArm", "tapping sends flightArm")
+  T.eq(commands[#commands].value, true, "and engages it")
+
+  m.telemetry.modes = { armed = true }
+  panel.update(m)
+  T.eq(panel.elements.flightButton:getText(), "ENGAGED", "engaged shows ENGAGED")
+  click(panel.elements.flightButton)
+  T.eq(commands[#commands].value, false, "tapping again disengages")
 end)
 
 T.it("says NO RELAY when the engine has no relay configured", function()
@@ -2044,7 +2062,9 @@ T.it("with no relay the engine button says CONFIG and sends nothing", function()
 end)
 
 T.it("the manual feed button is labelled for what it does", function()
-  local panel, commands = overheadRig()
+  -- The real overhead monitor is 15x24; give the rig the rows the feed button needs (the FLIGHT
+  -- CTRL section, being mandatory, comes before this optional one).
+  local panel, commands = overheadRig(15, 24)
   T.eq(panel.elements.feed:getText(), "FEED 1", "not PRIME")
   panel.update(model())
   click(panel.elements.feed)

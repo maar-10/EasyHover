@@ -63,6 +63,17 @@ function Overhead.build(frame, opts)
   y = y + 1
   Theme.rule(main, y, width); y = y + 1
 
+  -- FLIGHT CONTROL arm/disarm. The mixer (the PID) runs only when this is ENGAGED, so preflight is
+  -- provably safe: SELF TEST, SELF CONFIG, AXIS MAP and just warming the engine on the pad all
+  -- happen with flight control OFF. Reflects the CRAFT's reported arm state, never the tap.
+  Theme.heading(main, y, width, "FLIGHT CTRL"); y = y + 1
+  local flightArmed = false
+  local flightButton = Theme.button(main, 1, y, math.min(width, 11), "SAFE", function()
+    actions.flightArm(not flightArmed)
+  end)
+  y = y + 1
+  Theme.rule(main, y, width); y = y + 1
+
   Theme.heading(main, y, width, "TANK"); y = y + 1
   local tankGauge = Theme.gauge(main, y, width, cfg); y = y + 2
   Theme.rule(main, y, width); y = y + 1
@@ -98,6 +109,9 @@ function Overhead.build(frame, opts)
       engineState:setText("?")
       engineState:setForeground(Theme.dim)
       engineFeedLine:setText("")
+      flightButton:setText("?")
+      flightButton:setBackground(Theme.buttonBg)
+      flightButton:setForeground(Theme.dim)
       tankGauge.set(nil, "--")
       vaultLine:setText("--")
       if altLine then altLine:setText("") end
@@ -131,6 +145,13 @@ function Overhead.build(frame, opts)
     else
       engineFeedLine:setText(engine.pulses and ("fed " .. tostring(engine.pulses) .. " items") or "")
     end
+
+    -- flight control arm state, from the CRAFT. ENGAGED gets a caution colour because the mixer is
+    -- then live and may command thrusters; SAFE is dim because nothing can fire.
+    flightArmed = (t.modes or {}).armed and true or false
+    flightButton:setText(flightArmed and "ENGAGED" or "SAFE")
+    flightButton:setBackground(flightArmed and Theme.caution or Theme.buttonBg)
+    flightButton:setForeground(flightArmed and colours.black or Theme.buttonFg)
 
     -- liquid fuel
     local fuel = t.fuel or {}
@@ -176,6 +197,7 @@ function Overhead.build(frame, opts)
     elements = {
       modeLine = modeLine, stale = stale, engineState = engineState,
       engineButton = engineButton, engineFeed = engineFeedLine,
+      flightButton = flightButton,
       tankValue = tankGauge.value, tankBar = tankGauge.bar, vault = vaultLine,
       feed = primeButton,
     },

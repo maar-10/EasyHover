@@ -331,8 +331,12 @@ function App:cycle(dt)
   -- The local `measured.groundContact` above coerces nil -> false, so it CANNOT be used here: it
   -- would read a missing laser as "airborne" and fire on the pad. A craft that cannot see the ground
   -- stays disarmed until a climb input rather than being assumed in flight.
+  -- FLIGHT CONTROL must be ENGAGED by the pilot first (modes:isArmed) -- a master switch, OFF at
+  -- boot. Then, and only then, the mixer runs when actually flying. So the full gate is: engaged AND
+  -- engine on AND (airborne OR climb). Disengaged, the craft is disarmed no matter what the engine,
+  -- sensors or stick say -- which is what makes preflight provably safe.
   local flightInput = (axes.climb or 0) > 0.02
-  local flying = self.engine.master
+  local flying = self.modes:isArmed() and self.engine.master
     and ((self.state:get("ground.contact") == false) or flightInput)
   local owner = (self.axisMap:isHolding() and "axisMap")
     or (self.selfTest:isRunning() and "selfTest")
@@ -1061,6 +1065,12 @@ function App:handleCommand(cmd)
   elseif cmd.cmd == "setAssist" then
     self.modes:setAssist(cmd.value)
     return true, { assist = self.modes.assistEnabled }
+
+  elseif cmd.cmd == "flightArm" then
+    -- Engage/disengage flight control. Only permits the mixer -- it never fires a thruster on its
+    -- own; the flying gate (airborne or climb) still applies, so engaging on the pad stays silent.
+    self.modes:setArmed(cmd.value)
+    return true, { armed = self.modes:isArmed() }
 
   elseif cmd.cmd == "setAltitude" then
     -- through the envelope, like every other demand: a UI cannot command an altitude the
