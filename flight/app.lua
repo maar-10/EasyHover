@@ -511,6 +511,13 @@ function App:cycle(dt)
     else
       target.altitude = limited.altitudeTarget
     end
+    -- TAKEOFF. The altitude loop zeroes collective whenever the craft reads groundContact -- a guard
+    -- against integrators winding up on the skids. But groundContact only clears AFTER the craft
+    -- lifts, so a climb command from the pad would command the mixer yet make no lift: the craft
+    -- could never leave the ground (the mixer owns it, the altitude loop holds it down). A commanded
+    -- CLIMB is exactly the takeoff, so let the loop make lift through the ground guard while the
+    -- pilot is asking to go UP. A descend/hold command on the ground still holds collective at zero.
+    target.ignoreGround = (target.verticalSpeed or 0) > 0
     self.lastAltitudeOut = self.altitude:update(target, measured, self.altitudeAccumulator)
     self.altitudeAccumulator = 0
   end

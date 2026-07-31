@@ -1093,6 +1093,46 @@ T.it("a climb input while ENGAGED arms the mixer -- that is the takeoff", functi
   fs.delete(path)
 end)
 
+--- THE TAKEOFF DEADLOCK. The altitude loop zeroes collective while groundContact is true (so
+--- integrators cannot wind up on the skids), but groundContact only clears AFTER the craft lifts.
+--- So a climb command handed the mixer control yet made NO lift -- the craft could never leave the
+--- ground. A commanded climb must make lift THROUGH the ground guard.
+T.it("a climb command from the pad actually makes lift, not a deadlock", function()
+  local app, path = appRig(fullCraft())
+  mock.vehicle.groundDist = 1.0                                  -- still on the ground
+  app.pilot.read = function() return { climb = 1 }, {}, {} end   -- pull up
+  app.engine.master = true
+  app.modes:setArmed(true)
+  for _ = 1, 40 do app:cycle(0.05) end
+  T.eq(app._lastOwner, "mixer", "the mixer owns it")
+  T.isTrue((app.lastAltitudeOut or {}).collective > 0,
+    "the altitude loop MAKES lift on a climb command, despite reading groundContact")
+  local anyLift = false
+  for _, entry in ipairs(app.per:thrusterList()) do
+    if entry.spec.group == "lift" and entry.dev.getCurrentThrustKN() > 0 then anyLift = true end
+  end
+  T.isTrue(anyLift, "and the lift thrusters actually fire")
+  fs.delete(path)
+end)
+
+--- The ground guard still does its job for the case it exists for: grounded WITHOUT the takeoff
+--- flag, collective stays zero so nothing winds up on the skids. Tested on the loop directly, since
+--- that contract is what the app leans on -- otherwise this fix would re-open the leap-on-takeoff bug.
+T.it("the altitude loop: lift for a climb through the ground guard, zero without it", function()
+  local Altitude = require("lib.control.altitude")
+  local alt = Altitude.new(vehicleCfg(), quietLog(), nil)
+  local grounded = { altitude = 74.5, verticalSpeed = 0, groundContact = true }
+
+  local held = alt:update({ verticalSpeed = 0 }, grounded, 0.1)
+  T.eq(held.collective, 0, "grounded and NOT taking off -> zero collective, nothing winds up")
+
+  local lifting
+  for _ = 1, 10 do
+    lifting = alt:update({ verticalSpeed = 2, ignoreGround = true }, grounded, 0.1)
+  end
+  T.isTrue(lifting.collective > 0, "a climb command with the takeoff flag MAKES lift on the ground")
+end)
+
 --- A silent-but-engaged craft must be explainable: the loop publishes WHY the mixer is holding, so
 --- the cockpit can tell "ready, give it a climb" from "the engine is off" from "actually broken".
 T.it("publishes WHY the mixer is holding, so an engaged-but-silent craft is explained", function()
