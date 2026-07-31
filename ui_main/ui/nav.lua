@@ -789,9 +789,16 @@ function Nav.build(frame, opts)
     live.axisMap = t.axisMap or {}
     live.selfConfig = t.selfConfig or {}
     live.selfConfigPrereqs = t.selfConfigPrereqs or {}
-    refreshAxisRows()
-    refreshConfig()
-    refreshNav(model)
+
+    -- Only refresh a subpage's elements when it is the page IN VIEW. The axis map (24 buttons), the
+    -- SELF CONFIG page and the nav view were all being rebuilt every frame even while hidden, which
+    -- is redraw cost spent on nothing -- and redraw cost is what starves monitor_touch. `renderAll`
+    -- is a test aid so the render-logic tests can check any page without first showing it; in the
+    -- cockpit it is never set. A page refreshes the frame it is opened on, so switching has no lag.
+    local showAll = opts.renderAll
+    if showAll or axisPage:getVisible() then refreshAxisRows() end
+    if showAll or configPage:getVisible() then refreshConfig() end
+    if showAll or navPage:getVisible() then refreshNav(model) end
 
     -- ---- FCS
     fcsStale:setText(model.stale and "NO DATA -- craft not reporting" or "live from the craft")

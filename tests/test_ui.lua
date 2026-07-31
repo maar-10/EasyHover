@@ -1193,6 +1193,9 @@ local function navRig(width, height)
   local panel = Nav.build(frame, {
     cfg = cfg, actions = actions, log = quietLog(),
     lastAck = function() return navAck end,
+    -- Render every subpage each update so a test can check any page without first showing it. In
+    -- the cockpit this is unset, so update() only refreshes the page in view (see Nav.build).
+    renderAll = true,
   })
   return panel, commands
 end
@@ -1417,6 +1420,30 @@ T.it("the DAY/NGT button reflects the mode and toggling it re-themes", function(
   panel.update(navFixModel(nil))
   T.eq(panel.elements.dayNight:getText(), "NGT", "night mode shows NGT")
   Theme.setMode("day")     -- leave the shared Theme as we found it
+end)
+
+T.it("refreshes only the page in view, so hidden pages cost nothing per frame", function()
+  -- The cockpit build (renderAll unset) must not redraw a hidden page. That wasted redraw is what
+  -- starves monitor_touch, so it is worth a test of its own.
+  mock.reset()
+  _G.peripheral = mock.install()
+  local cfg = UiConfig.withDefaults({})
+  local frame = basalt.createFrame()
+  frame:setTerm(mock.monitor(29, 19))
+  local _, actions = sent()
+  local panel = Nav.build(frame, { cfg = cfg, actions = actions, log = quietLog(),
+    lastAck = function() return nil end })      -- renderAll NOT set -> gated like the cockpit
+
+  local m = model()
+  m.telemetry.selfConfigPrereqs = { ok = false, missing = { "ENGINE OFF" }, nozzles = 0 }
+  panel.update(m)
+  T.isFalse(panel.elements.cfgStatus:getText():find("NO GO") ~= nil,
+    "the hidden SELF CONFIG page was NOT redrawn: " .. panel.elements.cfgStatus:getText())
+
+  panel.show(panel.pages.config)
+  panel.update(m)
+  T.isTrue(panel.elements.cfgStatus:getText():find("NO GO") ~= nil,
+    "once shown, the page IS redrawn")
 end)
 
 -- --------------------------------------------------------------- FCS test

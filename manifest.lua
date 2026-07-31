@@ -557,9 +557,9 @@
         },
         {
           ["dst"] = "ui_main/ui/nav.lua",
-          ["size"] = 46809,
+          ["size"] = 47484,
           ["src"] = "ui_main/ui/nav.lua",
-          ["sum"] = "93e7bb4e",
+          ["sum"] = "500f5139",
         },
         {
           ["dst"] = "ui_main/ui/overhead.lua",
@@ -624,5 +624,5 @@
     ["size"] = 36872,
     ["sum"] = "305c58ce",
   },
-  ["version"] = "1c257d1d",
+  ["version"] = "4f28e1bd",
 }
