@@ -2462,7 +2462,10 @@ local function scRig(scOverrides)
         thrustAxis = "down", maxVector = 0.6 },
     } },
     selfConfig = require("lib.util").deepMerge({
-      hoverHeight = 1.0, collectiveRamp = 0.6, maxCollective = 0.9,
+      hoverHeight = 1.0, maxCollective = 0.9,
+      -- Fast float gains for the tests: the sim altitude is instantaneous (no momentum), so these
+      -- just need to converge quickly. The DAMPING that matters in-game is unit-tested separately.
+      approachSpeed = 2.0, approachGain = 2.0, collectiveGain = 2.0, collectiveRamp = 0.6,
       settleMs = 250, settleSpeed = 0.05, probeMs = 500, counterMs = 250,
       probeDeflection = 0.6, minResponse = 0.1, landRamp = 0.6, maxTiltDeg = 45,
     }, scOverrides or {}),
@@ -2636,6 +2639,41 @@ T.it("float throttles DOWN when too high, and never aborts for it", function()
   T.eq(r.sc.run.phase, "float", "still floating, neither settled nor aborted")
   T.isTrue(r.sc.run.collective < before, "and it eased the throttle down: "
     .. before .. " -> " .. r.sc.run.collective)
+end)
+
+--- THE FIX for the reported limit cycle (lifts too high, slams back down): the float regulation is
+--- velocity-DAMPED. Below the target but already rising faster than the gentle approach speed, it
+--- must EASE the collective OFF so the craft glides into the band -- the old bang-bang ramped up
+--- regardless of how fast it was rising and sailed straight past into an overshoot. The sim's
+--- altitude is instantaneous (no momentum), so this is unit-tested on regulateHeight directly.
+T.it("float regulation is velocity-damped: below target but rising fast eases the collective off", function()
+  local r = scRig({ hoverHeight = 2.0, hoverTolerance = 0.5,
+    approachSpeed = 0.5, approachGain = 0.5, collectiveGain = 0.3 })
+  local now = 100000
+  r.sc:start({ engineOn = true, fuelled = true, onGround = true, velocityVector = "vector" },
+    { now = now, altitude = 74.5 })
+  r.sc.run.collective = 0.6
+  r.sc.run.lastRegAt = now
+  local before = r.sc.run.collective
+  -- 1 block up (below the 1.5 band bottom) but climbing at 1.5 m/s -- 3x the 0.5 approach speed.
+  r.sc:regulateHeight({ altitude = 74.5 + 1.0, velocity = { x = 0, y = 1.5, z = 0 } }, now + 100)
+  T.isTrue(r.sc.run.collective < before,
+    "eased off despite being below target: " .. before .. " -> " .. r.sc.run.collective)
+end)
+
+T.it("float regulation still adds lift when below target and not yet climbing", function()
+  local r = scRig({ hoverHeight = 2.0, hoverTolerance = 0.5,
+    approachSpeed = 0.5, approachGain = 0.5, collectiveGain = 0.3 })
+  local now = 100000
+  r.sc:start({ engineOn = true, fuelled = true, onGround = true, velocityVector = "vector" },
+    { now = now, altitude = 74.5 })
+  r.sc.run.collective = 0.6
+  r.sc.run.lastRegAt = now
+  local before = r.sc.run.collective
+  -- On the ground, not moving: it must add lift to get airborne.
+  r.sc:regulateHeight({ altitude = 74.5, velocity = { x = 0, y = 0, z = 0 } }, now + 100)
+  T.isTrue(r.sc.run.collective > before,
+    "adds lift to start rising: " .. before .. " -> " .. r.sc.run.collective)
 end)
 
 T.it("after easing down into the band, the float settles and proceeds", function()

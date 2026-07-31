@@ -346,40 +346,49 @@ function SelfConfig:heartbeat(now)
   end
 end
 
---- Nudge the shared lift collective ONE tick toward the hover band. This is the height controller
---- used both to get airborne (float) and to HOLD height across the long probe run (settle) -- a
---- frozen collective was the bug: probing deflects a lift nozzle, which tilts its thrust off
---- vertical and bleeds lift, so over many nozzles the craft crept down until the front touched.
+--- Move the shared lift collective ONE tick toward a gentle, VELOCITY-DAMPED hover. Used both to
+--- get airborne (float) and to HOLD height across the long probe run (settle) -- a frozen collective
+--- was an earlier bug: probing deflects a lift nozzle, which tilts its thrust off vertical and bleeds
+--- lift, so over many nozzles the craft crept down until the front touched.
 ---
----   * below the band -> ramp collective UP;
----   * above the band -> ramp collective DOWN (never a fault -- easing off always converges);
----   * inside        -> trim the small amount that arrests the residual vertical drift.
+--- NOT a bang-bang ramp. Ramping the collective straight at the height band overshoots on a craft
+--- with real vertical momentum -- it sails past the band and slams back down (a limit cycle the
+--- pilot reported). Instead this is a cascaded controller:
+---
+---   desiredVy = clamp(approachGain * (target - h), +/- approachSpeed)   -- gentle approach speed
+---   collective += collectiveGain * (desiredVy - vy) * dt               -- track it, damped by vy
+---
+--- As the craft nears the target, desiredVy eases to zero; if it is already rising faster than the
+--- approach speed, (desiredVy - vy) goes negative and the collective backs OFF before the overshoot.
+--- So it glides into the band and holds, finding the hover collective on the way.
 ---
 --- Returns the height (or nil) and whether it is below / above the band, so callers can layer
 --- their own policy (float's WONT-LIFT dwell, settle's baseline gate) on top.
 function SelfConfig:regulateHeight(ctx, now)
   local p = self:params()
-  local dt = ((now - (self.run.lastRegAt or now)) / 1000)
+  local dt = math.max((now - (self.run.lastRegAt or now)) / 1000, 0)
   self.run.lastRegAt = now
   local maxC = p.maxCollective or 1.0
-  local step = (p.collectiveRamp or 0.1) * math.max(dt, 0)
-  local target = p.hoverHeight or 2.0
-  local tol = p.hoverTolerance or 0.5
   local h = self:height(ctx)
 
-  -- No height reading (no altimeter): treat as below so a sensorless craft still tries to rise.
-  local below = (type(h) ~= "number") or (h < target - tol)
-  local above = (type(h) == "number") and (h > target + tol)
-
-  if below then
-    self.run.collective = Util.clamp(self.run.collective + step, 0, maxC)
-  elseif above then
-    self.run.collective = Util.clamp(self.run.collective - step, 0, maxC)
-  else
-    local vy = (ctx and ctx.velocity and ctx.velocity.y) or 0
-    self.run.collective = Util.clamp(self.run.collective - Util.clamp(vy, -1, 1) * step, 0, maxC)
+  if type(h) ~= "number" then
+    -- No altimeter: fall back to a slow open-loop ramp so a sensorless craft still tries to rise.
+    -- It cannot regulate or leave the float on its own, but it can still reach WONT LIFT.
+    self.run.collective = Util.clamp(self.run.collective + (p.collectiveRamp or 0.1) * dt, 0, maxC)
+    return h, true, false
   end
-  return h, below, above
+
+  local target = p.hoverHeight or 2.0
+  local tol = p.hoverTolerance or 0.5
+  local vy = (ctx and ctx.velocity and ctx.velocity.y) or 0
+
+  local desiredVy = Util.clamp((p.approachGain or 0.5) * (target - h),
+    -(p.approachSpeed or 0.5), (p.approachSpeed or 0.5))
+  local vErr = desiredVy - vy
+  self.run.collective = Util.clamp(self.run.collective + (p.collectiveGain or 0.25) * vErr * dt,
+    0, maxC)
+
+  return h, (h < target - tol), (h > target + tol)
 end
 
 --- FLOAT: get airborne and hold the hover band, then settle. Regulation is shared with settle
