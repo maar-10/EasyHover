@@ -2387,4 +2387,26 @@ T.it("aborts if the engine is switched off mid-run", function()
   T.eq(r.sc.lastRun.abortedShort, "ENGINE OFF", "and names the engine")
 end)
 
+--- The float must ramp all the way to FULL power to try to lift, and declare WONT LIFT only after
+--- HOLDING full power a while -- not the instant it caps out. A craft that never rises exercises it.
+T.it("float ramps to full power and only declares WONT LIFT after holding it", function()
+  local r = scRig({ maxCollective = 1.0, collectiveRamp = 2.0, fullPowerDwellMs = 1000 })
+  local now = 100000
+  r.sc:start({ engineOn = true, fuelled = true, onGround = true, velocityVector = "vector" },
+    { now = now, altitude = 74.5 })
+  local function tickAt(t)   -- altitude never rises: the craft cannot lift
+    r.sc:tick({ now = t, altitude = 74.5, attitude = { pitch = 0, roll = 0 },
+      velocity = { x = 0, y = 0, z = 0 }, engineOn = true })
+  end
+
+  for _ = 1, 8 do now = now + 100; tickAt(now) end   -- ramps to full power (~0.7 s at 2.0/s)
+  T.isTrue(r.sc:isRunning(), "at full power but still trying -- not given up during the dwell")
+  T.eq(r.sc.run.phase, "float", "still in the float phase")
+  T.isTrue(r.sc.run.collective >= 1.0 - 1e-9, "and the collective reached FULL power")
+
+  now = now + 1500; tickAt(now)                       -- held full power past the dwell
+  T.isFalse(r.sc:isRunning(), "WONT LIFT only after holding full power a while")
+  T.eq(r.sc.lastRun.abortedShort, "WONT LIFT", "and says why")
+end)
+
 return true

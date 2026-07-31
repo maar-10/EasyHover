@@ -349,14 +349,17 @@ function Config.defaults()
     -- nozzle must deflect to move it against its ropes, how fast it settles. They are config so
     -- tuning is an edit, not a code change. The safety caps are deliberately conservative.
     selfConfig = {
-      hoverHeight = 1.5,        -- blocks above the ground reference to float to before probing
+      hoverHeight = 2.0,        -- blocks above the ground to float to before probing (rope-limited)
       landedHeight = 0.4,       -- back below this counts as landed
-      heightCeiling = 4.0,      -- ABORT if the craft climbs past this above the reference
+      heightCeiling = 5.0,      -- ABORT if the craft climbs past this above the reference
       baseCollective = 0.0,     -- lift collective the float ramp starts from
-      collectiveRamp = 0.05,    -- collective added per second while seeking the float
-      maxCollective = 0.9,      -- never ask the lift group for more than this
+      collectiveRamp = 0.1,     -- collective added per second while seeking the float
+      maxCollective = 1.0,      -- ramp all the way to FULL power to get off the ground if needed
       landRamp = 0.15,          -- collective shed per second while landing
-      floatTimeoutMs = 8000,    -- if pinned at maxCollective this long and still low, give up
+      -- WONT LIFT is declared only after holding FULL power this long and still being on the ground:
+      -- give a liquid thruster time to build its thrust before concluding the craft is too heavy
+      -- (more thrust -- fuel upgrades -- is then the answer, not more time).
+      fullPowerDwellMs = 5000,
       probeThrust = 0.4,        -- thrust a non-lift thruster fires at while its nozzle is probed
       settleMs = 2000,          -- longest wait for the craft to settle before/after a probe
       settleSpeed = 0.1,        -- craft-frame speed considered "settled" (just above the deadband)

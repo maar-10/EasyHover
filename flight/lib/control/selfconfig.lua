@@ -347,35 +347,43 @@ function SelfConfig:heartbeat(now)
   end
 end
 
---- FLOAT: ramp the lift collective until the craft rises to the target hover height, then settle.
+--- FLOAT: raise the lift collective until the craft rises to the hover height, THEN settle. The
+--- craft is roped, so it rises to the rope's limit (set the ropes to ~hoverHeight) and settles
+--- there. Ramp all the way to FULL power if that is what it takes -- getting airborne comes first;
+--- a comfortable thrust margin is a later concern. Give up only after holding full power a while and
+--- still sitting on the ground, because at that point the answer is more thrust, not more time.
 function SelfConfig:tickFloat(ctx, now)
   local p = self:params()
   local dt = ((now - (self.run.lastFloatAt or now)) / 1000)
   self.run.lastFloatAt = now
 
   local h = self:height(ctx)
-  local target = p.hoverHeight or 1.5
+  local target = p.hoverHeight or 2.0
   if type(h) == "number" and h >= target then
-    -- Floating. Hold this collective and settle before the first probe.
+    -- Airborne to the target height. Hold this collective (the ropes hold the height) and settle
+    -- before the first probe. This is the ONLY way out of the float toward the actual config loop.
     self:holdFloat()
     self:enter("settle", now)
     return
   end
 
-  -- Not yet up. Ramp collective, capped. A proportional term on height error makes the approach
-  -- gentle near the target rather than slamming the ceiling.
-  local err = (type(h) == "number") and (target - h) or target
-  local ramp = (p.collectiveRamp or 0.05) * math.max(dt, 0)
-  local wanted = self.run.collective + ramp + (p.climbGain or 0.15) * 0 -- ramp dominates the seek
-  self.run.collective = Util.clamp(math.min(wanted, self.run.collective + ramp),
-    0, p.maxCollective or 0.9)
+  -- Not up yet: keep ramping, all the way to full power if needed.
+  local maxC = p.maxCollective or 1.0
+  self.run.collective = Util.clamp(self.run.collective + (p.collectiveRamp or 0.1) * math.max(dt, 0),
+    0, maxC)
   self:holdFloat()
 
-  -- A float that never lifts is a craft that cannot make enough thrust (too heavy, too little
-  -- fuel, ropes too tight). Give up rather than pin the collective at max forever.
-  if self.run.collective >= (p.maxCollective or 0.9) and
-     (now - self.run.phaseSince) > (p.floatTimeoutMs or 8000) then
-    self:abort("aborted: could not lift to hover height", "WONT LIFT")
+  -- WONT LIFT is declared ONLY at full power, and only after holding it -- a liquid thruster ramps
+  -- its thrust, so full power needs a moment to mean full thrust. Below full power we are still
+  -- climbing the throttle and must not give up. The safety envelope (tilt/height/runaway), checked
+  -- every tick before this, is what aborts a crash or a rope letting go.
+  if self.run.collective >= maxC then
+    self.run.atMaxSince = self.run.atMaxSince or now
+    if (now - self.run.atMaxSince) > (p.fullPowerDwellMs or 5000) then
+      self:abort("aborted: full thrust and still on the ground", "WONT LIFT")
+    end
+  else
+    self.run.atMaxSince = nil
   end
 end
 
