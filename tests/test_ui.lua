@@ -928,26 +928,33 @@ T.it("the lateral page names which pair steers and which is precision-only", fun
   T.eq(byKey.rr.hint, "precision", "the rear pair is precision-only")
 end)
 
-T.it("each thruster group offers EXTRA booster slots beyond the four corners", function()
-  -- So a craft that four nozzles can't lift can take more, without a code change. The keys must
-  -- be x1..xN so the flight side's extraGeometry recognises them (same constant on both sides).
-  local n = ConfigPanel.EXTRA_SLOTS_PER_GROUP
-  T.isTrue(n and n >= 1, "there is at least one extra slot per group")
-  for _, group in ipairs({ "lift", "accel", "lateral" }) do
-    local kind = group == "accel" and "main" or group
-    local extras = {}
-    for _, slot in ipairs(ConfigPanel.SECTION_SLOTS[group].slots) do
-      if slot.key:match("^x%d+$") then
-        extras[slot.key] = slot
-        T.eq(slot.kind, kind, group .. " extra addresses the right group")
-      end
+T.it("lift and lateral offer a SECOND corner ring, labelled by position", function()
+  -- The pilot's complaint: "EX1" tells you nothing about where to bolt the spare. A booster is
+  -- labelled by its corner with a "2" ("FL" -> "FL2") and keyed "x<corner>" so the flight side
+  -- gives it that corner's geometry.
+  for _, group in ipairs({ "lift", "lateral" }) do
+    local kind = group
+    local byKey = {}
+    for _, slot in ipairs(ConfigPanel.SECTION_SLOTS[group].slots) do byKey[slot.key] = slot end
+    T.eq(#ConfigPanel.SECTION_SLOTS[group].slots, 8, group .. " has four corners plus four boosters")
+    for _, corner in ipairs({ "fl", "fr", "rl", "rr" }) do
+      local primary, extra = byKey[corner], byKey["x" .. corner]
+      T.notNil(extra, group .. " offers a second " .. corner)
+      T.eq(extra.kind, kind, "the booster addresses the right group")
+      T.eq(extra.label, primary.label .. "2", "labelled by position with a 2: " .. extra.label)
+      T.eq(extra.hint, primary.hint, "and keeps the corner's role hint")
     end
-    for i = 1, n do
-      T.notNil(extras["x" .. i], group .. " offers booster slot x" .. i)
-    end
-    -- Four named corners + n extras, and nothing past xN (which the flight side would refuse).
-    T.eq(#ConfigPanel.SECTION_SLOTS[group].slots, 4 + n, group .. " has four corners plus extras")
   end
+end)
+
+T.it("accel has no corners, so its extras are just numbered further (M5..M8)", function()
+  local byKey = {}
+  for _, slot in ipairs(ConfigPanel.SECTION_SLOTS.accel.slots) do byKey[slot.key] = slot end
+  T.eq(#ConfigPanel.SECTION_SLOTS.accel.slots, 8, "four accelerators plus four extras")
+  T.eq(byKey["1"].label, "M1", "the first four are M1..M4")
+  T.eq(byKey["x1"].label, "M5", "and the extras continue the numbering, keyed x1")
+  T.eq(byKey["x4"].label, "M8", "up to M8")
+  T.eq(byKey["x1"].kind, "main", "still main thrusters")
 end)
 
 T.it("velocity axes are named by WHAT THEY MEASURE, not by a letter", function()

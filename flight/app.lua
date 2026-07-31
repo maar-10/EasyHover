@@ -653,39 +653,40 @@ local SLOT_GEOMETRY = {
 
 App.SLOT_GEOMETRY = SLOT_GEOMETRY
 
---- Beyond the named corner slots, each group accepts this many EXTRA booster thrusters.
+--- Beyond the named slots, each group accepts a SECOND set of boosters -- so a craft that one
+--- ring of nozzles cannot lift can take another.
 ---
---- Why they exist: the four corners fix the frame's attitude authority, but raw lift (or raw
---- forward thrust) is just a sum -- if four nozzles cannot get the craft off the ground, the fix
---- is more nozzles, not a redesign. So a group can hold N corners PLUS these extras.
+--- Why they exist: raw lift (or forward thrust) is just a sum -- if four nozzles cannot get the
+--- craft off the ground, the fix is more nozzles, not a redesign.
 ---
---- Extras sit at the CENTRE OF MASS (pos 0,0,0). That is deliberate: sign(0) is 0, so the mixer
---- gives a centre thruster no toe and no differential -- it contributes pure collective lift (or
---- pure forward thrust) and cannot tilt the craft. An extra booster therefore adds power without
---- touching the attitude loop that keeps the craft stable. A pilot with an off-centre spare can
---- still edit its `pos` in the config file to reclaim its moment arm.
-local EXTRA_SLOTS_PER_GROUP = 4
+--- Crucially, an extra sits at the SAME PLACE as its primary counterpart, not at the centre. A
+--- "x"-prefixed key resolves to the identical geometry -- moment arm, facing and flags -- as the
+--- corner it doubles ("xfl" == "fl"). That is what lets the config screen label a booster by
+--- position ("FL2") instead of an anonymous number: a second thruster bolted at the front-left
+--- doubles the front-left's lift AND its pitch/roll authority, exactly as a pilot expects. The
+--- main group has no corners, so its extras are simply more accelerators (x1..x4 -> M5..M8).
+local EXTRA_GEOMETRY = {
+  lift = {
+    xfl = SLOT_GEOMETRY.lift.fl, xfr = SLOT_GEOMETRY.lift.fr,
+    xrl = SLOT_GEOMETRY.lift.rl, xrr = SLOT_GEOMETRY.lift.rr,
+  },
+  lateral = {
+    xfl = SLOT_GEOMETRY.lateral.fl, xfr = SLOT_GEOMETRY.lateral.fr,
+    xrl = SLOT_GEOMETRY.lateral.rl, xrr = SLOT_GEOMETRY.lateral.rr,
+  },
+  main = {
+    x1 = SLOT_GEOMETRY.main["1"], x2 = SLOT_GEOMETRY.main["2"],
+    x3 = SLOT_GEOMETRY.main["3"], x4 = SLOT_GEOMETRY.main["4"],
+  },
+}
 
---- Synthesise the geometry for an extra booster slot ("x1".."xN"), or nil if `key` is not one.
---- Same shape SLOT_GEOMETRY entries have, so handleSetSlot treats named and extra slots alike.
+--- The geometry for an extra booster slot, or nil if `key` is not one. Same shape SLOT_GEOMETRY
+--- entries have, so handleSetSlot treats a named corner and its booster identically.
 local function extraGeometry(kind, key)
-  local n = type(key) == "string" and key:match("^x(%d+)$")
-  n = n and tonumber(n)
-  if not n or n < 1 or n > EXTRA_SLOTS_PER_GROUP then return nil end
-  local centre = { x = 0, y = 0, z = 0 }
-  if kind == "lift" then
-    return { pos = centre, thrustAxis = "down" }
-  elseif kind == "main" then
-    return { pos = centre, thrustAxis = "back" }
-  elseif kind == "lateral" then
-    -- A centre lateral has no yaw moment, so it can only ever be a translation helper: idle in
-    -- normal flight, used by Precision mode and the Flight Assistant, same as the rear corners.
-    return { pos = centre, thrustAxis = "right", precisionOnly = true }
-  end
-  return nil
+  return (EXTRA_GEOMETRY[kind] or {})[key]
 end
 
-App.EXTRA_SLOTS_PER_GROUP = EXTRA_SLOTS_PER_GROUP
+App.EXTRA_GEOMETRY = EXTRA_GEOMETRY
 
 --- Assign (or clear) one named hardware slot, then re-validate the WHOLE config and put the
 --- previous state back if the result would be illegal. Same contract as setTank/setVault: the

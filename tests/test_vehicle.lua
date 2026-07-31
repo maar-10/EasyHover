@@ -592,71 +592,74 @@ T.it("THE SAME CORNER IN TWO GROUPS DOES NOT COLLIDE", function()
   fs.delete(path)
 end)
 
-T.it("takes EXTRA lift boosters beyond the four corners, at the centre of mass", function()
-  -- The reason they exist: if four nozzles cannot lift the craft, the fix is more nozzles. An
-  -- extra sits at 0,0,0 so it adds pure lift and cannot tilt the craft (sign(0) = 0 -> the
-  -- mixer gives it no toe and no differential).
+T.it("takes a SECOND lift booster at a corner, with that corner's moment arm", function()
+  -- The reason they exist: if four nozzles cannot lift the craft, the fix is more nozzles. A
+  -- booster keyed "xfl" doubles the FRONT-LEFT -- same geometry -- so the pilot who bolts a spare
+  -- there gets more lift AND more roll/pitch authority, and the screen can label it by position.
   local app, path = appRig({ hardware = { thrusters = {} } })
   for _, key in ipairs({ "fl", "fr", "rl", "rr" }) do
     app:handleCommand({ cmd = "setSlot", kind = "lift", key = key,
       peripheral = "vector_thruster_" .. ({ fl = 0, fr = 1, rl = 2, rr = 3 })[key] })
   end
-  T.isTrue((app:handleCommand({ cmd = "setSlot", kind = "lift", key = "x1",
+  T.isTrue((app:handleCommand({ cmd = "setSlot", kind = "lift", key = "xfl",
     peripheral = "vector_thruster_4" })), "a fifth lift thruster is accepted")
 
-  local extra
+  local extra, primary
   for _, t in ipairs(app.cfg.hardware.thrusters) do
-    if Config.slotKey(t) == "x1" then extra = t end
+    if Config.slotKey(t) == "xfl" then extra = t end
+    if Config.slotKey(t) == "fl" then primary = t end
   end
   T.notNil(extra, "the booster slot was created")
-  T.eq(extra.id, "lift_x1", "group-qualified id")
+  T.eq(extra.id, "lift_xfl", "group-qualified id, unique across the craft")
   T.eq(extra.group, "lift", "still a lift thruster")
-  T.eq(extra.thrustAxis, "down", "faces down like the corners")
-  T.eq(extra.pos.x, 0, "at the centre on x -> no roll moment")
-  T.eq(extra.pos.z, 0, "at the centre on z -> no pitch moment")
+  T.eq(extra.thrustAxis, "down", "faces down like the corner")
+  T.eq(extra.pos.x, primary.pos.x, "same x arm as the front-left it doubles")
+  T.eq(extra.pos.z, primary.pos.z, "same z arm -> shares the front-left's pitch/roll authority")
   T.eq(#app.cfg.hardware.thrusters, 5, "four corners plus one booster")
   fs.delete(path)
 end)
 
-T.it("a centre booster is pure lift in the mixer: no toe, no attitude coupling", function()
+T.it("a corner booster shares its corner's mixer geometry, so attitude scales", function()
   local app, path = appRig({ hardware = { thrusters = {} } })
   app:handleCommand({ cmd = "setSlot", kind = "lift", key = "fl", peripheral = "vector_thruster_0" })
-  app:handleCommand({ cmd = "setSlot", kind = "lift", key = "x1", peripheral = "vector_thruster_1" })
-  local booster
+  app:handleCommand({ cmd = "setSlot", kind = "lift", key = "xfl", peripheral = "vector_thruster_1" })
+  local primary, booster
   for _, item in ipairs(app.mixer:ensureLayout().lift) do
-    if item.id == "lift_x1" then booster = item end
+    if item.id == "lift_fl" then primary = item end
+    if item.id == "lift_xfl" then booster = item end
   end
   T.notNil(booster, "the booster is in the mixer's lift group")
-  T.eq(booster.sx, 0, "sign(0) x -> contributes nothing to roll")
-  T.eq(booster.sz, 0, "sign(0) z -> contributes nothing to pitch")
+  T.eq(booster.sx, primary.sx, "same roll sign as the front-left")
+  T.eq(booster.sz, primary.sz, "same pitch sign as the front-left")
   fs.delete(path)
 end)
 
-T.it("refuses an extra booster slot beyond the allowed count", function()
+T.it("refuses an extra booster slot the flight side does not recognise", function()
   local app, path = appRig({ hardware = { thrusters = {} } })
   app:handleCommand({ cmd = "setSlot", kind = "lift", key = "fl", peripheral = "vector_thruster_0" })
-  local over = "x" .. (App.EXTRA_SLOTS_PER_GROUP + 1)
-  local ok, detail = app:handleCommand({ cmd = "setSlot", kind = "lift", key = over,
+  local ok, detail = app:handleCommand({ cmd = "setSlot", kind = "lift", key = "xzz",
     peripheral = "vector_thruster_1" })
-  T.isFalse(ok, "an out-of-range booster key is refused")
+  T.isFalse(ok, "an unknown booster key is refused")
   T.containsMatch((detail or {}).errors or {}, "unknown lift slot",
     "and says so: " .. table.concat((detail or {}).errors or {}, "; "))
   fs.delete(path)
 end)
 
-T.it("also takes extra MAIN and LATERAL boosters, with the right facing", function()
+T.it("also takes a second LATERAL corner and extra MAIN accelerators", function()
   local app, path = appRig({ hardware = { thrusters = {} } })
   app:handleCommand({ cmd = "setSlot", kind = "lift", key = "fl", peripheral = "vector_thruster_0" })
+  -- Main has no corners, so its extras are just numbered further (x1 -> M5).
   T.isTrue((app:handleCommand({ cmd = "setSlot", kind = "main", key = "x1",
     peripheral = "vector_thruster_1" })), "extra main accepted")
-  T.isTrue((app:handleCommand({ cmd = "setSlot", kind = "lateral", key = "x1",
+  -- A second front-left lateral mirrors the primary front-left: it steers.
+  T.isTrue((app:handleCommand({ cmd = "setSlot", kind = "lateral", key = "xfl",
     peripheral = "vector_thruster_2" })), "extra lateral accepted")
   local byId = {}
   for _, t in ipairs(app.cfg.hardware.thrusters) do byId[t.id] = t end
   T.eq(byId["main_x1"].thrustAxis, "back", "an extra accelerator still faces back")
-  T.eq(byId["lateral_x1"].thrustAxis, "right", "an extra lateral gets a facing")
-  T.isTrue(byId["lateral_x1"].precisionOnly, "a centre lateral has no yaw, so it is precision-only")
-  T.isFalse(byId["lateral_x1"].yawAuthority, "and never steers")
+  T.eq(byId["lateral_xfl"].thrustAxis, "right", "a second front-left lateral keeps its facing")
+  T.isTrue(byId["lateral_xfl"].yawAuthority, "and steers, exactly like the front-left it doubles")
+  T.isFalse(byId["lateral_xfl"].precisionOnly, "so it is used in normal flight, not just precision")
   fs.delete(path)
 end)
 

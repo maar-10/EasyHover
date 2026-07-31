@@ -27,9 +27,9 @@
       ["files"] = {
         {
           ["dst"] = "flight/app.lua",
-          ["size"] = 59750,
+          ["size"] = 59597,
           ["src"] = "flight/app.lua",
-          ["sum"] = "3749456f",
+          ["sum"] = "1f8b42fd",
         },
         {
           ["dst"] = "flight/diskmenu.lua",
@@ -551,9 +551,9 @@
         },
         {
           ["dst"] = "ui_main/ui/config_panel.lua",
-          ["size"] = 39018,
+          ["size"] = 39129,
           ["src"] = "ui_main/ui/config_panel.lua",
-          ["sum"] = "c667a51d",
+          ["sum"] = "c37cad63",
         },
         {
           ["dst"] = "ui_main/ui/nav.lua",
@@ -624,5 +624,5 @@
     ["size"] = 36872,
     ["sum"] = "305c58ce",
   },
-  ["version"] = "bef6d272",
+  ["version"] = "107820ea",
 }
