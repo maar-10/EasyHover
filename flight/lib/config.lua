@@ -251,6 +251,12 @@ function Config.defaults()
         -- commanded, the collective ramps open-loop toward full at this rate (per second) -- the same
         -- way SELF CONFIG lifts the craft -- until it is airborne, then the rate loop takes over.
         takeoffRamp = 0.5,
+        -- Pilot vertical authority. The rate loop's gains are tiny (gentle altitude hold), so on
+        -- their own a climb/descend command barely moves a craft whose hover sits near full thrust.
+        -- While the pilot is actively commanding a vertical speed, the collective is fed forward by
+        -- up to this fraction (full sink -> -this, full climb -> +this), so descent and climb have
+        -- real, immediate authority. Zero the instant the stick is released (altitude hold).
+        verticalAuthority = 0.6,
         trimLearnRate = 0.002,
         -- share of vertical authority given to symmetric nozzle trim (the continuous
         -- axis) rather than the 16-step thrust axis

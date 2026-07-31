@@ -126,8 +126,11 @@ function Altitude:update(target, measured, dt)
   end
 
   -- ---- outer: altitude -> vertical-speed demand
+  -- A direct command is the pilot actively asking for a climb/sink RATE (vs. holding an altitude);
+  -- it is what earns the vertical-authority feedforward below.
+  local directCommand = type(target.verticalSpeed) == "number"
   local vsDemand
-  if type(target.verticalSpeed) == "number" then
+  if directCommand then
     vsDemand = target.verticalSpeed
     dbg.direct = true
   else
@@ -147,10 +150,25 @@ function Altitude:update(target, measured, dt)
     { saturated = self.saturated })
   dbg.rate = rateInfo
 
+  -- ---- pilot vertical AUTHORITY (feedforward)
+  -- The rate loop's gains are tiny (tuned for gentle altitude HOLD, +/-0.1 blocks), so its output
+  -- can only nudge thrust ~0.4 from the hover trim. On a craft whose hover sits high, a descend
+  -- command then barely sinks it and a climb command barely lifts it -- the reported "it won't come
+  -- down". So when the pilot is ACTIVELY commanding a vertical speed, add a direct feedforward
+  -- proportional to how hard they are asking: full command moves the collective by verticalAuthority
+  -- immediately, and the rate PID trims around it. Released (altitude hold), directCommand is false,
+  -- the feedforward is zero, and the gentle hold behaviour is exactly as before.
+  local ff = 0
+  if directCommand then
+    local refRate = (vsDemand >= 0) and (e.maxClimbRate or 6) or (e.maxSinkRate or 4)
+    ff = (ac.verticalAuthority or 0.6) * Util.clamp(vsDemand / math.max(refRate, 1e-6), -1, 1)
+  end
+  dbg.ff = ff
+
   -- Floor the collective while airborne: a saturating rate loop commanding zero thrust is
   -- not a descent, it is free fall. Found by tests/sim.lua, not by inspection.
   local floor = ac.minAirborneCollective or 0
-  local demand = self.hoverTrim + rawRate
+  local demand = self.hoverTrim + rawRate + ff
   self.saturated = demand <= floor or demand >= 1
   demand = Util.clamp(demand, floor, 1)
   dbg.demand = demand

@@ -1093,6 +1093,45 @@ T.it("a climb input while ENGAGED arms the mixer -- that is the takeoff", functi
   fs.delete(path)
 end)
 
+--- LANDING AUTHORITY. The rate loop's gentle hold gains can only shave ~0.4 off the hover trim, so
+--- on a craft that hovers near full thrust a held descend command barely sinks it -- the reported
+--- "it won't come down". The pilot-authority feedforward must pull the collective firmly down (to
+--- the floor at full descend) so the craft actually lands.
+T.it("airborne, holding descend pulls the collective down to the floor to land", function()
+  local app, path = appRig(fullCraft())
+  mock.vehicle.groundDist = 10.0                                  -- airborne
+  app.pilot.read = function() return { climb = -1 }, {}, {} end   -- holding DESCEND (leftShift)
+  app.engine.master = true
+  app.modes:setArmed(true)
+  app.altitude.hoverTrim = 0.9                                    -- a heavy craft's learned hover
+  app.altitude.trimLearned = true
+  local floor = app.cfg.control.altitude.minAirborneCollective
+  for _ = 1, 40 do app:cycle(0.05) end
+  T.eq(app._lastOwner, "mixer", "the mixer is flying it")
+  local c = (app.lastAltitudeOut or {}).collective
+  T.isTrue(type(c) == "number" and c <= floor + 1e-6,
+    "full descend drives the collective to the floor, got " .. tostring(c))
+  fs.delete(path)
+end)
+
+--- The mirror case: releasing the stick must NOT get the authority feedforward -- it holds altitude
+--- at the hover trim, unchanged, or the craft would sink on its own the moment you let go.
+T.it("airborne, hands off, holds altitude at the hover trim (no authority feedforward)", function()
+  local app, path = appRig(fullCraft())
+  mock.vehicle.groundDist = 10.0
+  app.pilot.read = function() return { climb = 0, accel = 0 }, {}, {} end  -- hands off
+  app.engine.master = true
+  app.modes:setArmed(true)
+  app.altitude.hoverTrim = 0.7
+  app.altitude.trimLearned = true
+  for _ = 1, 20 do app:cycle(0.05) end
+  local c = (app.lastAltitudeOut or {}).collective
+  -- Holds near the hover trim (0.7), not driven to a floor or a ceiling by any feedforward.
+  T.isTrue(type(c) == "number" and c > 0.55 and c < 0.85,
+    "hands-off holds near the 0.7 hover, got " .. tostring(c))
+  fs.delete(path)
+end)
+
 --- THE TAKEOFF DEADLOCK. The altitude loop zeroes collective while groundContact is true (so
 --- integrators cannot wind up on the skids), but groundContact only clears AFTER the craft lifts.
 --- So a climb command handed the mixer control yet made NO lift -- the craft could never leave the
