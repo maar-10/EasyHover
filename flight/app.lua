@@ -653,6 +653,40 @@ local SLOT_GEOMETRY = {
 
 App.SLOT_GEOMETRY = SLOT_GEOMETRY
 
+--- Beyond the named corner slots, each group accepts this many EXTRA booster thrusters.
+---
+--- Why they exist: the four corners fix the frame's attitude authority, but raw lift (or raw
+--- forward thrust) is just a sum -- if four nozzles cannot get the craft off the ground, the fix
+--- is more nozzles, not a redesign. So a group can hold N corners PLUS these extras.
+---
+--- Extras sit at the CENTRE OF MASS (pos 0,0,0). That is deliberate: sign(0) is 0, so the mixer
+--- gives a centre thruster no toe and no differential -- it contributes pure collective lift (or
+--- pure forward thrust) and cannot tilt the craft. An extra booster therefore adds power without
+--- touching the attitude loop that keeps the craft stable. A pilot with an off-centre spare can
+--- still edit its `pos` in the config file to reclaim its moment arm.
+local EXTRA_SLOTS_PER_GROUP = 4
+
+--- Synthesise the geometry for an extra booster slot ("x1".."xN"), or nil if `key` is not one.
+--- Same shape SLOT_GEOMETRY entries have, so handleSetSlot treats named and extra slots alike.
+local function extraGeometry(kind, key)
+  local n = type(key) == "string" and key:match("^x(%d+)$")
+  n = n and tonumber(n)
+  if not n or n < 1 or n > EXTRA_SLOTS_PER_GROUP then return nil end
+  local centre = { x = 0, y = 0, z = 0 }
+  if kind == "lift" then
+    return { pos = centre, thrustAxis = "down" }
+  elseif kind == "main" then
+    return { pos = centre, thrustAxis = "back" }
+  elseif kind == "lateral" then
+    -- A centre lateral has no yaw moment, so it can only ever be a translation helper: idle in
+    -- normal flight, used by Precision mode and the Flight Assistant, same as the rear corners.
+    return { pos = centre, thrustAxis = "right", precisionOnly = true }
+  end
+  return nil
+end
+
+App.EXTRA_SLOTS_PER_GROUP = EXTRA_SLOTS_PER_GROUP
+
 --- Assign (or clear) one named hardware slot, then re-validate the WHOLE config and put the
 --- previous state back if the result would be illegal. Same contract as setTank/setVault: the
 --- craft never ends up in a config it would refuse to boot from.
@@ -686,7 +720,7 @@ function App:handleSetSlot(cmd)
   end
 
   if kind == "lift" or kind == "main" or kind == "lateral" then
-    local geometry = (SLOT_GEOMETRY[kind] or {})[key]
+    local geometry = (SLOT_GEOMETRY[kind] or {})[key] or extraGeometry(kind, key)
     if not geometry then return false, { errors = { "unknown " .. kind .. " slot: " .. tostring(key) } } end
     -- Drop whatever already fills this slot under EITHER spelling. Missing the old one would
     -- leave two entries for the same physical thruster, and the mixer would command it twice.

@@ -25,11 +25,11 @@ SelfTest.__index = SelfTest
 --- Each step names a thruster GROUP and what the pilot should be looking at.
 SelfTest.STEPS = {
   { group = "lift",    label = "LIFT THRUSTERS",
-    watch = "all four lift nozzles" },
+    watch = "every lift nozzle" },
   { group = "lateral", label = "LATERAL THRUSTERS",
     watch = "front pair, then rear" },
   { group = "main",    label = "ACCEL THRUSTERS",
-    watch = "all four accelerators" },
+    watch = "every accelerator" },
 }
 
 local STEP_MS = 15000

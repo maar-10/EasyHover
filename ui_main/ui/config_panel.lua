@@ -44,27 +44,44 @@ end
 
 ConfigPanel.formatDuration = formatDuration
 
+--- Beyond the named corners, each thruster group offers this many EXTRA booster slots, so a
+--- craft that four nozzles can't lift can take more. Must not exceed the flight computer's own
+--- EXTRA_SLOTS_PER_GROUP (flight/app.lua): a key it doesn't recognise is refused by setSlot.
+local EXTRA_SLOTS_PER_GROUP = 4
+
+ConfigPanel.EXTRA_SLOTS_PER_GROUP = EXTRA_SLOTS_PER_GROUP
+
+--- Append EX1..EXn booster slots to a group's named slots. Extras sit at the craft's centre of
+--- mass on the flight side, so they add pure lift/thrust and never tilt the craft (see app.lua).
+local function withExtras(kind, named, extraTitle, extraHint)
+  for i = 1, EXTRA_SLOTS_PER_GROUP do
+    named[#named + 1] = { kind = kind, key = "x" .. i, label = "EX" .. i,
+      title = extraTitle .. " " .. i, hint = extraHint }
+  end
+  return named
+end
+
 --- Which named slots each hardware section offers. `kind` and `key` address `setSlot`
 --- exactly, and `source` names the candidate list in telemetry.
 local SECTION_SLOTS = {
-  lift = { source = "thrusters", hint = "lift thruster", slots = {
+  lift = { source = "thrusters", hint = "lift thruster", slots = withExtras("lift", {
     { kind = "lift", key = "fl", label = "FL", title = "LIFT FRONT L" },
     { kind = "lift", key = "fr", label = "FR", title = "LIFT FRONT R" },
     { kind = "lift", key = "rl", label = "RL", title = "LIFT REAR L" },
     { kind = "lift", key = "rr", label = "RR", title = "LIFT REAR R" },
-  } },
-  accel = { source = "thrusters", hint = "main thruster", slots = {
+  }, "LIFT EXTRA", "center booster") },
+  accel = { source = "thrusters", hint = "main thruster", slots = withExtras("main", {
     { kind = "main", key = "1", label = "M1", title = "ACCEL 1" },
     { kind = "main", key = "2", label = "M2", title = "ACCEL 2" },
     { kind = "main", key = "3", label = "M3", title = "ACCEL 3" },
     { kind = "main", key = "4", label = "M4", title = "ACCEL 4" },
-  } },
-  lateral = { source = "thrusters", hint = "lateral thruster", slots = {
+  }, "ACCEL EXTRA", "center booster") },
+  lateral = { source = "thrusters", hint = "lateral thruster", slots = withExtras("lateral", {
     { kind = "lateral", key = "fl", label = "FL", title = "LAT FRONT L", hint = "steers" },
     { kind = "lateral", key = "fr", label = "FR", title = "LAT FRONT R", hint = "steers" },
     { kind = "lateral", key = "rl", label = "RL", title = "LAT REAR L", hint = "precision" },
     { kind = "lateral", key = "rr", label = "RR", title = "LAT REAR R", hint = "precision" },
-  } },
+  }, "LAT EXTRA", "precision") },
   -- NAMED BY WHAT THEY MEASURE, not by an axis letter. x/y/z depend on whose convention you
   -- are using and which way the sensor is bolted on; "medial" is unambiguous. The keys stay
   -- x/y/z because that is what the control code reads (velocity.x, velocity.z).

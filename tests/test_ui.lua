@@ -837,9 +837,10 @@ T.it("lists every slot with what fills it, and how many are done", function()
   assigned["lift:fl"] = "vector_thruster_0"
   widget.update()
   T.eq(widget.elements.title:getText(), "LIFT THRUSTERS", "title")
-  T.eq(widget.elements.subtitle:getText(), "1 of 4 set", "progress, so you can see what is left")
+  T.eq(widget.elements.subtitle:getText(), "1 of " .. #LIFT.slots .. " set",
+    "progress, so you can see what is left")
   local rows = visibleRows(widget)
-  T.eq(#rows, 4, "four corners: " .. table.concat(rows, " | "))
+  T.eq(#rows, #LIFT.slots, "every slot listed: " .. table.concat(rows, " | "))
   T.isTrue(rows[1]:find("FL") ~= nil, "labelled by corner: " .. rows[1])
   T.isTrue(rows[1]:find("thruster_0") ~= nil, "and shows its peripheral: " .. rows[1])
   T.isTrue(rows[2]:find("--") ~= nil, "an empty slot says so: " .. rows[2])
@@ -879,13 +880,13 @@ T.it("NEVER shows an assignment the craft has not confirmed", function()
   click(candidateRow(widget, "vector_thruster_0"))
   T.eq(#commands, 1, "the command went out")
   widget.update()
-  T.eq(widget.elements.subtitle:getText(), "0 of 4 set", "still nothing confirmed")
+  T.eq(widget.elements.subtitle:getText(), "0 of " .. #LIFT.slots .. " set", "still nothing confirmed")
   T.isTrue(widget.elements.footer:getText():find("waiting") ~= nil,
     "and it says it is waiting: " .. widget.elements.footer:getText())
 
   assigned["lift:fl"] = "vector_thruster_0"       -- the craft reports it
   widget.update()
-  T.eq(widget.elements.subtitle:getText(), "1 of 4 set", "NOW it counts")
+  T.eq(widget.elements.subtitle:getText(), "1 of " .. #LIFT.slots .. " set", "NOW it counts")
   T.isFalse(widget.elements.footer:getText():find("waiting") ~= nil, "and stops waiting")
 end)
 
@@ -925,6 +926,28 @@ T.it("the lateral page names which pair steers and which is precision-only", fun
   for _, slot in ipairs(slots) do byKey[slot.key] = slot end
   T.eq(byKey.fl.hint, "steers", "the front pair steers")
   T.eq(byKey.rr.hint, "precision", "the rear pair is precision-only")
+end)
+
+T.it("each thruster group offers EXTRA booster slots beyond the four corners", function()
+  -- So a craft that four nozzles can't lift can take more, without a code change. The keys must
+  -- be x1..xN so the flight side's extraGeometry recognises them (same constant on both sides).
+  local n = ConfigPanel.EXTRA_SLOTS_PER_GROUP
+  T.isTrue(n and n >= 1, "there is at least one extra slot per group")
+  for _, group in ipairs({ "lift", "accel", "lateral" }) do
+    local kind = group == "accel" and "main" or group
+    local extras = {}
+    for _, slot in ipairs(ConfigPanel.SECTION_SLOTS[group].slots) do
+      if slot.key:match("^x%d+$") then
+        extras[slot.key] = slot
+        T.eq(slot.kind, kind, group .. " extra addresses the right group")
+      end
+    end
+    for i = 1, n do
+      T.notNil(extras["x" .. i], group .. " offers booster slot x" .. i)
+    end
+    -- Four named corners + n extras, and nothing past xN (which the flight side would refuse).
+    T.eq(#ConfigPanel.SECTION_SLOTS[group].slots, 4 + n, group .. " has four corners plus extras")
+  end
 end)
 
 T.it("velocity axes are named by WHAT THEY MEASURE, not by a letter", function()

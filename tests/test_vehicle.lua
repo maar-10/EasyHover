@@ -592,6 +592,74 @@ T.it("THE SAME CORNER IN TWO GROUPS DOES NOT COLLIDE", function()
   fs.delete(path)
 end)
 
+T.it("takes EXTRA lift boosters beyond the four corners, at the centre of mass", function()
+  -- The reason they exist: if four nozzles cannot lift the craft, the fix is more nozzles. An
+  -- extra sits at 0,0,0 so it adds pure lift and cannot tilt the craft (sign(0) = 0 -> the
+  -- mixer gives it no toe and no differential).
+  local app, path = appRig({ hardware = { thrusters = {} } })
+  for _, key in ipairs({ "fl", "fr", "rl", "rr" }) do
+    app:handleCommand({ cmd = "setSlot", kind = "lift", key = key,
+      peripheral = "vector_thruster_" .. ({ fl = 0, fr = 1, rl = 2, rr = 3 })[key] })
+  end
+  T.isTrue((app:handleCommand({ cmd = "setSlot", kind = "lift", key = "x1",
+    peripheral = "vector_thruster_4" })), "a fifth lift thruster is accepted")
+
+  local extra
+  for _, t in ipairs(app.cfg.hardware.thrusters) do
+    if Config.slotKey(t) == "x1" then extra = t end
+  end
+  T.notNil(extra, "the booster slot was created")
+  T.eq(extra.id, "lift_x1", "group-qualified id")
+  T.eq(extra.group, "lift", "still a lift thruster")
+  T.eq(extra.thrustAxis, "down", "faces down like the corners")
+  T.eq(extra.pos.x, 0, "at the centre on x -> no roll moment")
+  T.eq(extra.pos.z, 0, "at the centre on z -> no pitch moment")
+  T.eq(#app.cfg.hardware.thrusters, 5, "four corners plus one booster")
+  fs.delete(path)
+end)
+
+T.it("a centre booster is pure lift in the mixer: no toe, no attitude coupling", function()
+  local app, path = appRig({ hardware = { thrusters = {} } })
+  app:handleCommand({ cmd = "setSlot", kind = "lift", key = "fl", peripheral = "vector_thruster_0" })
+  app:handleCommand({ cmd = "setSlot", kind = "lift", key = "x1", peripheral = "vector_thruster_1" })
+  local booster
+  for _, item in ipairs(app.mixer:ensureLayout().lift) do
+    if item.id == "lift_x1" then booster = item end
+  end
+  T.notNil(booster, "the booster is in the mixer's lift group")
+  T.eq(booster.sx, 0, "sign(0) x -> contributes nothing to roll")
+  T.eq(booster.sz, 0, "sign(0) z -> contributes nothing to pitch")
+  fs.delete(path)
+end)
+
+T.it("refuses an extra booster slot beyond the allowed count", function()
+  local app, path = appRig({ hardware = { thrusters = {} } })
+  app:handleCommand({ cmd = "setSlot", kind = "lift", key = "fl", peripheral = "vector_thruster_0" })
+  local over = "x" .. (App.EXTRA_SLOTS_PER_GROUP + 1)
+  local ok, detail = app:handleCommand({ cmd = "setSlot", kind = "lift", key = over,
+    peripheral = "vector_thruster_1" })
+  T.isFalse(ok, "an out-of-range booster key is refused")
+  T.containsMatch((detail or {}).errors or {}, "unknown lift slot",
+    "and says so: " .. table.concat((detail or {}).errors or {}, "; "))
+  fs.delete(path)
+end)
+
+T.it("also takes extra MAIN and LATERAL boosters, with the right facing", function()
+  local app, path = appRig({ hardware = { thrusters = {} } })
+  app:handleCommand({ cmd = "setSlot", kind = "lift", key = "fl", peripheral = "vector_thruster_0" })
+  T.isTrue((app:handleCommand({ cmd = "setSlot", kind = "main", key = "x1",
+    peripheral = "vector_thruster_1" })), "extra main accepted")
+  T.isTrue((app:handleCommand({ cmd = "setSlot", kind = "lateral", key = "x1",
+    peripheral = "vector_thruster_2" })), "extra lateral accepted")
+  local byId = {}
+  for _, t in ipairs(app.cfg.hardware.thrusters) do byId[t.id] = t end
+  T.eq(byId["main_x1"].thrustAxis, "back", "an extra accelerator still faces back")
+  T.eq(byId["lateral_x1"].thrustAxis, "right", "an extra lateral gets a facing")
+  T.isTrue(byId["lateral_x1"].precisionOnly, "a centre lateral has no yaw, so it is precision-only")
+  T.isFalse(byId["lateral_x1"].yawAuthority, "and never steers")
+  fs.delete(path)
+end)
+
 T.it("assigning a thruster ALREADY IN ANOTHER SLOT moves it rather than doubling it", function()
   -- The cockpit had one nozzle wired into two slots under two ids. The mixer would command it
   -- twice with different values and fight itself, so the assignment has to be a move.
