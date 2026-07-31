@@ -103,6 +103,9 @@ local function configView(cfg)
     maxYawRateDps = cfg.envelope.maxYawRateDps,
     climbRate = cfg.modes.climbRate,
     brakeMaxTiltDeg = cfg.brake.maxTiltDeg,
+    -- On-ground threshold: the down laser reads within this many blocks = landed. Tunable in-game
+    -- because a physics hull's resting clearance is craft-specific.
+    groundContactDist = cfg.sensors.groundContactDist,
     assistEnabled = cfg.assist.enabled,
     assistGain = cfg.assist.gain,
     -- The whole typewriter map, so the config screen can show and remap every action.

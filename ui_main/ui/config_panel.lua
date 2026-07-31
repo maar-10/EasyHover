@@ -576,6 +576,9 @@ function ConfigPanel.build(frame, opts)
   local sinkRow = tunable("sink", "envelope.maxSinkRate", 0.5, 0.5, 20, 1)
   local yawRow = tunable("yaw", "envelope.maxYawRateDps", 5, 5, 180, 0)
   local brakeRow = tunable("brake", "brake.maxTiltDeg", 1, 1, 45, 0)
+  -- On-ground threshold: the down laser reads within this many blocks = landed. Raise it if a
+  -- landed physics hull reads "not on ground" (its resting clearance exceeds the default).
+  local gndRow = tunable("gnd", "sensors.groundContactDist", 0.5, 0.5, 10, 1)
 
   Theme.button(flightPage, math.max(1, width - 5), height, 6, "SAVE", function()
     actions.configSave()
@@ -715,6 +718,7 @@ function ConfigPanel.build(frame, opts)
     if sinkRow then sinkRow.set(live.config.maxSinkRate) end
     if yawRow then yawRow.set(live.config.maxYawRateDps) end
     if brakeRow then brakeRow.set(live.config.brakeMaxTiltDeg) end
+    if gndRow then gndRow.set(live.config.groundContactDist) end
 
     local disk = live.disk
     diskStatus:setText(Theme.fit(disk.diskPresent
@@ -819,7 +823,7 @@ function ConfigPanel.build(frame, opts)
       capacityMinus = capMinus, capacityPlus = capPlus,
       diskStatus = diskStatus, diskLocal = diskLocal, diskResult = diskResult,
       bank = bankRow, pitch = pitchRow, climb = climbRow, sink = sinkRow,
-      yaw = yawRow, brake = brakeRow,
+      yaw = yawRow, brake = brakeRow, gnd = gndRow,
       ackTimes = ackLines[timesPage], ackFlight = ackLines[flightPage],
       ackTank = ackLines[tankPage],
       axesRows = axesRows, axesFooter = axesFooter,

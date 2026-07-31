@@ -2326,6 +2326,18 @@ T.it("checkPrereqs refuses with the engine off, and names what is missing", func
   T.isTrue(named, "the missing engine is listed")
 end)
 
+T.it("the off-ground refusal shows the reading against its threshold, to tune", function()
+  local r = scRig()
+  local check = r.sc:checkPrereqs({ engineOn = true, fuelled = true, onGround = false,
+    groundDist = 3.4, groundThreshold = 2.0, velocityVector = "vector" })
+  T.isFalse(check.ok, "not ready off the ground")
+  local shown = false
+  for _, m in ipairs(check.missing) do if m == "GND 3.4>2.0" then shown = true end end
+  T.isTrue(shown, "the reading and threshold are shown so the pilot can raise it: "
+    .. table.concat(check.missing, ", "))
+  T.eq(check.groundDist, 3.4, "and the raw reading rides the result")
+end)
+
 T.it("refuses to start without a signed velocity vector", function()
   local r = scRig()
   local ok, _, short = r.sc:start({ engineOn = true, fuelled = true,

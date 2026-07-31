@@ -818,6 +818,11 @@ function App:selfConfigFacts()
     -- it genuinely cannot make thrust.
     fuelled = not (type(worstTank) == "number" and worstTank <= 0.001),
     onGround = self.state:get("ground.contact"),
+    -- The raw down-laser reading and the threshold it is judged against, so a "NOT ON GROUND" on a
+    -- craft that IS landed can show WHY -- almost always the physics hull rests with more clearance
+    -- than the threshold allows, and the pilot just needs to raise sensors.groundContactDist.
+    groundDist = self.state:get("ground.distance"),
+    groundThreshold = self.cfg.sensors.groundContactDist,
     velocityVector = self.state:get("velocity.capability"),
     otherBip = self.selfTest:isRunning() or self.axisMap:isHolding()
       or self.thrusters:isIdentifying() or false,

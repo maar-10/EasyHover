@@ -98,7 +98,15 @@ function SelfConfig:checkPrereqs(facts)
   local missing = {}
   if not facts.engineOn then missing[#missing + 1] = "ENGINE OFF" end
   if not facts.fuelled then missing[#missing + 1] = "NO FUEL" end
-  if facts.onGround == false then missing[#missing + 1] = "NOT ON GROUND" end
+  if facts.onGround == false then
+    -- Show the actual laser reading against its threshold, not a bare "NOT ON GROUND": on a physics
+    -- hull that rests with clearance, the fix is to raise the threshold to match, and the pilot
+    -- can only do that if they can SEE the number. e.g. "GND 3.4>2.0" -- reads 3.4, must be <= 2.0.
+    local d, t = facts.groundDist, facts.groundThreshold
+    missing[#missing + 1] = (type(d) == "number" and type(t) == "number")
+      and ("GND %.1f>%.1f"):format(d, t)
+      or "NOT ON GROUND"
+  end
   if self:isRunning() then missing[#missing + 1] = "BIP RUNNING" end
   if facts.otherBip then missing[#missing + 1] = "TEST RUNNING" end
   if facts.velocityVector ~= "vector" then missing[#missing + 1] = "NO VEL VECTOR" end
@@ -107,14 +115,20 @@ function SelfConfig:checkPrereqs(facts)
   if #targets == 0 then missing[#missing + 1] = "NO NOZZLES" end
 
   local ok = #missing == 0
-  self:publishPrereqs(ok, missing, #targets)
-  return { ok = ok, missing = missing, nozzles = #targets }
+  self:publishPrereqs(ok, missing, #targets, facts)
+  return { ok = ok, missing = missing, nozzles = #targets,
+    groundDist = facts.groundDist, groundThreshold = facts.groundThreshold }
 end
 
-function SelfConfig:publishPrereqs(ok, missing, nozzles)
+function SelfConfig:publishPrereqs(ok, missing, nozzles, facts)
   if not self.state then return end
+  facts = facts or {}
   self.state:set("selfConfig.prereqs", {
     ok = ok, missing = missing or {}, nozzles = nozzles or 0,
+    -- The ground reading, so the pilot can SEE how far off the "on ground" check is and tune the
+    -- threshold (sensors.groundContactDist) to their hull rather than guess.
+    groundDist = facts.groundDist,
+    groundThreshold = facts.groundThreshold,
     checkedAt = os.epoch("utc"),
   })
 end

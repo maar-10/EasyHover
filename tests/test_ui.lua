@@ -46,6 +46,7 @@ local function telemetry(overrides)
       enginePulseMs = 400, engineIntervalMs = 60000, engineInvert = false,
       tankCapacityMb = 0, maxBankDeg = 20, maxPitchDeg = 20,
       maxClimbRate = 6, maxSinkRate = 4, maxYawRateDps = 45, brakeMaxTiltDeg = 12,
+      groundContactDist = 2.0,
     },
     disk = { diskPresent = true, label = "EH configs", onDisk = 2, localConfigs = 1 },
     candidates = {
@@ -661,6 +662,17 @@ T.it("the limits page mirrors the craft and sends configSet", function()
   T.eq(commands[1].cmd, "configSet", "a nudge sends configSet")
   T.eq(commands[1].path, "envelope.maxBankDeg", "for the right path")
   T.eq(commands[1].value, 21, "one step up")
+end)
+
+T.it("the ground-contact distance is tunable from the LIMITS page", function()
+  local panel, commands = configRig(15, 24)   -- room for the extra tunable row
+  panel.update(model())
+  T.notNil(panel.elements.gnd, "the ground-distance tunable is present")
+  T.isTrue(panel.elements.gnd.display:getText():find("2") ~= nil,
+    "mirrors the craft: " .. panel.elements.gnd.display:getText())
+  click(panel.elements.gnd.plus)
+  T.eq(commands[#commands].path, "sensors.groundContactDist", "nudges the right path")
+  T.eq(commands[#commands].value, 2.5, "half a block up")
 end)
 
 T.it("shows NO DATA when the link drops", function()
