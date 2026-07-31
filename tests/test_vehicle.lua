@@ -2752,6 +2752,53 @@ T.it("float converges to a distant target in a momentum plant, no leap and no sl
   T.isTrue(peak < 8.5, "no leap past the target, peak " .. peak)
 end)
 
+--- THE REPORTED COLLAPSE, isolated: the mooring ROPE catches the craft ABOVE the band and holds it
+--- there -- it has stopped rising but is not descending, because the rope, not thrust, now fixes its
+--- height. The OLD controller kept integrating the hover estimate DOWN against that unmovable error;
+--- by the time the rope went slack the throttle was far below hover and the craft dropped out of the
+--- sky. Two things must hold: (1) while pinned, the hover estimate must NOT wind down; (2) when the
+--- rope is then released, the craft must ease back to the band, never fall to the floor.
+T.it("does not wind the hover estimate down while the rope pins it above the target", function()
+  local r = scRig({ hoverHeight = 4.0, hoverTolerance = 0.5,
+    approachSpeed = 0.4, approachGain = 0.5, hoverLearn = 0.3, velP = 0.3, maxCorrection = 0.25 })
+  local now = 100000
+  r.sc:start({ engineOn = true, fuelled = true, onGround = true, velocityVector = "vector" },
+    { now = now, altitude = 74.5 })
+
+  -- The craft has just overshot and the rope caught it 1.5 blocks above the band top: pinned high,
+  -- held still. hoverEstimate sits at the throttle that lifted it there (a hair above true hover).
+  local ground, pinnedH = 74.5, 6.0
+  r.sc.run.hoverEstimate = 0.90
+  r.sc.run.lastRegAt = now
+  for _ = 1, 40 do                                              -- 4 s hanging on the rope, dead still
+    now = now + 100
+    r.sc:regulateHeight({ altitude = ground + pinnedH, velocity = { x = 0, y = 0, z = 0 } }, now)
+  end
+  T.isTrue(r.sc.run.hoverEstimate > 0.80,
+    "the hover estimate held near hover instead of winding down against the rope, got "
+    .. r.sc.run.hoverEstimate)
+
+  -- Now the rope goes slack. Run the real momentum plant: the craft must settle back into the band,
+  -- not drop to the ground because the estimate had been gutted.
+  local alt, vy = ground + pinnedH, 0
+  local hoverC, liftGain, drag = 0.85, 10.0, 1.6
+  local minH = 99
+  for _ = 1, 1500 do
+    now = now + 100
+    r.sc.run.lastRegAt = now - 100
+    r.sc:regulateHeight({ altitude = alt, velocity = { x = 0, y = vy, z = 0 } }, now)
+    local c = r.sc.run.collective
+    vy = vy + (liftGain * (c - hoverC) - drag * vy) * 0.1
+    alt = alt + vy * 0.1
+    if alt <= ground then alt = ground; if vy < 0 then vy = 0 end end
+    minH = math.min(minH, alt - ground)
+  end
+  T.isTrue(minH > 2.0,
+    "after the rope released it eased down to the band, never dropping to the floor, min " .. minH)
+  T.isTrue((alt - ground) > 3.0 and (alt - ground) < 5.0,
+    "and held near the 4.0 target, got " .. (alt - ground))
+end)
+
 T.it("after easing down into the band, the float settles and proceeds", function()
   local r = scRig({ hoverHeight = 2.0, hoverTolerance = 0.5 })
   local now = 100000

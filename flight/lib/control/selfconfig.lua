@@ -396,6 +396,7 @@ function SelfConfig:regulateHeight(ctx, now)
   local target = p.hoverHeight or 2.0
   local tol = p.hoverTolerance or 0.5
   local vy = (ctx and ctx.velocity and ctx.velocity.y) or 0
+  local above = h > target + tol
 
   -- Outer: height error -> a gentle, CAPPED desired vertical speed. The cap is what stops a distant
   -- target from over-driving the throttle to full and leaping the craft into the rope.
@@ -405,12 +406,25 @@ function SelfConfig:regulateHeight(ctx, now)
 
   -- Inner: an anchored integral learns the hover throttle from the BOUNDED velocity error (so it can
   -- never wind up to full on a big height gap), plus a small bounded proportional correction.
-  self.run.hoverEstimate = Util.clamp((self.run.hoverEstimate or self.run.collective or 0)
-    + (p.hoverLearn or 0.3) * vErr * dt, 0, maxC)
   local corr = Util.clamp((p.velP or 0.3) * vErr, -(p.maxCorrection or 0.25), (p.maxCorrection or 0.25))
 
+  -- ANTI-WINDUP against the mooring rope. When the craft overshoots and the rope catches it, it stops
+  -- rising but does NOT descend either: it hangs STILL above the band while the controller keeps
+  -- asking it down. Height there is fixed by the rope, not by thrust, so integrating the hover
+  -- estimate down against that unmovable error is pure windup -- and the moment the rope goes slack
+  -- the throttle is far below hover and the craft drops out of the sky (the reported "it just falls
+  -- back to the ground"). Detect the pin by its signature -- above the band, wanting down, yet
+  -- essentially stationary -- and freeze the DOWNWARD integration while it lasts. A craft that is
+  -- genuinely rising past the target (|vy| large) is NOT pinned, so the estimate still trims to
+  -- arrest a free overshoot; only the rope-held hang is frozen. Textbook conditional integration,
+  -- with the rope as the saturating constraint the plant cannot answer.
+  local pinned = above and vErr < 0 and math.abs(vy) < (p.settleSpeed or 0.1)
+  local di = (p.hoverLearn or 0.3) * vErr * dt
+  if pinned and di < 0 then di = 0 end
+  self.run.hoverEstimate = Util.clamp((self.run.hoverEstimate or self.run.collective or 0) + di, 0, maxC)
+
   self.run.collective = Util.clamp(self.run.hoverEstimate + corr, 0, maxC)
-  return h, (h < target - tol), (h > target + tol)
+  return h, (h < target - tol), above
 end
 
 --- FLOAT: get airborne and hold the hover band, then settle. Regulation is shared with settle
