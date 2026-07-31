@@ -2462,11 +2462,11 @@ local function scRig(scOverrides)
         thrustAxis = "down", maxVector = 0.6 },
     } },
     selfConfig = require("lib.util").deepMerge({
-      hoverHeight = 1.0, maxCollective = 0.9,
-      -- Fast float gains for the tests: the sim altitude is instantaneous (no momentum), so these
-      -- just need to converge quickly. The DAMPING that matters in-game is unit-tested separately.
-      approachSpeed = 2.0, approachGain = 2.0, collectiveGain = 2.0, collectiveRamp = 0.6,
-      settleMs = 250, settleSpeed = 0.05, probeMs = 500, counterMs = 250,
+      hoverHeight = 1.0, maxCollective = 1.0,
+      -- Float gains for the tests: fast enough to converge quickly against the momentum sim, damped
+      -- enough not to oscillate. The in-game defaults (config.lua) are gentler.
+      hoverLearn = 1.2, heightP = 0.15, heightD = 0.4, maxCorrection = 0.5, collectiveRamp = 0.6,
+      settleMs = 250, settleSpeed = 0.08, probeMs = 500, counterMs = 250, floatSettleMs = 1500,
       probeDeflection = 0.6, minResponse = 0.1, landRamp = 0.6, maxTiltDeg = 45,
     }, scOverrides or {}),
   })
@@ -2485,23 +2485,44 @@ local TRUE_MOUNT = {
   lift_fr = { x = { axis = "x", sign = 1 },  y = { axis = "z", sign = 1 } },
 }
 
---- One physics step: craft-frame horizontal velocity from whatever nozzles are deflected (mapped
---- through the true mounting), and altitude from the lift collective's buoyancy. Gain is kept below
---- the BIP's runaway-speed cap so a good probe never trips the safety envelope.
-local function stepPhysics(per)
-  local vx, vz, collective = 0, 0, 0
-  local gain = 2.0
+--- Vertical plant for the float sim: a real DOUBLE INTEGRATOR (thrust -> accel -> velocity ->
+--- altitude), so the height controller's damping actually matters. The old sim made altitude an
+--- INSTANTANEOUS function of collective, which is exactly why it could never reproduce the
+--- overshoot-and-collapse the pilot reported. `hoverCollective` is the throttle that exactly holds
+--- altitude; below it the craft sinks, above it climbs.
+local SIM = { hoverCollective = 0.45, liftGain = 11.0, drag = 1.6, ground = 74.5 }
+
+local function liftCollective(per)
+  local sum, n = 0, 0
+  for _, e in ipairs(per:thrusterList()) do
+    if e.spec.group == "lift" then sum = sum + (e.dev._nozzle.power or 0); n = n + 1 end
+  end
+  return (n > 0) and (sum / n) or 0
+end
+
+--- Craft-frame horizontal velocity from whatever nozzles are deflected (mapped through the true
+--- mounting). Gain is kept below the BIP's runaway cap so a good probe never trips the envelope.
+local function horizontalVel(per)
+  local vx, vz = 0, 0
   for id, mount in pairs(TRUE_MOUNT) do
     local n = per.thrusters[id].dev._nozzle
-    collective = math.max(collective, n.power)
     for _, nozzleAxis in ipairs({ "x", "y" }) do
       local defl = (nozzleAxis == "x") and n.tx or n.ty
       local m = mount[nozzleAxis]
-      if m.axis == "x" then vx = vx + m.sign * defl * gain
-      elseif m.axis == "z" then vz = vz + m.sign * defl * gain end
+      if m.axis == "x" then vx = vx + m.sign * defl * 2.0
+      elseif m.axis == "z" then vz = vz + m.sign * defl * 2.0 end
     end
   end
-  return vx, vz, 74.5 + math.max(0, (collective - 0.35)) * 20
+  return vx, vz
+end
+
+--- Advance the vertical state one step under the current lift collective.
+local function stepVertical(per, vst, dt)
+  local accel = SIM.liftGain * (liftCollective(per) - SIM.hoverCollective) - SIM.drag * vst.vy
+  vst.vy = vst.vy + accel * dt
+  vst.alt = vst.alt + vst.vy * dt
+  if vst.alt <= SIM.ground then vst.alt = SIM.ground; if vst.vy < 0 then vst.vy = 0 end end
+  return vst
 end
 
 --- Drive the BIP from a fresh float to its end. `ctxTweak(ctx, now)` can jam a fault in.
@@ -2510,18 +2531,20 @@ local function runBip(sc, per, ctxTweak)
   local ok = sc:start({ engineOn = true, fuelled = true, onGround = true,
     velocityVector = "vector" }, { now = now, altitude = 74.5 })
   T.isTrue(ok, "the BIP started with prerequisites met")
-  local vx, vz, alt = 0, 0, 74.5
+  local vx, vz = 0, 0
+  local vst = { alt = 74.5, vy = 0 }
   for _ = 1, 4000 do
     now = now + 100
     local ctx = {
-      now = now, altitude = alt,
+      now = now, altitude = vst.alt,
       attitude = { pitch = 0, roll = 0, yaw = 0 },
-      velocity = { x = vx, y = 0, z = vz },
-      groundContact = alt <= 74.8, engineOn = true,
+      velocity = { x = vx, y = vst.vy, z = vz },
+      groundContact = vst.alt <= 74.8, engineOn = true,
     }
     if ctxTweak then ctxTweak(ctx, now) end
     local alive = sc:tick(ctx)
-    vx, vz, alt = stepPhysics(per)
+    stepVertical(per, vst, 0.1)
+    vx, vz = horizontalVel(per)
     if not alive then break end
   end
 end
@@ -2600,7 +2623,7 @@ end)
 --- The float must ramp all the way to FULL power to try to lift, and declare WONT LIFT only after
 --- HOLDING full power a while -- not the instant it caps out. A craft that never rises exercises it.
 T.it("float ramps to full power and only declares WONT LIFT after holding it", function()
-  local r = scRig({ maxCollective = 1.0, collectiveRamp = 2.0, fullPowerDwellMs = 1000 })
+  local r = scRig({ maxCollective = 1.0, hoverLearn = 3.0, fullPowerDwellMs = 1000 })
   local now = 100000
   r.sc:start({ engineOn = true, fuelled = true, onGround = true, velocityVector = "vector" },
     { now = now, altitude = 74.5 })
@@ -2609,7 +2632,7 @@ T.it("float ramps to full power and only declares WONT LIFT after holding it", f
       velocity = { x = 0, y = 0, z = 0 }, engineOn = true })
   end
 
-  for _ = 1, 8 do now = now + 100; tickAt(now) end   -- ramps to full power (~0.7 s at 2.0/s)
+  for _ = 1, 10 do now = now + 100; tickAt(now) end   -- the hover estimate climbs to full power
   T.isTrue(r.sc:isRunning(), "at full power but still trying -- not given up during the dwell")
   T.eq(r.sc.run.phase, "float", "still in the float phase")
   T.isTrue(r.sc.run.collective >= 1.0 - 1e-9, "and the collective reached FULL power")
@@ -2674,6 +2697,39 @@ T.it("float regulation still adds lift when below target and not yet climbing", 
   r.sc:regulateHeight({ altitude = 74.5, velocity = { x = 0, y = 0, z = 0 } }, now + 100)
   T.isTrue(r.sc.run.collective > before,
     "adds lift to start rising: " .. before .. " -> " .. r.sc.run.collective)
+end)
+
+--- THE FIX, end to end against a plant WITH momentum (a heavy craft, hover at 0.7 -- the reported
+--- case): using the GENTLE in-game defaults, the float must GLIDE into the band and hold, never
+--- overshooting high and slamming back to the ground (the reported limit cycle). Driven on
+--- regulateHeight with a real double-integrator so the damping is actually exercised.
+T.it("float converges to the band and HOLDS in a momentum plant, no slam to the ground", function()
+  local r = scRig({ hoverHeight = 2.0, hoverTolerance = 0.6,
+    -- the shipping defaults, on purpose: this proves the config we ACTUALLY fly is stable
+    hoverLearn = 0.15, heightP = 0.06, heightD = 0.18, maxCorrection = 0.25 })
+  local now = 100000
+  r.sc:start({ engineOn = true, fuelled = true, onGround = true, velocityVector = "vector" },
+    { now = now, altitude = 74.5 })
+
+  local alt, vy = 74.5, 0
+  local hoverC, liftGain, drag, ground = 0.7, 10.0, 1.6, 74.5   -- heavy: needs 70% to hover
+  local lifted, landedAfterLift, peak = false, false, 0
+  for _ = 1, 600 do                                             -- 60 s of float
+    now = now + 100
+    r.sc.run.lastRegAt = now - 100
+    r.sc:regulateHeight({ altitude = alt, velocity = { x = 0, y = vy, z = 0 } }, now)
+    local c = r.sc.run.collective
+    vy = vy + (liftGain * (c - hoverC) - drag * vy) * 0.1
+    alt = alt + vy * 0.1
+    if alt <= ground then alt = ground; if vy < 0 then vy = 0 end end
+    local h = alt - ground
+    if h > 1.0 then lifted = true end
+    if lifted then peak = math.max(peak, h); if h < 0.1 then landedAfterLift = true end end
+  end
+  local finalH = alt - ground
+  T.isTrue(finalH > 1.3 and finalH < 2.7, "settles near the 2.0 target, got " .. finalH)
+  T.isFalse(landedAfterLift, "never slams back onto the ground after lifting")
+  T.isTrue(peak < 3.6, "no runaway overshoot, peak " .. peak)
 end)
 
 T.it("after easing down into the band, the float settles and proceeds", function()

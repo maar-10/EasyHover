@@ -346,21 +346,26 @@ function SelfConfig:heartbeat(now)
   end
 end
 
---- Move the shared lift collective ONE tick toward a gentle, VELOCITY-DAMPED hover. Used both to
---- get airborne (float) and to HOLD height across the long probe run (settle) -- a frozen collective
---- was an earlier bug: probing deflects a lift nozzle, which tilts its thrust off vertical and bleeds
---- lift, so over many nozzles the craft crept down until the front touched.
+--- Move the shared lift collective ONE tick toward a gentle hover. Used both to get airborne (float)
+--- and to HOLD height across the long probe run (settle) -- a frozen collective was an earlier bug:
+--- probing deflects a lift nozzle, which tilts its thrust off vertical and bleeds lift, so over many
+--- nozzles the craft crept down until the front touched.
 ---
---- NOT a bang-bang ramp. Ramping the collective straight at the height band overshoots on a craft
---- with real vertical momentum -- it sails past the band and slams back down (a limit cycle the
---- pilot reported). Instead this is a cascaded controller:
+--- ANCHORED, not free-running. Earlier tries drove the collective purely from the height/velocity
+--- error, so when the craft sat above the band the collective was cut with no lower bound and
+--- COLLAPSED toward zero -- the craft slammed onto the ground, then had to rebuild the collective
+--- from scratch (seconds of "it won't hold altitude", the reported behaviour). Instead:
 ---
----   desiredVy = clamp(approachGain * (target - h), +/- approachSpeed)   -- gentle approach speed
----   collective += collectiveGain * (desiredVy - vy) * dt               -- track it, damped by vy
+---   hoverEstimate += hoverLearn * (target - h) * dt         -- a SLOW integral that learns the
+---                                                              throttle this craft hovers at
+---   correction   = clamp(heightP*(target-h) - heightD*vy,   -- a small, BOUNDED PD correction
+---                        +/- maxCorrection)
+---   collective   = hoverEstimate + correction
 ---
---- As the craft nears the target, desiredVy eases to zero; if it is already rising faster than the
---- approach speed, (desiredVy - vy) goes negative and the collective backs OFF before the overshoot.
---- So it glides into the band and holds, finding the hover collective on the way.
+--- Because the correction is clamped, the collective can never wander far from the hover estimate --
+--- it cannot collapse to the ground or slam to full. heightD*vy damps the approach so it settles
+--- into the band instead of overshooting, and the slow integral means once hover is found it is
+--- HELD rather than rediscovered every cycle.
 ---
 --- Returns the height (or nil) and whether it is below / above the band, so callers can layer
 --- their own policy (float's WONT-LIFT dwell, settle's baseline gate) on top.
@@ -381,13 +386,16 @@ function SelfConfig:regulateHeight(ctx, now)
   local target = p.hoverHeight or 2.0
   local tol = p.hoverTolerance or 0.5
   local vy = (ctx and ctx.velocity and ctx.velocity.y) or 0
+  local errH = target - h
 
-  local desiredVy = Util.clamp((p.approachGain or 0.5) * (target - h),
-    -(p.approachSpeed or 0.5), (p.approachSpeed or 0.5))
-  local vErr = desiredVy - vy
-  self.run.collective = Util.clamp(self.run.collective + (p.collectiveGain or 0.25) * vErr * dt,
+  self.run.hoverEstimate = self.run.hoverEstimate or self.run.collective or 0
+  self.run.hoverEstimate = Util.clamp(self.run.hoverEstimate + (p.hoverLearn or 0.15) * errH * dt,
     0, maxC)
 
+  local corr = Util.clamp((p.heightP or 0.06) * errH - (p.heightD or 0.18) * vy,
+    -(p.maxCorrection or 0.25), (p.maxCorrection or 0.25))
+
+  self.run.collective = Util.clamp(self.run.hoverEstimate + corr, 0, maxC)
   return h, (h < target - tol), (h > target + tol)
 end
 

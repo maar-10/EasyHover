@@ -371,15 +371,14 @@ function Config.defaults()
       -- lets it sit perfectly still), settle anyway after this long in the band so the run proceeds.
       floatSettleMs = 3000,
       baseCollective = 0.0,     -- lift collective the float ramp starts from
-      -- FLOAT HEIGHT CONTROL. The float does not ramp the collective straight at the height band --
-      -- on a heavy craft that overshoots on momentum and slams back down (limit cycle). Instead it
-      -- is velocity-damped: command a gentle vertical SPEED proportional to the height error (capped
-      -- at approachSpeed), then move the collective to track THAT speed at collectiveGain. As the
-      -- craft nears the target the commanded speed eases to zero, and if it is already rising too
-      -- fast the collective backs off -- so it glides into the hover band instead of ramping past it.
-      approachSpeed = 0.5,      -- m/s: gentlest-but-not-glacial vertical speed the float aims for
-      approachGain = 0.5,       -- (m/s per block) of height error, before the approachSpeed cap
-      collectiveGain = 0.25,    -- collective moved per (m/s of vertical-speed error) per second
+      -- FLOAT HEIGHT CONTROL. Not a ramp at the band (overshoots on momentum and slams down) and not
+      -- a free-running loop (the collective collapses to the ground when above the band). ANCHORED:
+      -- a slow integral learns the hover throttle, and a small BOUNDED PD correction maneuvers around
+      -- it -- so the collective stays near hover and cannot collapse. See selfconfig.lua regulateHeight.
+      hoverLearn = 0.15,        -- how fast the hover-throttle estimate integrates the height error
+      heightP = 0.06,           -- correction per block of height error
+      heightD = 0.18,           -- correction per (m/s) of vertical speed -- the damping term
+      maxCorrection = 0.25,     -- hard cap on how far the correction may move the collective off hover
       collectiveRamp = 0.1,     -- open-loop fallback rate, used only when NO altimeter reading exists
       maxCollective = 1.0,      -- ramp all the way to FULL power to get off the ground if needed
       landRamp = 0.15,          -- collective shed per second while landing
