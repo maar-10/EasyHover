@@ -288,11 +288,15 @@ function Config.defaults()
       -- still, then folds the steady torque it is holding into comTrim above. The tolerances are
       -- what "settled" means; the craft must stay inside all of them, airborne, for dwellSec before
       -- the reading is trusted. maxTrim caps the captured bias so it can never alone saturate an axis.
+      -- Tolerances are deliberately FORGIVING: on a craft still learning to hover, a too-tight
+      -- window never settles and captures nothing. A slow lean-and-drift averages out over the
+      -- dwell -- the integral we capture is the steady (DC) CoM bias, not the wobble -- so a looser
+      -- window still reads the right trim, just from a noisier hover. Tighten later for a cleaner cut.
       comLevel = {
-        angleTolDeg = 1.5,   -- |pitch| and |roll| this close to level
-        rateTolDps = 2.0,    -- turning slower than this on both axes
-        vsTolMps = 0.3,      -- holding altitude this tightly
-        dwellSec = 4.0,      -- for this long, continuously
+        angleTolDeg = 3.0,   -- |pitch| and |roll| this close to level
+        rateTolDps = 4.0,    -- turning slower than this on both axes
+        vsTolMps = 0.5,      -- holding altitude this tightly
+        dwellSec = 2.5,      -- for this long, continuously
         maxTrim = 0.5,       -- clamp on the captured feedforward
       },
       oscillation = {
