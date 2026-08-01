@@ -64,7 +64,7 @@ function Overhead.build(frame, opts)
   Theme.rule(main, y, width); y = y + 1
 
   -- FLIGHT CONTROL arm/disarm. The mixer (the PID) runs only when this is ENGAGED, so preflight is
-  -- provably safe: SELF TEST, SELF CONFIG, AXIS MAP and just warming the engine on the pad all
+  -- provably safe: SELF TEST, AXIS MAP and just warming the engine on the pad all
   -- happen with flight control OFF. Reflects the CRAFT's reported arm state, never the tap.
   Theme.heading(main, y, width, "FLIGHT CTRL"); y = y + 1
   local flightArmed = false

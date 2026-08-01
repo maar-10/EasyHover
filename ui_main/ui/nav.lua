@@ -196,8 +196,7 @@ function Nav.build(frame, opts)
     return { update = function() end, elements = {}, pages = {} }
   end
 
-  local live = { pilot = {}, modes = {}, selfTest = {}, selfConfig = {},
-    selfConfigPrereqs = {}, stale = true }
+  local live = { pilot = {}, modes = {}, selfTest = {}, stale = true }
 
   local pages = {}
   local function page()
@@ -208,8 +207,8 @@ function Nav.build(frame, opts)
     return p
   end
 
-  local navPage, bitPage, fcsPage, selfPage, axisPage, configPage =
-    page(), page(), page(), page(), page(), page()
+  local navPage, bitPage, fcsPage, selfPage, axisPage =
+    page(), page(), page(), page(), page()
   navPage:setVisible(true)
 
   local function show(target)
@@ -266,14 +265,12 @@ function Nav.build(frame, opts)
   -- ---------------------------------------------------------------- BIT/CONF menu
   --
   -- Built-In Tests / Configuration. One button per screen, stacked from row 3 down with the bottom
-  -- row left for BACK -- four entries fit a 10-row monitor with room to spare, and stacking means
-  -- even "SELF CONFIG" never has to share a narrow row with anything.
+  -- row left for BACK -- each entry gets its own full-width row on a 10-row monitor.
   Theme.line(bitPage, 1, width, Theme.centre("BIT/CONF", width), Theme.accent)
   local BIT_ENTRIES = {
     { "FCS TEST", function() show(fcsPage) end },
     { "SELF TEST", function() show(selfPage) end },
     { "AXIS MAP", function() show(axisPage) end },
-    { "SELF CONFIG", function() show(configPage) end },
   }
   local testButtons = {}
   for i, entry in ipairs(BIT_ENTRIES) do
@@ -573,147 +570,6 @@ function Nav.build(frame, opts)
   end
   refreshAxisRows()
 
-  -- ------------------------------------------------------- self axis config BIP
-  --
-  -- The BIP FLIES the craft to read each nozzle, so its interlock is the opposite of the self
-  -- test's: it wants the engine ON and the craft light on its ropes. CHECK runs the go/no-go; START
-  -- runs it (and turns into STOP while running); ACCEPT/DISCARD deal with the proposed mapping once
-  -- it lands. NO OPTIMISTIC FEEDBACK: every line here is the craft's reported state, never a guess
-  -- about what a press achieved -- most of all the proposal, which is not applied until ACCEPT.
-  Theme.line(configPage, 1, width, Theme.centre("SELF CONFIG", width), Theme.accent)
-  local cfgWarn = Theme.line(configPage, 2, width, "ENGINE ON, ROPED", Theme.caution)
-  local cfgStatus = Theme.line(configPage, 3, width, "press CHECK", Theme.fg)
-  local cfgDetail1 = Theme.line(configPage, 4, width, "", Theme.dim)
-  local cfgDetail2 = optionalLine(configPage, (height >= 11) and 5 or nil, "", Theme.dim)
-
-  local halfLeft = math.max(5, math.floor(width / 2) - 1)
-  local halfRightX = math.floor(width / 2) + 1
-  local halfRight = width - math.floor(width / 2)
-
-  local cfgCheckBtn = Theme.button(configPage, 1, height - 2, halfLeft, "CHECK",
-    function() actions.selfConfig("checkPrereqs") end)
-  -- START doubles as STOP: it reads the live running flag at click time, so one button covers both.
-  local cfgStartBtn = Theme.button(configPage, halfRightX, height - 2, halfRight, "START",
-    function()
-      if live.selfConfig and live.selfConfig.running then actions.selfConfig("abort")
-      else actions.selfConfig("start") end
-    end)
-  local cfgAcceptBtn = Theme.button(configPage, 1, height - 1, halfLeft, "ACCEPT",
-    function() actions.selfConfig("accept") end)
-  local cfgDiscardBtn = Theme.button(configPage, halfRightX, height - 1, halfRight, "DISCARD",
-    function() actions.selfConfig("discard") end)
-  Theme.button(configPage, 1, height, math.min(6, width), "BACK", function() show(bitPage) end)
-
-  --- Which craft direction "nozzle x+ / y+" points, in the pilot's words, for a proposed mapping.
-  local CRAFT_NAMES = {
-    x = { "RIGHT", "LEFT" }, y = { "UP", "DOWN" }, z = { "FWD", "BACK" },
-  }
-  local function proposalLine(prop)
-    if type(prop) ~= "table" or type(prop.vectorMap) ~= "table" then return nil end
-    local function dir(axis, inverted)
-      local names = CRAFT_NAMES[prop.vectorMap[axis]]
-      if not names then return "?" end
-      return inverted and names[2] or names[1]
-    end
-    return ("x=%s y=%s"):format(dir("x", prop.invertVectorX), dir("y", prop.invertVectorY))
-  end
-
-  --- Render the config page from reported state alone. Precedence: a live run, then a landed
-  --- proposal awaiting review, then an abort/complete notice, then the prereq result, then idle.
-  local function refreshConfig()
-    local sc = live.selfConfig or {}
-    local pre = live.selfConfigPrereqs or {}
-    local hasProposal = (not sc.running) and type(sc.proposal) == "table" and (sc.proposed or 0) > 0
-
-    -- ACCEPT / DISCARD only exist while there is something to accept.
-    cfgAcceptBtn:setVisible(hasProposal)
-    cfgDiscardBtn:setVisible(hasProposal)
-    cfgCheckBtn:setVisible(not sc.running)
-
-    if cfgDetail2 then cfgDetail2:setText("") end
-
-    if sc.running then
-      cfgStartBtn:setText("STOP")
-      cfgStartBtn:setBackground(Theme.caution)
-      cfgStartBtn:setForeground(colours.black)
-      if (sc.sinceTickMs or 0) > 3000 then
-        cfgStatus:setText(Theme.fit("STALLED", width))
-        cfgStatus:setForeground(Theme.warning)
-      else
-        cfgStatus:setText(Theme.fit(("RUNNING " .. tostring(sc.phase or "")):upper(), width))
-        cfgStatus:setForeground(Theme.accent)
-      end
-      cfgDetail1:setText(Theme.fit(("nozzle %d/%d %s"):format(
-        sc.index or 0, sc.total or 0, tostring(sc.current or "")), width))
-      cfgDetail1:setForeground(Theme.dim)
-      return
-    end
-
-    cfgStartBtn:setText("START")
-    cfgStartBtn:setBackground(Theme.buttonBg)
-    cfgStartBtn:setForeground(Theme.buttonFg)
-
-    if hasProposal then
-      cfgStatus:setText(Theme.fit(("PROPOSED %d"):format(sc.proposed), width))
-      cfgStatus:setForeground(Theme.ok)
-      -- Show the first proposed nozzle's directions as a spot-check; the rest are in the ACCEPT.
-      local firstId, firstProp = next(sc.proposal)
-      local line = firstProp and proposalLine(firstProp)
-      cfgDetail1:setText(Theme.fit(firstId and line
-        and ("%s %s"):format(tostring(firstId), line) or "ACCEPT saves, DISCARD drops", width))
-      cfgDetail1:setForeground(Theme.dim)
-      if cfgDetail2 then cfgDetail2:setText(Theme.fit("ACCEPT saves  DISCARD drops", width)) end
-      return
-    end
-
-    if sc.aborted then
-      local long = tostring(sc.aborted)
-      cfgStatus:setText(Theme.fit(#long <= width and long or tostring(sc.abortedShort or long), width))
-      cfgStatus:setForeground(Theme.warning)
-      cfgDetail1:setText("")
-      return
-    end
-    if sc.complete then
-      cfgStatus:setText(Theme.fit("done: no change", width))
-      cfgStatus:setForeground(Theme.dim)
-      cfgDetail1:setText("")
-      return
-    end
-
-    -- Idle: show the last prereq check.
-    if pre.ok == true then
-      cfgStatus:setText(Theme.fit("READY!", width))
-      cfgStatus:setForeground(Theme.ok)
-      cfgDetail1:setText(Theme.fit(("%d nozzle(s) to map"):format(pre.nozzles or 0), width))
-      cfgDetail1:setForeground(Theme.dim)
-    elseif pre.ok == false then
-      cfgStatus:setText(Theme.fit("NO GO!", width))
-      cfgStatus:setForeground(Theme.warning)
-      local missing = pre.missing or {}
-      cfgDetail1:setText(Theme.fit(table.concat(missing, " "), width))
-      cfgDetail1:setForeground(Theme.warning)
-      -- Overflow onto the second line when the monitor has one.
-      if cfgDetail2 and #table.concat(missing, " ") > width then
-        cfgDetail2:setText(Theme.fit(table.concat(missing, " "):sub(width + 1), width))
-        cfgDetail2:setForeground(Theme.warning)
-      end
-    else
-      cfgStatus:setText(Theme.fit("press CHECK", width))
-      cfgStatus:setForeground(Theme.dim)
-      cfgDetail1:setText("")
-    end
-
-    -- A refused start/accept says why, straight from the craft's short form.
-    local ack = opts.lastAck and opts.lastAck()
-    if ack and ack.cmd == "selfConfig" and ack.ack == false then
-      local detail = ack.detail or {}
-      local long = tostring(detail.error or "REFUSED")
-      cfgStatus:setText(Theme.fit(#long <= width and long or tostring(detail.errorShort or long), width))
-      cfgStatus:setForeground(Theme.warning)
-    end
-  end
-  refreshConfig()
-
   -- ------------------------------------------------------------- nav view render
   --
   -- Everything on the nav view is the REPORTED state, never a guess: the tape blanks to dashes when
@@ -787,17 +643,14 @@ function Nav.build(frame, opts)
     live.selfTest = t.selfTest or {}
     live.thrusterAxes = t.thrusterAxes or {}
     live.axisMap = t.axisMap or {}
-    live.selfConfig = t.selfConfig or {}
-    live.selfConfigPrereqs = t.selfConfigPrereqs or {}
 
-    -- Only refresh a subpage's elements when it is the page IN VIEW. The axis map (24 buttons), the
-    -- SELF CONFIG page and the nav view were all being rebuilt every frame even while hidden, which
-    -- is redraw cost spent on nothing -- and redraw cost is what starves monitor_touch. `renderAll`
-    -- is a test aid so the render-logic tests can check any page without first showing it; in the
-    -- cockpit it is never set. A page refreshes the frame it is opened on, so switching has no lag.
+    -- Only refresh a subpage's elements when it is the page IN VIEW. The axis map (24 buttons) and the
+    -- nav view were all being rebuilt every frame even while hidden, which is redraw cost spent on
+    -- nothing -- and redraw cost is what starves monitor_touch. `renderAll` is a test aid so the
+    -- render-logic tests can check any page without first showing it; in the cockpit it is never set.
+    -- A page refreshes the frame it is opened on, so switching has no lag.
     local showAll = opts.renderAll
     if showAll or axisPage:getVisible() then refreshAxisRows() end
-    if showAll or configPage:getVisible() then refreshConfig() end
     if showAll or navPage:getVisible() then refreshNav(model) end
 
     -- ---- FCS
@@ -981,7 +834,7 @@ function Nav.build(frame, opts)
     bitButton = bitButton,
     stacked = stacked,
     pages = { nav = navPage, bit = bitPage, fcs = fcsPage, selfTest = selfPage,
-      axisMap = axisPage, config = configPage },
+      axisMap = axisPage },
     axisRows = axisRows,
     bars = bars,
     elements = {

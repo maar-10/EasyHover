@@ -364,67 +364,6 @@ function Config.defaults()
       holdPosition = true,      -- brake mode also holds position once stopped
     },
 
-    -- SELF AXIS CONFIG BIP -- see lib/control/selfconfig.lua. Every magnitude here is a physical
-    -- constant that WILL need one in-game tuning pass: how much thrust floats this craft, how far a
-    -- nozzle must deflect to move it against its ropes, how fast it settles. They are config so
-    -- tuning is an edit, not a code change. The safety caps are deliberately conservative.
-    selfConfig = {
-      hoverHeight = 2.0,        -- blocks above the ground to float to before probing (rope-limited)
-      -- Half-width of the height band the float regulates to. Reaching hoverHeight +/- this counts
-      -- as "at height"; above it the float THROTTLES DOWN rather than aborting -- climbing too high
-      -- is never dangerous on a roped craft, so easing off is the right response, not stopping.
-      hoverTolerance = 0.5,
-      landedHeight = 0.4,       -- back below this counts as landed
-      -- Fallback: if the craft reaches the band but never stops bobbing (quantised thrust never
-      -- lets it sit perfectly still), settle anyway after this long in the band so the run proceeds.
-      floatSettleMs = 3000,
-      baseCollective = 0.0,     -- lift collective the float ramp starts from
-      -- FLOAT HEIGHT CONTROL -- cascaded and anchored (see selfconfig.lua regulateHeight). The height
-      -- error becomes a CAPPED desired vertical speed (approachSpeed) so a distant target -- a high
-      -- hover, a long rope -- cannot slam the throttle to full and leap the craft into the rope; and
-      -- the collective is anchored at a slow hover-throttle estimate plus a small bounded correction
-      -- so it settles at hover and cannot collapse to the ground.
-      approachSpeed = 0.4,      -- m/s: the gentle vertical speed the float rises/sinks at (the cap)
-      approachGain = 0.5,       -- desired vertical speed per block of height error, before the cap
-      hoverLearn = 0.3,         -- how fast the hover-throttle estimate integrates the (bounded) vErr
-      velP = 0.3,               -- correction per (m/s) of vertical-speed error
-      maxCorrection = 0.25,     -- hard cap on how far the correction may move the collective off hover
-      collectiveRamp = 0.1,     -- open-loop fallback rate, used only when NO altimeter reading exists
-      maxCollective = 1.0,      -- ramp all the way to FULL power to get off the ground if needed
-      landRamp = 0.15,          -- collective shed per second while landing
-      -- WONT LIFT is declared only after holding FULL power this long and still being on the ground:
-      -- give a liquid thruster time to build its thrust before concluding the craft is too heavy
-      -- (more thrust -- fuel upgrades -- is then the answer, not more time).
-      fullPowerDwellMs = 5000,
-      probeThrust = 0.4,        -- thrust a non-lift thruster fires at while its nozzle is probed
-      settleMs = 2000,          -- longest wait for the craft to settle before/after a probe
-      settleSpeed = 0.1,        -- craft-frame speed considered "settled" (just above the deadband)
-      probeDeflection = 0.6,    -- raw nozzle deflection during a probe (capped by the thruster's maxVector)
-      probeMs = 1500,           -- how long a deflection is held while the response is measured
-      counterMs = 1200,         -- opposite deflection afterwards, to cancel the velocity it built
-      minResponse = 0.15,       -- craft-frame speed a probe must produce to be trusted (> deadband)
-      ambiguityRatio = 0.5,     -- |secondary axis| / |dominant| above this flags a diagonal mount
-      maxTiltDeg = 20.0,        -- ABORT if pitch or roll exceeds this
-      maxSpeed = 3.0,           -- ABORT if craft-frame speed exceeds this (a rope let go)
-      -- CoM LEVELING. The float holds LEVEL with differential lift THRUST -- more thrust on the heavy
-      -- side -- driven by the gimbal. Geometry only (front/rear/left/right from each thruster's pos),
-      -- so it needs NO nozzle axis map, which is exactly what SELF CONFIG is still discovering. A
-      -- forward centre of mass otherwise noses the craft down under equal lift and dirties every
-      -- probe. Signs match the mixer's lift differential. The converged trim IS the CoM offset.
-      -- PD + slow integral. A P/I loop alone oscillated on the real attitude plant (angle is a double
-      -- integral of torque, plus thrust ramp lag) -- levelD is the rate damping that stabilises it.
-      -- Gains from a sweep against a light-drag, laggy plant (tests/, the craft-on-ropes case): the
-      -- integral is deliberately SLOW (the PD does the levelling; the integral only refines the stored
-      -- trim), and the D is what keeps it from oscillating at the ~5 Hz level loop.
-      levelGain = 0.003,        -- integral: trim per degree of tilt per second (learns the CoM offset)
-      levelP = 0.015,           -- proportional on the live tilt
-      levelD = 0.04,            -- rate damping (deg/s) -- the term that stops it oscillating
-      levelRateAlpha = 0.3,     -- low-pass on the differentiated (quantised) angle
-      levelAuthority = 0.3,     -- lift fraction one unit of pitch/roll trim commands
-      levelMaxTrim = 1.0,       -- clamp on the learned trim
-      levelMaxDelta = 0.4,      -- clamp on the per-thruster lift bias (never starve a corner to zero)
-    },
-
     envelope = {
       maxBankDeg = 20.0,
       maxPitchDeg = 20.0,

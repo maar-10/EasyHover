@@ -280,7 +280,7 @@ function Sensors:read(dt)
   -- The near-zero-vertical-speed AND-condition was REMOVED. It existed so a low fast pass would not
   -- read as a landing, but vertical speed here is DIFFERENTIATED baro, which jitters -- so a craft
   -- sitting still on the ground would intermittently show |vs| above the epsilon and be reported
-  -- AIRBORNE. That is the exact false positive that made SELF CONFIG refuse ("NOT ON GROUND") on a
+  -- AIRBORNE. That is the exact false positive a preflight ground check must not trip on -- a
   -- landed craft with the thrusters cold. The laser is the honest answer to "is there ground right
   -- under me"; a stuck laser is a far rarer fault than baro jitter, and the pre-flight interlocks
   -- re-check actual thrust before doing anything anyway.

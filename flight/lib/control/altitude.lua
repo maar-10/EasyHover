@@ -96,8 +96,8 @@ function Altitude:update(target, measured, dt)
       -- TAKEOFF RAMP. A craft that has never hovered has hoverTrim 0, and the rate loop's authority
       -- (p*err + iClamp ~= 0.5) tops out below the thrust a heavy craft needs to leave the ground --
       -- so a climb command sat at partial thrust forever (the reported bug). While grounded and
-      -- commanded UP, ramp the collective open-loop toward full, exactly as SELF CONFIG's float does
-      -- (which is why SELF CONFIG lifts the craft when normal flight could not).
+      -- commanded UP, ramp the collective open-loop toward full so a heavy craft can leave the ground
+      -- even before any hover thrust has been learned.
       --
       -- ...but FREEZE the ramp the instant the craft actually breaks free of the skids. The thrust
       -- that just started it rising is ~hover, and that is what seeds the feedforward at the handoff

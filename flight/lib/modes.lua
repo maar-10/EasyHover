@@ -42,7 +42,7 @@ function Modes.new(cfg, log)
   self.assistEnabled = cfg.assist.enabled ~= false
 
   -- FLIGHT CONTROL ARM. A master switch, OFF at boot: the mixer (the PID) may run only when the
-  -- pilot has deliberately ENGAGED flight control. Preflight -- SELF TEST, SELF CONFIG, AXIS MAP,
+  -- pilot has deliberately ENGAGED flight control. Preflight -- SELF TEST, AXIS MAP,
   -- just standing on the pad with the engine warming -- happens with this OFF, so the controller
   -- provably never steers until you say so. Not persisted: a reboot comes up SAFE, on purpose.
   self.armed = false
