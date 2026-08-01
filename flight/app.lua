@@ -1322,7 +1322,6 @@ function App:run()
   self:boot()
   self.running = true
   local period = 1 / self.cfg.tuning.attitudeHz
-  local timer = os.startTimer(period)
   self.lastCycleAt = os.epoch("utc")
 
   -- THE CYCLE RUNS ON A DEADLINE, NOT ON ONE IRREPLACEABLE TIMER.
@@ -1345,7 +1344,21 @@ function App:run()
   -- an event flood (many events per cycle) or another subsystem's clock driving the loop instead.
   self.loopDiag = { events = 0, waitMax = 0, waitEvt = "-" }
   local nextCycleAt = os.epoch("utc")
+  local heartbeat = nil
   while self.running do
+    -- HEARTBEAT, ARMED LAST. THE bug that starved this loop to ~1 Hz: a mainThread peripheral call (a
+    -- thruster or sensor read/write) yields waiting for its OWN task_complete event and DISCARDS every
+    -- other queued event while it waits -- including a pending loop timer. cycle() fires a burst of
+    -- them, so a timer armed BEFORE cycle was routinely swallowed, and the loop only advanced when an
+    -- incidental modem message happened to wake it (measured: a bare timer loop on THIS computer holds
+    -- a clean 20 Hz; ours did not, purely because of this). So the heartbeat is (re)armed HERE, the
+    -- last thing before os.pullEvent, with no peripheral call between the arm and the wait -- nothing
+    -- can eat it before we are parked on it -- and it is force-rearmed after every block that touches a
+    -- peripheral (below), because those calls may have discarded it.
+    if heartbeat == nil then
+      heartbeat = os.startTimer(math.max(0, nextCycleAt - os.epoch("utc")) / 1000)
+    end
+
     local waitStart = os.epoch("utc")
     local event, p1, p2, p3 = os.pullEvent()
     local waitMs = os.epoch("utc") - waitStart
@@ -1354,13 +1367,13 @@ function App:run()
       self.loopDiag.waitMax = waitMs
       self.loopDiag.waitEvt = tostring(event)
     end
+    if event == "timer" and p1 == heartbeat then heartbeat = nil end
 
     local nowMs = os.epoch("utc")
     if nowMs >= nextCycleAt then
       local dt = (nowMs - (self.lastCycleAt or nowMs)) / 1000
       self.lastCycleAt = nowMs
       nextCycleAt = nowMs + period * 1000
-      timer = os.startTimer(period)
       local ok, err = pcall(function() self:cycle(dt) end)
       if not ok then
         -- TERMINATE IS NOT A CYCLE ERROR. The setters yield, so Ctrl+T surfaces here as an
@@ -1372,10 +1385,12 @@ function App:run()
         pcall(function() self.thrusters:neutralVectors() end)
         self.state:raise("cycle", "warning", "control cycle error: " .. tostring(err))
       end
+      heartbeat = nil   -- cycle's peripheral calls may have discarded it; re-arm at the top
     end
 
     if event == "peripheral" or event == "peripheral_detach" then
       self:onPeripheralChange(event, p1)
+      heartbeat = nil   -- this handler drives peripherals too
     elseif event == "rednet_message" then
       -- p1 is the sender; pullEvent gave us only two values above, so re-read them
       local sender, message, protocol = p1, p2, p3
@@ -1383,9 +1398,11 @@ function App:run()
       -- Same rule as the cycle: a terminate is the pilot, not a fault.
       if not okMsg and tostring(msgErr):find("Terminated") then error(msgErr, 0) end
       if not okMsg then self.log:error("message error: %s", tostring(msgErr)) end
+      heartbeat = nil   -- some commands drive thrusters; a peripheral call may have eaten the timer
     elseif event == "disk" or event == "disk_eject" then
       self.per:scan()
       self.disk:status()
+      heartbeat = nil
     elseif event == "terminate" then
       self.log:warn("terminate received")
       self.running = false
