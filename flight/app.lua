@@ -671,16 +671,22 @@ function App:recordLoop(execMs, dt)
   end
   local targetMs = 1000 / (self.cfg.tuning.attitudeHz or 20)
   local writes = self.state:get("thrusters.writes") or 0
+  -- The starvation probe: how long the LONGEST os.pullEvent wait was this cycle, what woke it, and
+  -- how many events arrived. Reset each cycle so the numbers describe the gap just measured.
+  local diag = self.loopDiag or { events = 0, waitMax = 0, waitEvt = "-" }
+  local waitMs, waitEvt, events = diag.waitMax, diag.waitEvt, diag.events
+  diag.events, diag.waitMax, diag.waitEvt = 0, 0, "-"
   self.state:set("loop", {
     execMs = st.execEma, execMaxMs = st.execMax,
     periodMs = st.periodEma, periodMaxMs = st.periodMax,
     targetMs = targetMs, writes = writes,
+    waitMs = waitMs, waitEvt = waitEvt, events = events,
   })
   -- Echoed to the flight computer's own terminal (startup runs with echo on), so the numbers can be
   -- read on the ground without a monitor. Throttled so it does not bury the rest of the log.
   self.log:throttled("loopstats", 2000, "info",
-    "loop exec %.0f/%.0f ms  period %.0f/%.0f ms (target %.0f)  writes %d",
-    st.execEma, st.execMax, st.periodEma, st.periodMax, targetMs, writes)
+    "loop exec %.0f/%.0f  period %.0f/%.0f (t%.0f) writes %d | wait %d ms (%s) evt %d",
+    st.execEma, st.execMax, st.periodEma, st.periodMax, targetMs, writes, waitMs, waitEvt, events)
 end
 
 -- ---------------------------------------------------------------- commands
@@ -1333,9 +1339,21 @@ function App:run()
   --
   -- Now: any event is a chance to notice the deadline has passed, the timer is only a wake-up for
   -- when nothing else is happening, and it is re-armed on every cycle.
+  -- Loop-starvation probe. If cycles run fast (small exec) but arrive slowly (big period), the time
+  -- is lost HERE, parked in os.pullEvent. This records how long the wait actually was and which event
+  -- finally woke us -- so a starved control timer (waking on "timer" after ~700 ms) is told apart from
+  -- an event flood (many events per cycle) or another subsystem's clock driving the loop instead.
+  self.loopDiag = { events = 0, waitMax = 0, waitEvt = "-" }
   local nextCycleAt = os.epoch("utc")
   while self.running do
+    local waitStart = os.epoch("utc")
     local event, p1, p2, p3 = os.pullEvent()
+    local waitMs = os.epoch("utc") - waitStart
+    self.loopDiag.events = self.loopDiag.events + 1
+    if waitMs > self.loopDiag.waitMax then
+      self.loopDiag.waitMax = waitMs
+      self.loopDiag.waitEvt = tostring(event)
+    end
 
     local nowMs = os.epoch("utc")
     if nowMs >= nextCycleAt then
