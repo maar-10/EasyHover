@@ -2638,6 +2638,7 @@ local function startedSc()
   local r = scRig()
   r.sc:start({ engineOn = true, fuelled = true, onGround = true, velocityVector = "vector" },
     { now = 100000, altitude = 74.5 })
+  r.sc.run.collective = 0.5      -- a mid hover, so there is thrust headroom to level with
   return r
 end
 
@@ -2666,21 +2667,55 @@ T.it("CoM leveling: a right-heavy roll lifts the RIGHT harder", function()
   T.isTrue(left < 0, "the LEFT sheds lift, got " .. left)
 end)
 
---- End to end against a simple pitch plant: a constant nose-down CoM torque, opposed by the leveling
---- command. The loop must pull the tilt back toward level and learn a nose-up trim to hold it there.
-T.it("CoM leveling drives a forward-CoM craft back toward level", function()
+--- End to end against a REALISTIC pitch plant: a SECOND-order plant (torque -> angular accel -> rate
+--- -> angle) with the thrusters' ramp LAG and angular drag -- the shape that made a P/I-only loop
+--- diverge into RUNAWAY/OVER TILT in-game. The leveling must not just converge but do so WITHOUT
+--- sustained oscillation. (A first-order plant can't oscillate, which is why the earlier test missed
+--- the instability.)
+T.it("CoM leveling settles a forward-CoM craft WITHOUT oscillating", function()
   local r = startedSc()
   local now = 100000
   r.sc.run.lastLevelAt = now
-  local pitch = -12                                   -- nosed 12 deg down to begin with
-  for _ = 1, 400 do
-    now = now + 100
+  local dt = 0.2                                       -- ~5 Hz, the slowest the level loop runs
+  local pitch, rate, torque = -12, 0, 0
+  -- Light angular drag (a craft on ropes barely self-damps) + thruster ramp lag: WITHOUT the D term
+  -- this plant oscillates, which is the whole point of the test.
+  local comTorque, ctrlGain, slewTau, drag = 0.15, 8.0, 0.2, 0.2
+  local peak, tailMax, tailMin = 0, -1e9, 1e9
+  for i = 1, 500 do                                    -- 100 s
+    now = now + dt * 1000
     r.sc:updateLevel({ attitude = { pitch = pitch, roll = 0 } }, now)
-    -- first-order pitch plant: the leveling command raises the nose, the forward CoM drops it
-    pitch = pitch + ((r.sc.run.applyPitch or 0) * 8.0 - 0.15)
+    local cmd = (r.sc.run.applyPitch or 0) * ctrlGain
+    torque = torque + (cmd - torque) * math.min(1, dt / slewTau)   -- thruster ramp lag
+    rate = rate + (torque - comTorque - drag * rate) * dt          -- angular accel, drag
+    pitch = pitch + rate * dt
+    peak = math.max(peak, math.abs(pitch))
+    if i > 400 then tailMax = math.max(tailMax, pitch); tailMin = math.min(tailMin, pitch) end
   end
-  T.isTrue(math.abs(pitch) < 3.0, "the nose is pulled back toward level, got " .. pitch)
-  T.isTrue(r.sc.run.pitchTrim > 0, "and a persistent nose-up CoM trim was learned")
+  T.isTrue(math.abs(pitch) < 3.0, "settles near level, got " .. pitch)
+  T.isTrue(peak < 20.0, "never diverges past the tilt cap -- no oscillation blow-up, peak " .. peak)
+  T.isTrue((tailMax - tailMin) < 4.0, "and the tail is steady, not oscillating: p2p " .. (tailMax - tailMin))
+  T.isTrue(r.sc.run.pitchTrim > 0, "having learned a nose-up CoM trim")
+end)
+
+--- THE HEADROOM BOUND: on a craft hovering near full thrust there is little room to add lift on the
+--- heavy side, so the leveling bias must shrink toward zero -- otherwise it saturates the heavy corner
+--- and sheds net lift, and the craft sinks (the reported "doesn't lift high enough"). A mid hover has
+--- plenty of room; a near-full hover has almost none.
+T.it("CoM leveling bias is bounded by the available thrust headroom", function()
+  local r = startedSc()
+  local now = 100000
+  local function trimHard(col)
+    r.sc.run.collective = col
+    r.sc.run.pitchTrim, r.sc.run.rollTrim, r.sc.run.applyPitch, r.sc.run.applyRoll = 0, 0, 0, 0
+    r.sc.run.lastLevelAt = now
+    for _ = 1, 60 do now = now + 100; r.sc:updateLevel({ attitude = { pitch = -20, roll = 0 } }, now) end
+    return math.abs(r.sc:levelDelta({ pos = { x = 0, z = 2 } }))
+  end
+  local roomy = trimHard(0.5)      -- half throttle: lots of headroom
+  local nearFull = trimHard(0.95)  -- near max: almost none
+  T.isTrue(roomy > nearFull, ("more headroom = more leveling authority: %.3f vs %.3f"):format(roomy, nearFull))
+  T.isTrue(nearFull <= 0.05 + 1e-9, "near full thrust the bias is nearly zero (cannot steal lift): " .. nearFull)
 end)
 
 T.it("checkPrereqs refuses with the engine off, and names what is missing", function()

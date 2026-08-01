@@ -326,18 +326,39 @@ function SelfConfig:updateLevel(ctx, now)
   local p = self:params()
   local dt = math.max((now - (self.run.lastLevelAt or now)) / 1000, 0)
   self.run.lastLevelAt = now
-  if type(att) ~= "table" then return end          -- no gimbal: fall back to equal lift
+  if type(att) ~= "table" or dt <= 0 then return end   -- no gimbal / no dt: fall back to equal lift
   local pitch = tonumber(att.pitch) or 0            -- + = nose up
   local roll = tonumber(att.roll) or 0              -- + = roll right
-  local maxT = p.levelMaxTrim or 1.0
-  -- Integrate toward the bias that zeros the tilt. Nose-DOWN (pitch<0) needs a nose-UP bias
-  -- (pitchTrim up); a RIGHT roll (roll>0) needs a left bias (rollTrim down).
-  self.run.pitchTrim = Util.clamp((self.run.pitchTrim or 0) - (p.levelGain or 0.02) * pitch * dt, -maxT, maxT)
-  self.run.rollTrim = Util.clamp((self.run.rollTrim or 0) - (p.levelGain or 0.02) * roll * dt, -maxT, maxT)
-  -- What we actually apply: the learned trim plus proportional damping on the current tilt.
-  local kp = p.levelP or 0.03
-  self.run.applyPitch = Util.clamp((self.run.pitchTrim or 0) - kp * pitch, -maxT, maxT)
-  self.run.applyRoll = Util.clamp((self.run.rollTrim or 0) - kp * roll, -maxT, maxT)
+
+  -- FILTERED RATE -- the damping term. The attitude plant is angle = double-integral of torque, with
+  -- the thrusters' thrust ramp on top; a P/I controller on it OSCILLATES (it diverged into RUNAWAY /
+  -- OVER TILT in-game). The derivative of the angle, opposing motion, is what damps it. Filtered
+  -- because the gimbal angle is quantised.
+  local a = p.levelRateAlpha or 0.3
+  self.run.pitchRate = (self.run.pitchRate or 0)
+    + (((pitch - (self.run.lastPitch or pitch)) / dt) - (self.run.pitchRate or 0)) * a
+  self.run.rollRate = (self.run.rollRate or 0)
+    + (((roll - (self.run.lastRoll or roll)) / dt) - (self.run.rollRate or 0)) * a
+  self.run.lastPitch, self.run.lastRoll = pitch, roll
+
+  -- BOUND TO THE HEADROOM. Differential lift can only level within the thrust the heavy side has left:
+  -- on a craft hovering near full, adding more at the front just saturates it and sheds lift at the
+  -- rear -- the craft sinks and the integral winds up for nothing. So the trim is clamped to what the
+  -- current collective leaves (headroom/authority): the heavy corner reaches at most full thrust, the
+  -- light corner compensates symmetrically, and NET lift is preserved. This is also the anti-windup.
+  local col = self.run.collective or 0
+  local headroom = math.max(0, math.min(1 - col, col))
+  local maxT = math.min(p.levelMaxTrim or 1.0, headroom / math.max(p.levelAuthority or 0.3, 1e-3))
+
+  -- SLOW integral -> the learned CoM trim. Kept well below the PD bandwidth so it cannot destabilise.
+  self.run.pitchTrim = Util.clamp((self.run.pitchTrim or 0) - (p.levelGain or 0.008) * pitch * dt, -maxT, maxT)
+  self.run.rollTrim = Util.clamp((self.run.rollTrim or 0) - (p.levelGain or 0.008) * roll * dt, -maxT, maxT)
+
+  -- Applied = learned trim + PD: gentle proportional on the tilt, DAMPED by the rate. Nose-DOWN
+  -- (pitch<0) -> nose-up bias; a RIGHT roll (roll>0) -> left bias.
+  local kp, kd = p.levelP or 0.012, p.levelD or 0.03
+  self.run.applyPitch = Util.clamp((self.run.pitchTrim or 0) - kp * pitch - kd * self.run.pitchRate, -maxT, maxT)
+  self.run.applyRoll = Util.clamp((self.run.rollTrim or 0) - kp * roll - kd * self.run.rollRate, -maxT, maxT)
 end
 
 --- The per-thruster lift bias that levels the craft, from its corner geometry. Signs match the mixer
@@ -348,7 +369,10 @@ function SelfConfig:levelDelta(spec)
   local sz = ((pos.z or 0) > 0) and 1 or (((pos.z or 0) < 0) and -1 or 0)
   local sx = ((pos.x or 0) > 0) and 1 or (((pos.x or 0) < 0) and -1 or 0)
   local d = ((self.run.applyPitch or 0) * sz - (self.run.applyRoll or 0) * sx) * (p.levelAuthority or 0.3)
-  local cap = p.levelMaxDelta or 0.4
+  -- Never push a corner past full thrust or below zero: cap to the current headroom AND the config
+  -- limit, so the bias can never starve a corner or drive the heavy side into saturation.
+  local col = self.run.collective or 0
+  local cap = math.min(p.levelMaxDelta or 0.4, math.max(0, math.min(1 - col, col)))
   return Util.clamp(d, -cap, cap)
 end
 

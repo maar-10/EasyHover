@@ -411,8 +411,15 @@ function Config.defaults()
       -- so it needs NO nozzle axis map, which is exactly what SELF CONFIG is still discovering. A
       -- forward centre of mass otherwise noses the craft down under equal lift and dirties every
       -- probe. Signs match the mixer's lift differential. The converged trim IS the CoM offset.
-      levelGain = 0.02,         -- integral: trim per degree of tilt per second (learns the CoM offset)
-      levelP = 0.03,            -- proportional damping on the live tilt, on top of the learned trim
+      -- PD + slow integral. A P/I loop alone oscillated on the real attitude plant (angle is a double
+      -- integral of torque, plus thrust ramp lag) -- levelD is the rate damping that stabilises it.
+      -- Gains from a sweep against a light-drag, laggy plant (tests/, the craft-on-ropes case): the
+      -- integral is deliberately SLOW (the PD does the levelling; the integral only refines the stored
+      -- trim), and the D is what keeps it from oscillating at the ~5 Hz level loop.
+      levelGain = 0.003,        -- integral: trim per degree of tilt per second (learns the CoM offset)
+      levelP = 0.015,           -- proportional on the live tilt
+      levelD = 0.04,            -- rate damping (deg/s) -- the term that stops it oscillating
+      levelRateAlpha = 0.3,     -- low-pass on the differentiated (quantised) angle
       levelAuthority = 0.3,     -- lift fraction one unit of pitch/roll trim commands
       levelMaxTrim = 1.0,       -- clamp on the learned trim
       levelMaxDelta = 0.4,      -- clamp on the per-thruster lift bias (never starve a corner to zero)
