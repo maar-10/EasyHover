@@ -98,7 +98,8 @@ function App.new(opts)
   -- stalls of writing thrusters -- the suspected bottleneck); periodMs is the actual gap between
   -- cycles (the achieved control rate). Both an EMA (typical) and a windowed max (recent worst) are
   -- kept, so a periodic actuation stall shows up instead of averaging away.
-  self.loopStats = { execEma = 0, execMax = 0, periodEma = 0, periodMax = 0, windowN = 0 }
+  self.loopStats = { execEma = 0, execMax = 0, periodEma = 0, periodMax = 0, windowN = 0,
+    sensorEma = 0, writeEma = 0, controlEma = 0 }
   self.trimAtLastSave = self.cfg.control.altitude.hoverTrim or 0
   self.running = false
   return self
@@ -234,6 +235,9 @@ function App:cycleBody(dt)
   local now = os.epoch("utc")
   self.cycles = self.cycles + 1
   local tuning = self.cfg.tuning
+  -- Phase timing. Reset here so an owner branch that never reaches the mixer reports 0 write time,
+  -- and the sensor read is always measured. recordLoop splits total exec into sense/control/write.
+  self._phaseSensorMs, self._phaseWriteMs = 0, 0
 
   -- dt discipline: a stalled cycle is clamped and flagged rather than trusted
   local overrun = false
@@ -245,7 +249,9 @@ function App:cycleBody(dt)
   end
 
   -- ---- sense
+  local senseStart = os.epoch("utc")
   self.sensors:read(dt)
+  self._phaseSensorMs = os.epoch("utc") - senseStart
   local healthy = self.sensors:isHealthy()
   local measured = {
     altitude = self.state:get("altitude.baro"),
@@ -552,7 +558,9 @@ function App:cycleBody(dt)
     allowPrecision = demand.allowPrecision or (self.modes.lateral == "precision"),
   })
 
+  local writeStart = os.epoch("utc")
   self.thrusters:apply(commands)
+  self._phaseWriteMs = os.epoch("utc") - writeStart
 
   self:publish(measured, capability, dt, overrun)
   return state
@@ -668,6 +676,14 @@ function App:recordLoop(execMs, dt)
   st.periodEma = st.periodEma + (periodMs - st.periodEma) * a
   st.execMax = math.max(st.execMax, execMs)
   st.periodMax = math.max(st.periodMax, periodMs)
+  -- Where the exec time actually goes: the two mainThread-I/O phases and everything else (the PID
+  -- maths, mixing, telemetry). This is what tells us whether reads or writes are the bottleneck.
+  local sensorMs = self._phaseSensorMs or 0
+  local writeMs = self._phaseWriteMs or 0
+  local controlMs = math.max(0, execMs - sensorMs - writeMs)
+  st.sensorEma = st.sensorEma + (sensorMs - st.sensorEma) * a
+  st.writeEma = st.writeEma + (writeMs - st.writeEma) * a
+  st.controlEma = st.controlEma + (controlMs - st.controlEma) * a
   st.windowN = st.windowN + 1
   if st.windowN >= 40 then                         -- reset the "recent worst" ~2 s at 20 Hz
     st.windowN, st.execMax, st.periodMax = 0, execMs, periodMs
@@ -684,12 +700,19 @@ function App:recordLoop(execMs, dt)
     periodMs = st.periodEma, periodMaxMs = st.periodMax,
     targetMs = targetMs, writes = writes,
     waitMs = waitMs, waitEvt = waitEvt, events = events,
+    sensorMs = st.sensorEma, controlMs = st.controlEma, writeMs = st.writeEma,
+    parallelIO = self.cfg.tuning.parallelIO and true or false,
   })
   -- Echoed to the flight computer's own terminal (startup runs with echo on), so the numbers can be
   -- read on the ground without a monitor. Throttled so it does not bury the rest of the log.
   self.log:throttled("loopstats", 2000, "info",
     "loop exec %.0f/%.0f  period %.0f/%.0f (t%.0f) writes %d | wait %d ms (%s) evt %d",
     st.execEma, st.execMax, st.periodEma, st.periodMax, targetMs, writes, waitMs, waitEvt, events)
+  -- The phase split, on its own throttled line: sense / control / write ms, and whether the
+  -- concurrent-I/O path is on. This is the line that says where the ~450 ms went.
+  self.log:throttled("loopphases", 2000, "info",
+    "  phases sense %.0f  ctrl %.0f  write %.0f ms  [pIO %s]",
+    st.sensorEma, st.controlEma, st.writeEma, self.cfg.tuning.parallelIO and "on" or "off")
 end
 
 -- ---------------------------------------------------------------- commands

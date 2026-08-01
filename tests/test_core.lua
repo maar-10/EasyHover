@@ -28,6 +28,36 @@ T.it("deepMerge REPLACES lists instead of blending them", function()
   T.eq(merged.list[1], 9, "list content")
 end)
 
+T.it("runBatch runs every task, concurrently or in series, and is a no-op when empty", function()
+  -- The concurrent path is what unpins the ~2 Hz control loop; both paths must run every task.
+  T.notNil(parallel, "the parallel API is available for the concurrent path")
+  T.notNil(parallel and parallel.waitForAll, "with waitForAll")
+
+  for _, useParallel in ipairs({ true, false }) do
+    local ran = {}
+    Util.runBatch({
+      function() ran[1] = true end,
+      function() ran[2] = true end,
+      function() ran[3] = true end,
+    }, useParallel)
+    T.isTrue(ran[1] and ran[2] and ran[3], "all three tasks ran (parallel=" .. tostring(useParallel) .. ")")
+  end
+
+  local touched = false
+  Util.runBatch({}, true)                       -- empty: must not error
+  Util.runBatch({ function() touched = true end }, true)  -- single task still runs
+  T.isTrue(touched, "a single task runs even though it takes the serial fast path")
+end)
+
+T.it("runBatch surfaces a task error rather than swallowing it", function()
+  -- A terminate (Ctrl+T) must propagate through the batch, not be absorbed into one dead task.
+  local ok, err = pcall(function()
+    Util.runBatch({ function() end, function() error("Terminated", 0) end }, true)
+  end)
+  T.isFalse(ok, "the error propagated")
+  T.isTrue(tostring(err):find("Terminated") ~= nil, "and it was the terminate: " .. tostring(err))
+end)
+
 T.it("deepMerge fills defaults into an empty table", function()
   local merged = Util.deepMerge({ nested = { x = 1 } }, { nested = {} })
   T.eq(merged.nested.x, 1, "empty map does not erase defaults")

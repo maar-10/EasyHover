@@ -27,9 +27,9 @@
       ["files"] = {
         {
           ["dst"] = "flight/app.lua",
-          ["size"] = 64830,
+          ["size"] = 66359,
           ["src"] = "flight/app.lua",
-          ["sum"] = "ba42a78c",
+          ["sum"] = "f9faac55",
         },
         {
           ["dst"] = "flight/diskmenu.lua",
@@ -39,9 +39,9 @@
         },
         {
           ["dst"] = "flight/lib/config.lua",
-          ["size"] = 45432,
+          ["size"] = 45958,
           ["src"] = "flight/lib/config.lua",
-          ["sum"] = "704a6397",
+          ["sum"] = "ef0ec8d6",
         },
         {
           ["dst"] = "flight/lib/control/altitude.lua",
@@ -165,15 +165,15 @@
         },
         {
           ["dst"] = "flight/lib/io/sensors.lua",
-          ["size"] = 11826,
+          ["size"] = 12563,
           ["src"] = "flight/lib/io/sensors.lua",
-          ["sum"] = "ee42abda",
+          ["sum"] = "0df3cabe",
         },
         {
           ["dst"] = "flight/lib/io/thrusters.lua",
-          ["size"] = 23881,
+          ["size"] = 24753,
           ["src"] = "flight/lib/io/thrusters.lua",
-          ["sum"] = "de507a2f",
+          ["sum"] = "a093f8bb",
         },
         {
           ["dst"] = "flight/lib/log.lua",
@@ -207,9 +207,9 @@
         },
         {
           ["dst"] = "flight/lib/util.lua",
-          ["size"] = 2087,
+          ["size"] = 3189,
           ["src"] = "flight/lib/util.lua",
-          ["sum"] = "7e9ac342",
+          ["sum"] = "d0b4653e",
         },
         {
           ["dst"] = "flight/startup.lua",
@@ -624,5 +624,5 @@
     ["size"] = 37557,
     ["sum"] = "e26e319d",
   },
-  ["version"] = "ab0d8c31",
+  ["version"] = "020812e2",
 }

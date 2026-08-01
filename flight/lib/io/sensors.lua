@@ -233,13 +233,27 @@ function Sensors:read(dt)
   local now = os.epoch("utc")
   local result = {}
 
-  local attitude = self:readAttitude()
+  -- Each read is a burst of mainThread peripheral calls. Run the five families concurrently so
+  -- their calls queue together and drain in a few ticks rather than a dozen in series. The
+  -- families touch disjoint filters and lastBaro, so they are safe to run as coroutines; the
+  -- state-setting below stays synchronous, after they have all returned. (No NESTED parallel:
+  -- an inner batch would swallow the outer families' task_complete events -- so the multi-call
+  -- families read their own sensors in series within their coroutine, which is fine.)
+  local attitude, altitude, speed, vec, rays
+  Util.runBatch({
+    function() attitude = self:readAttitude() end,
+    function() altitude = self:readAltitude(dt) end,
+    function() speed = self:readSpeed() end,
+    function() vec = self:readVelocityVector() end,
+    function() rays = self:readOptical() end,
+  }, self.cfg.tuning.parallelIO)
+  rays = rays or {}
+
   if attitude then
     self.state:setGroup("attitude", attitude, now)
     result.attitude = attitude
   end
 
-  local altitude = self:readAltitude(dt)
   if altitude then
     self.state:set("altitude.baro", altitude.baro, now)
     self.state:set("altitude.vs", altitude.vs, now)
@@ -249,20 +263,17 @@ function Sensors:read(dt)
     result.altitude = altitude
   end
 
-  local speed = self:readSpeed()
   if speed ~= nil then
     self.state:set("speed.scalar", speed, now)
     result.speed = speed
   end
 
-  local vec = self:readVelocityVector()
   if vec then
     self.state:setGroup("velocity", vec, now)
     result.velocity = vec
   end
   self.state:set("velocity.capability", self:velocityCapability(), now)
 
-  local rays = self:readOptical()
   if rays[1] then
     self.state:set("altitude.radar", rays[1].distance, now)
     self.state:set("ground.distance", rays[1].distance, now)

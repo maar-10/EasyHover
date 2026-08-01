@@ -69,6 +69,27 @@ function Util.count(t)
   return n
 end
 
+--- Run a list of zero-arg task functions, concurrently when it pays off.
+---
+--- Every thruster setter and sensor getter is a `mainThread` peripheral call: it YIELDS and its
+--- result lands a server tick later, so run in series N of them cost N ticks. Handed to
+--- `parallel.waitForAll` instead, the calls all queue in the same tick and the server drains them
+--- within its per-computer budget -- collapsing N ticks toward one. That is the whole fix for the
+--- ~2 Hz control loop. See docs/MOD_API_RESEARCH.md on the mainThread scheduler.
+---
+--- `useParallel` false (or a single task, or no `parallel` API) falls back to a plain sequential
+--- loop, so the behaviour is identical and A/B-comparable in flight via tuning.parallelIO. Each
+--- task is a coroutine here, so a task must not depend on another having run first.
+function Util.runBatch(tasks, useParallel)
+  local n = #tasks
+  if n == 0 then return end
+  if useParallel and n > 1 and type(parallel) == "table" and parallel.waitForAll then
+    parallel.waitForAll(table.unpack(tasks))
+  else
+    for i = 1, n do tasks[i]() end
+  end
+end
+
 --- Sorted key list, so iteration order is deterministic (tests, UI, logs).
 function Util.sortedKeys(t)
   local keys = {}

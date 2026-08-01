@@ -167,6 +167,50 @@ T.it("but a real device fault is still caught and counted", function()
   T.isTrue(th.stats.errors > 0, "and is counted")
 end)
 
+--- The concurrent write path (the ~2 Hz fix) must be BEHAVIOUR-IDENTICAL to the serial one: same
+--- writes, same final nozzle aim and thrust. Only the wall-clock cost differs, and that only shows
+--- on a loaded server, so this pins the equivalence the headless env CAN check.
+T.it("the concurrent write path issues exactly the same writes as the serial one", function()
+  local seq = {
+    { lift_fl = { thrust = 0.5, defX = 0.4, defZ = 0.1 },
+      lift_fr = { thrust = 0.5, defX = -0.4, defZ = 0.1 } },
+    { lift_fl = { thrust = 0.6, defX = 0.4, defZ = 0.1 },
+      lift_fr = { thrust = 0.5, defX = -0.3, defZ = 0.1 } },
+    { lift_fl = { thrust = 0.6, defX = 0.4, defZ = 0.1 },   -- unchanged: should write nothing
+      lift_fr = { thrust = 0.5, defX = -0.3, defZ = 0.1 } },
+  }
+  local function run(parallelIO)
+    mock.reset(); _G.peripheral = mock.install()
+    local r = rig(testConfig({ tuning = { parallelIO = parallelIO } }))
+    local th = Thrusters.new(r.per, r.cfg, r.log, r.state)
+    local total = 0
+    for _, c in ipairs(seq) do total = total + th:apply(c) end
+    local fl, fr = r.per.thrusters["lift_fl"].dev, r.per.thrusters["lift_fr"].dev
+    return { total = total, flx = fl.getTargetVectorX(), fly = fl.getTargetVectorY(),
+      frx = fr.getTargetVectorX(), fry = fr.getTargetVectorY() }
+  end
+  local par, ser = run(true), run(false)
+  T.isTrue(ser.total > 0, "precondition: the serial path actually wrote")
+  T.eq(par.total, ser.total, "the same number of writes")
+  T.near(par.flx, ser.flx, 1e-9, "same fl nozzle x"); T.near(par.fly, ser.fly, 1e-9, "same fl nozzle y")
+  T.near(par.frx, ser.frx, 1e-9, "same fr nozzle x"); T.near(par.fry, ser.fry, 1e-9, "same fr nozzle y")
+end)
+
+T.it("a terminate still propagates out of the CONCURRENT write path", function()
+  mock.reset()
+  _G.peripheral = mock.install()
+  local r = rig(testConfig({ tuning = { parallelIO = true } }))
+  local th = Thrusters.new(r.per, r.cfg, r.log, r.state)
+  -- Two thrusters -> the batch takes the real parallel path; one of them terminates.
+  r.per.thrusters["lift_fr"].dev.setVector = function() error("Terminated", 0) end
+  local ok, err = pcall(function()
+    th:apply({ lift_fl = { thrust = 0.5, defX = 0.4, defZ = 0 },
+      lift_fr = { thrust = 0.5, defX = -0.4, defZ = 0 } })
+  end)
+  T.isFalse(ok, "the terminate propagated through parallel.waitForAll")
+  T.isTrue(tostring(err):find("Terminated") ~= nil, "and it is the terminate: " .. tostring(err))
+end)
+
 T.it("write-on-change: repeating a command costs nothing", function()
   mock.reset()
   _G.peripheral = mock.install()
@@ -356,6 +400,35 @@ end)
 -- ------------------------------------------------------------ sensors
 
 T.suite("sensors")
+
+--- The concurrent read path batches the mainThread sensor calls to unpin the loop. It must land the
+--- exact same values in the state store as the serial path -- the filters and lastBaro are per-family
+--- and disjoint, so order cannot matter, and this proves it.
+T.it("the concurrent sensor read lands the same state as the serial one", function()
+  local function run(parallelIO)
+    mock.reset(); _G.peripheral = mock.install()
+    mock.vehicle.pitch = 6
+    mock.vehicle.roll = -4
+    mock.vehicle.altitude = 74.5
+    mock.vehicle.speed = 2.0
+    mock.vehicle.groundDist = 1.0            -- within groundContactDist -> on the ground
+    local r = rig(testConfig({ tuning = { parallelIO = parallelIO } }))
+    local sensors = Sensors.new(r.per, r.cfg, r.log, r.state)
+    sensors:read(0.05)
+    return {
+      pitch = r.state:get("attitude.pitch"), roll = r.state:get("attitude.roll"),
+      baro = r.state:get("altitude.baro"), speed = r.state:get("speed.scalar"),
+      ground = r.state:get("ground.contact"),
+    }
+  end
+  local par, ser = run(true), run(false)
+  T.near(par.pitch or 0, ser.pitch or 0, 1e-9, "same pitch")
+  T.near(par.roll or 0, ser.roll or 0, 1e-9, "same roll")
+  T.near(par.baro or 0, ser.baro or 0, 1e-9, "same altitude")
+  T.near(par.speed or 0, ser.speed or 0, 1e-9, "same speed")
+  T.eq(par.ground, ser.ground, "same ground-contact verdict")
+  T.eq(ser.ground, true, "precondition: it read a real value (on the ground)")
+end)
 
 T.it("attitude is normalised from the configured gimbal indices", function()
   mock.reset()

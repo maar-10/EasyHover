@@ -210,6 +210,12 @@ function Config.defaults()
       -- small steady-state ripple. Config validation checks the relationship.
       thrustHysteresisSteps = 0.5,
       thrustHoldSamples = 2,
+      -- Issue the cycle's mainThread peripheral calls (sensor reads, thruster writes) CONCURRENTLY
+      -- via parallel.waitForAll instead of one-at-a-time. Each such call yields for a server tick,
+      -- so in series a dozen of them cost a dozen ticks and pin the loop near ~2 Hz; batched, the
+      -- server drains them within its per-computer budget in ~one tick. Left as a flag so a craft
+      -- whose thrusters misbehave under concurrent writes can fall back to the serial path in flight.
+      parallelIO = true,
     },
 
     control = {

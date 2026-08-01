@@ -119,9 +119,15 @@ end
 
 --- commands: { [id] = { thrust = 0..1, defX = -1..1, defZ = -1..1 } }
 -- Missing ids are left exactly as they are -- silence means "no change", not "stop".
+--
+-- The DECISION for each thruster is cheap -- the readback getters (getTargetVectorX/Y) are plain
+-- @LuaFunction and cost no server tick. Only setVector/setThrust are mainThread. So we decide
+-- sequentially, collect one write task per thruster that actually needs one, and run them all at
+-- once (Util.runBatch): sixteen thrusters' writes then drain in ~one tick instead of sixteen.
 function Thrusters:apply(commands)
   local wrote = 0
   local deadband = self.cfg.tuning.vectorDeadband or 0.01
+  local tasks = {}
 
   for _, entry in ipairs(self.per:thrusterList()) do
     local cmd = commands[entry.id]
@@ -204,23 +210,32 @@ function Thrusters:apply(commands)
       local movedByOther = (last.nx ~= nil and qHeldX ~= nil and math.abs(qHeldX - last.nx) > 1e-6)
         or (last.ny ~= nil and qHeldY ~= nil and math.abs(qHeldY - last.ny) > 1e-6)
 
-      if entry.canVector and blockDisagrees and (movedEnough or movedByOther) then
+      local doVector = entry.canVector and blockDisagrees and (movedEnough or movedByOther)
+      if doVector then
         last.rawX, last.rawY = nx, ny
         nx, ny = qx, qy
-        if callDevice(self, entry.id, dev, "setVector", nx, ny) then
-          last.nx, last.ny = nx, ny
-          wrote = wrote + 1
-        end
       end
+      local doThrust = (last.step == nil or last.step ~= step)
 
-      if last.step == nil or last.step ~= step then
-        if callDevice(self, entry.id, dev, "setThrust", step) then
-          last.step = step
-          wrote = wrote + 1
+      -- One task per thruster, so its OWN vector-then-thrust ordering is preserved (the gentler
+      -- ordering on a lifting craft) while different thrusters still go out together.
+      if doVector or doThrust then
+        local id, d, vnx, vny, vstep = entry.id, dev, nx, ny, step
+        tasks[#tasks + 1] = function()
+          if doVector and callDevice(self, id, d, "setVector", vnx, vny) then
+            last.nx, last.ny = vnx, vny
+            wrote = wrote + 1
+          end
+          if doThrust and callDevice(self, id, d, "setThrust", vstep) then
+            last.step = vstep
+            wrote = wrote + 1
+          end
         end
       end
     end
   end
+
+  Util.runBatch(tasks, self.cfg.tuning.parallelIO)
 
   self.stats.writes = self.stats.writes + wrote
   if self.state then
