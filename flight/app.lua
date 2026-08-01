@@ -92,6 +92,11 @@ function App.new(opts)
   self.altitudeAccumulator = 0
   self.lastCycleAt = nil
   self.cycles = 0
+  -- Loop-timing diagnostic. execMs is how long a cycle takes to RUN (which includes the mainThread
+  -- stalls of writing thrusters -- the suspected bottleneck); periodMs is the actual gap between
+  -- cycles (the achieved control rate). Both an EMA (typical) and a windowed max (recent worst) are
+  -- kept, so a periodic actuation stall shows up instead of averaging away.
+  self.loopStats = { execEma = 0, execMax = 0, periodEma = 0, periodMax = 0, windowN = 0 }
   self.trimAtLastSave = self.cfg.control.altitude.hoverTrim or 0
   self.running = false
   return self
@@ -212,8 +217,18 @@ function App:devices()
   }
 end
 
---- Run exactly one control cycle. dt in seconds.
+--- One control cycle, wrapped with the loop-timing diagnostic so the exec time is captured on EVERY
+--- path -- the owner-arbitration early returns (disarmed, self test, self config) included, because a
+--- craft parked and disarmed on the ground is exactly when the pilot reads the pre-flight numbers.
 function App:cycle(dt)
+  local startMs = os.epoch("utc")
+  local result = self:cycleBody(dt)
+  self:recordLoop(os.epoch("utc") - startMs, dt)
+  return result
+end
+
+--- Run exactly one control cycle. dt in seconds.
+function App:cycleBody(dt)
   local now = os.epoch("utc")
   self.cycles = self.cycles + 1
   local tuning = self.cfg.tuning
@@ -637,6 +652,35 @@ function App:publish(measured, capability, dt, overrun)
       end
     end
   end
+end
+
+--- Fold one cycle's execution time (ms) and achieved period (dt, seconds) into the rolling stats and
+--- publish them. EMA tracks the typical cost; a max held over a short window surfaces the periodic
+--- actuation stall (e.g. all 8 lift thrusters rewriting on a collective step) that an average hides.
+function App:recordLoop(execMs, dt)
+  local st = self.loopStats
+  local periodMs = (type(dt) == "number" and dt > 0) and (dt * 1000) or 0
+  local a = 0.1                                   -- EMA weight; ~10-cycle memory
+  st.execEma = st.execEma + (execMs - st.execEma) * a
+  st.periodEma = st.periodEma + (periodMs - st.periodEma) * a
+  st.execMax = math.max(st.execMax, execMs)
+  st.periodMax = math.max(st.periodMax, periodMs)
+  st.windowN = st.windowN + 1
+  if st.windowN >= 40 then                         -- reset the "recent worst" ~2 s at 20 Hz
+    st.windowN, st.execMax, st.periodMax = 0, execMs, periodMs
+  end
+  local targetMs = 1000 / (self.cfg.tuning.attitudeHz or 20)
+  local writes = self.state:get("thrusters.writes") or 0
+  self.state:set("loop", {
+    execMs = st.execEma, execMaxMs = st.execMax,
+    periodMs = st.periodEma, periodMaxMs = st.periodMax,
+    targetMs = targetMs, writes = writes,
+  })
+  -- Echoed to the flight computer's own terminal (startup runs with echo on), so the numbers can be
+  -- read on the ground without a monitor. Throttled so it does not bury the rest of the log.
+  self.log:throttled("loopstats", 2000, "info",
+    "loop exec %.0f/%.0f ms  period %.0f/%.0f ms (target %.0f)  writes %d",
+    st.execEma, st.execMax, st.periodEma, st.periodMax, targetMs, writes)
 end
 
 -- ---------------------------------------------------------------- commands

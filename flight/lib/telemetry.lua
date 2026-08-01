@@ -317,6 +317,9 @@ function Telemetry:build(extra, includeSlow)
     envelopeClipped = s:get("envelope.clipped"),
     alarms = s:activeAlarms(),
     cycle = { dt = s:get("cycle.dt"), overrun = s:get("cycle.overrun"), n = s:get("cycles") },
+    -- Loop-timing diagnostic: exec (how long a cycle runs, incl. mainThread thruster writes),
+    -- period (achieved control rate), and writes/cycle. For the pre-flight throughput check.
+    loop = s:get("loop"),
   }
 
   -- THE SLOW HALF. Hardware inventories, the config view and the readback table are large and

@@ -1219,6 +1219,23 @@ T.it("the takeoff ramp freezes the instant the craft starts rising", function()
     ("frozen once rising -- no further ramp toward full (%.3f -> %.3f)"):format(c.collective, d.collective))
 end)
 
+--- The pre-flight THROUGHPUT check: the loop must report how long a cycle takes to run (which
+--- includes the mainThread thruster writes -- the suspected bottleneck), the achieved control period,
+--- and the writes per cycle. Read on the ground, this tells us whether we are throughput-bound before
+--- we spend fuel tuning gains.
+T.it("publishes loop-timing diagnostics after each cycle", function()
+  local app, path = appRig(fullCraft())
+  for _ = 1, 5 do app:cycle(0.05) end
+  local loop = app.state:get("loop")
+  T.notNil(loop, "loop stats are published")
+  T.eq(type(loop.execMs), "number", "exec time (ms) is a number")
+  T.eq(type(loop.execMaxMs), "number", "windowed max exec is a number")
+  T.eq(type(loop.periodMs), "number", "achieved period (ms) is a number")
+  T.eq(type(loop.writes), "number", "writes-per-cycle is a number")
+  T.isTrue(loop.targetMs > 0, "the target period is reported for comparison")
+  fs.delete(path)
+end)
+
 --- A silent-but-engaged craft must be explainable: the loop publishes WHY the mixer is holding, so
 --- the cockpit can tell "ready, give it a climb" from "the engine is off" from "actually broken".
 T.it("publishes WHY the mixer is holding, so an engaged-but-silent craft is explained", function()
