@@ -2609,6 +2609,28 @@ T.it("recovers each nozzle's craft-frame mapping from the velocity response", fu
   T.isFalse(fr.invertVectorY, "fr y not inverted")
 end)
 
+--- THE FIX for a SELF CONFIG that ran at ~1 Hz: holdFloat used to re-command every lift thruster
+--- unconditionally EVERY tick, and each setThrust/setVector is a mainThread call costing ~a server
+--- tick -- ~17 a cycle dragged the loop to 1 Hz, so the float could not hold and the probes read
+--- garbage. It is now write-on-change: a steady collective and centred nozzles re-command NOTHING.
+T.it("holdFloat is write-on-change: a steady hover re-commands no thrusters", function()
+  local r = scRig()
+  r.sc:start({ engineOn = true, fuelled = true, onGround = true, velocityVector = "vector" },
+    { now = 100000, altitude = 74.5 })
+  r.sc.run.collective = 0.6
+
+  r.sc:holdFloat()                                  -- first pass commands the lift thrusters
+  local afterFirst = r.thrusters.stats.calls
+  T.isTrue(afterFirst > 0, "the first pass does command them")
+
+  r.sc:holdFloat()                                  -- same collective, same centred nozzles
+  T.eq(r.thrusters.stats.calls, afterFirst, "an unchanged hover makes ZERO further thruster calls")
+
+  r.sc.run.collective = 0.9                          -- a real change must still be written
+  r.sc:holdFloat()
+  T.isTrue(r.thrusters.stats.calls > afterFirst, "but a changed collective is re-commanded")
+end)
+
 T.it("checkPrereqs refuses with the engine off, and names what is missing", function()
   local r = scRig()
   local check = r.sc:checkPrereqs({ engineOn = false, fuelled = true,

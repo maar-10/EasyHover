@@ -284,14 +284,44 @@ function SelfConfig:safetyBreach(ctx)
   return nil
 end
 
+--- WRITE-ON-CHANGE raw thrust. Every setThrust is a mainThread call costing ~a server tick, and the
+--- float re-commanded all eight lift thrusters EVERY tick -- ~17 writes a cycle dragged the loop to
+--- ~1 Hz (exec ~900 ms), which is why the float could not hold altitude and the probes read garbage.
+--- Skip the write when the quantised step has not moved since we last wrote it. Compared on the step
+--- the mod actually stores, so a demand that jitters within a step costs nothing.
+function SelfConfig:cmdThrust(id, value)
+  self.run.cmd = self.run.cmd or {}
+  local c = self.run.cmd[id]; if not c then c = {}; self.run.cmd[id] = c end
+  local step = Thrusters.thrustStep(value)
+  if c.step ~= step then
+    self.thrusters:setThrustRaw(id, value)
+    c.step = step
+  end
+end
+
+--- WRITE-ON-CHANGE raw nozzle. `force` re-asserts a deflection every tick: the vector redstone links
+--- zero a nozzle whenever the contraption moves (docs/NOZZLE_LUA_API.md), so a PROBED deflection must
+--- be re-sent each tick or it silently reverts to 0 and the probe measures nothing. A centred nozzle
+--- (0,0) needs no re-assert -- 0 is what the competing writer sets anyway -- so it is cached.
+function SelfConfig:cmdVector(id, nx, ny, force)
+  self.run.cmd = self.run.cmd or {}
+  local c = self.run.cmd[id]; if not c then c = {}; self.run.cmd[id] = c end
+  local qx, qy = Thrusters.quantiseVector(nx), Thrusters.quantiseVector(ny)
+  if force or c.nx ~= qx or c.ny ~= qy then
+    self.thrusters:setVectorRaw(id, nx, ny)
+    c.nx, c.ny = qx, qy
+  end
+end
+
 --- Command the float: every LIFT thruster at the current collective, nozzles centred. The probed
 --- thruster's own thrust and nozzle are overridden by the caller AFTER this, so ordering matters.
+--- Write-on-change (cmdThrust/cmdVector): a steady hover re-writes nothing, so the loop stays fast.
 function SelfConfig:holdFloat(exceptId)
   for _, entry in ipairs(self.per:thrusterList()) do
     if entry.spec.group == "lift" then
-      self.thrusters:setThrustRaw(entry.id, self.run.collective)
+      self:cmdThrust(entry.id, self.run.collective)
       if entry.id ~= exceptId then
-        self.thrusters:setVectorRaw(entry.id, 0, 0)
+        self:cmdVector(entry.id, 0, 0)
       end
     end
   end
@@ -491,8 +521,8 @@ function SelfConfig:tickSettle(ctx, now)
   -- deflection has thrust to steer.
   self:holdFloat(target.id)
   local probeThrust = (target.group == "lift") and self.run.collective or (p.probeThrust or 0.4)
-  self.thrusters:setThrustRaw(target.id, probeThrust)
-  self.thrusters:setVectorRaw(target.id, 0, 0)
+  self:cmdThrust(target.id, probeThrust)
+  self:cmdVector(target.id, 0, 0)
 
   local hoverH = p.hoverHeight or 2.0
   local tol = p.hoverTolerance or 0.5
@@ -527,7 +557,7 @@ function SelfConfig:tickProbe(ctx, now)
 
   self:holdFloat(target.id)
   local probeThrust = (target.group == "lift") and self.run.collective or (p.probeThrust or 0.4)
-  self.thrusters:setThrustRaw(target.id, probeThrust)
+  self:cmdThrust(target.id, probeThrust)
 
   -- Deflect the current nozzle axis, quantised to the grid the block stores, capped by authority.
   local spec = self.per.thrusters[target.id].spec
@@ -536,7 +566,7 @@ function SelfConfig:tickProbe(ctx, now)
   local value = Thrusters.quantiseVector(mag)
   local nx = (self.run.axisStep == 1) and value or 0
   local ny = (self.run.axisStep == 2) and value or 0
-  self.thrusters:setVectorRaw(target.id, nx, ny)
+  self:cmdVector(target.id, nx, ny, true)   -- force: a moving contraption's links zero a probed nozzle
 
   -- If the craft is on the ground during the probe, the ground arrests the very motion we are
   -- trying to measure -- so the reading understates (or misses) the response. Remember it, so the
@@ -611,7 +641,7 @@ function SelfConfig:tickCounter(ctx, now)
 
   self:holdFloat(target.id)
   local probeThrust = (target.group == "lift") and self.run.collective or (p.probeThrust or 0.4)
-  self.thrusters:setThrustRaw(target.id, probeThrust)
+  self:cmdThrust(target.id, probeThrust)
 
   local spec = self.per.thrusters[target.id].spec
   local limit = Util.clamp(spec.maxVector or 0.6, 0, 1)
@@ -619,10 +649,10 @@ function SelfConfig:tickCounter(ctx, now)
   local value = -Thrusters.quantiseVector(mag)     -- opposite of the probe
   local nx = (self.run.axisStep == 1) and value or 0
   local ny = (self.run.axisStep == 2) and value or 0
-  self.thrusters:setVectorRaw(target.id, nx, ny)
+  self:cmdVector(target.id, nx, ny, true)          -- force: re-assert against the zeroing links
 
   if (now - self.run.phaseSince) >= (p.counterMs or 1200) then
-    self.thrusters:setVectorRaw(target.id, 0, 0)
+    self:cmdVector(target.id, 0, 0)
     self:advance(now)
   end
 end
@@ -700,11 +730,11 @@ function SelfConfig:tickLand(ctx, now)
   self.run.collective = math.max(0, self.run.collective - (p.landRamp or 0.15) * math.max(dt, 0))
 
   for _, entry in ipairs(self.per:thrusterList()) do
-    self.thrusters:setVectorRaw(entry.id, 0, 0)
+    self:cmdVector(entry.id, 0, 0)
     if entry.spec.group == "lift" then
-      self.thrusters:setThrustRaw(entry.id, self.run.collective)
+      self:cmdThrust(entry.id, self.run.collective)
     else
-      self.thrusters:setThrustRaw(entry.id, 0)
+      self:cmdThrust(entry.id, 0)
     end
   end
 
