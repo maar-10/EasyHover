@@ -406,6 +406,16 @@ function Config.defaults()
       ambiguityRatio = 0.5,     -- |secondary axis| / |dominant| above this flags a diagonal mount
       maxTiltDeg = 20.0,        -- ABORT if pitch or roll exceeds this
       maxSpeed = 3.0,           -- ABORT if craft-frame speed exceeds this (a rope let go)
+      -- CoM LEVELING. The float holds LEVEL with differential lift THRUST -- more thrust on the heavy
+      -- side -- driven by the gimbal. Geometry only (front/rear/left/right from each thruster's pos),
+      -- so it needs NO nozzle axis map, which is exactly what SELF CONFIG is still discovering. A
+      -- forward centre of mass otherwise noses the craft down under equal lift and dirties every
+      -- probe. Signs match the mixer's lift differential. The converged trim IS the CoM offset.
+      levelGain = 0.02,         -- integral: trim per degree of tilt per second (learns the CoM offset)
+      levelP = 0.03,            -- proportional damping on the live tilt, on top of the learned trim
+      levelAuthority = 0.3,     -- lift fraction one unit of pitch/roll trim commands
+      levelMaxTrim = 1.0,       -- clamp on the learned trim
+      levelMaxDelta = 0.4,      -- clamp on the per-thruster lift bias (never starve a corner to zero)
     },
 
     envelope = {

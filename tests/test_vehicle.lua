@@ -2631,6 +2631,58 @@ T.it("holdFloat is write-on-change: a steady hover re-commands no thrusters", fu
   T.isTrue(r.thrusters.stats.calls > afterFirst, "but a changed collective is re-commanded")
 end)
 
+--- CoM LEVELING signs -- the load-bearing check. A wrong sign would push the craft further over, not
+--- level it. A forward CoM noses the craft DOWN (gimbal pitch < 0); the fix is MORE lift at the front
+--- and LESS at the rear, symmetric so total lift is unchanged. Geometry only: no nozzle map needed.
+local function startedSc()
+  local r = scRig()
+  r.sc:start({ engineOn = true, fuelled = true, onGround = true, velocityVector = "vector" },
+    { now = 100000, altitude = 74.5 })
+  return r
+end
+
+T.it("CoM leveling: a nose-down craft lifts the FRONT harder, symmetrically", function()
+  local r = startedSc()
+  local now = 100000
+  r.sc.run.lastLevelAt = now
+  for _ = 1, 20 do now = now + 100; r.sc:updateLevel({ attitude = { pitch = -8, roll = 0 } }, now) end
+  T.isTrue(r.sc.run.pitchTrim > 0, "nose-down (pitch<0) learns a nose-up trim, got " .. r.sc.run.pitchTrim)
+  local front = r.sc:levelDelta({ pos = { x = 0, z = 2 } })
+  local rear = r.sc:levelDelta({ pos = { x = 0, z = -2 } })
+  T.isTrue(front > 0, "the FRONT thruster lifts harder to raise the nose, got " .. front)
+  T.isTrue(rear < 0, "the REAR sheds lift, got " .. rear)
+  T.near(front, -rear, 1e-9, "and symmetrically, so total lift is unchanged")
+end)
+
+T.it("CoM leveling: a right-heavy roll lifts the RIGHT harder", function()
+  local r = startedSc()
+  local now = 100000
+  r.sc.run.lastLevelAt = now
+  for _ = 1, 20 do now = now + 100; r.sc:updateLevel({ attitude = { pitch = 0, roll = 8 } }, now) end
+  T.isTrue(r.sc.run.rollTrim < 0, "right roll (roll>0) learns a left trim, got " .. r.sc.run.rollTrim)
+  local right = r.sc:levelDelta({ pos = { x = 2, z = 0 } })
+  local left = r.sc:levelDelta({ pos = { x = -2, z = 0 } })
+  T.isTrue(right > 0, "the RIGHT lifts harder to raise the low side, got " .. right)
+  T.isTrue(left < 0, "the LEFT sheds lift, got " .. left)
+end)
+
+--- End to end against a simple pitch plant: a constant nose-down CoM torque, opposed by the leveling
+--- command. The loop must pull the tilt back toward level and learn a nose-up trim to hold it there.
+T.it("CoM leveling drives a forward-CoM craft back toward level", function()
+  local r = startedSc()
+  local now = 100000
+  r.sc.run.lastLevelAt = now
+  local pitch = -12                                   -- nosed 12 deg down to begin with
+  for _ = 1, 400 do
+    now = now + 100
+    r.sc:updateLevel({ attitude = { pitch = pitch, roll = 0 } }, now)
+    -- first-order pitch plant: the leveling command raises the nose, the forward CoM drops it
+    pitch = pitch + ((r.sc.run.applyPitch or 0) * 8.0 - 0.15)
+  end
+  T.isTrue(math.abs(pitch) < 3.0, "the nose is pulled back toward level, got " .. pitch)
+  T.isTrue(r.sc.run.pitchTrim > 0, "and a persistent nose-up CoM trim was learned")
+end)
+
 T.it("checkPrereqs refuses with the engine off, and names what is missing", function()
   local r = scRig()
   local check = r.sc:checkPrereqs({ engineOn = false, fuelled = true,

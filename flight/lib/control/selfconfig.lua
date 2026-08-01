@@ -313,13 +313,52 @@ function SelfConfig:cmdVector(id, nx, ny, force)
   end
 end
 
---- Command the float: every LIFT thruster at the current collective, nozzles centred. The probed
---- thruster's own thrust and nozzle are overridden by the caller AFTER this, so ordering matters.
---- Write-on-change (cmdThrust/cmdVector): a steady hover re-writes nothing, so the loop stays fast.
+--- CoM LEVELING. Drive the gimbal's pitch and roll to zero with differential LIFT THRUST (not nozzle
+--- vectoring), so the float hovers LEVEL and the probes read a clean response instead of one
+--- contaminated by a forward-centre-of-mass nose-down. Differential thrust is geometry-only -- which
+--- corner is front/rear/left/right is known from each thruster's pos -- so unlike toe trim it needs
+--- NO nozzle axis map, and can therefore run while SELF CONFIG is still discovering them.
+---
+--- The slow integral (pitchTrim/rollTrim) converges to the bias that holds level: that IS the craft's
+--- CoM offset, kept for the FCS to feed forward later. A proportional term damps the live tilt on top.
+function SelfConfig:updateLevel(ctx, now)
+  local att = ctx and ctx.attitude
+  local p = self:params()
+  local dt = math.max((now - (self.run.lastLevelAt or now)) / 1000, 0)
+  self.run.lastLevelAt = now
+  if type(att) ~= "table" then return end          -- no gimbal: fall back to equal lift
+  local pitch = tonumber(att.pitch) or 0            -- + = nose up
+  local roll = tonumber(att.roll) or 0              -- + = roll right
+  local maxT = p.levelMaxTrim or 1.0
+  -- Integrate toward the bias that zeros the tilt. Nose-DOWN (pitch<0) needs a nose-UP bias
+  -- (pitchTrim up); a RIGHT roll (roll>0) needs a left bias (rollTrim down).
+  self.run.pitchTrim = Util.clamp((self.run.pitchTrim or 0) - (p.levelGain or 0.02) * pitch * dt, -maxT, maxT)
+  self.run.rollTrim = Util.clamp((self.run.rollTrim or 0) - (p.levelGain or 0.02) * roll * dt, -maxT, maxT)
+  -- What we actually apply: the learned trim plus proportional damping on the current tilt.
+  local kp = p.levelP or 0.03
+  self.run.applyPitch = Util.clamp((self.run.pitchTrim or 0) - kp * pitch, -maxT, maxT)
+  self.run.applyRoll = Util.clamp((self.run.rollTrim or 0) - kp * roll, -maxT, maxT)
+end
+
+--- The per-thruster lift bias that levels the craft, from its corner geometry. Signs match the mixer
+--- (docs/CONTROL_LAWS.md): front (pos.z>0) takes +pitch, right (pos.x>0) takes -roll.
+function SelfConfig:levelDelta(spec)
+  local p = self:params()
+  local pos = spec.pos or {}
+  local sz = ((pos.z or 0) > 0) and 1 or (((pos.z or 0) < 0) and -1 or 0)
+  local sx = ((pos.x or 0) > 0) and 1 or (((pos.x or 0) < 0) and -1 or 0)
+  local d = ((self.run.applyPitch or 0) * sz - (self.run.applyRoll or 0) * sx) * (p.levelAuthority or 0.3)
+  local cap = p.levelMaxDelta or 0.4
+  return Util.clamp(d, -cap, cap)
+end
+
+--- Command the float: every LIFT thruster at the current collective, biased to hold level, nozzles
+--- centred. The probed thruster's own thrust and nozzle are overridden by the caller AFTER this, so
+--- ordering matters. Write-on-change (cmdThrust/cmdVector): a steady, level hover re-writes nothing.
 function SelfConfig:holdFloat(exceptId)
   for _, entry in ipairs(self.per:thrusterList()) do
     if entry.spec.group == "lift" then
-      self:cmdThrust(entry.id, self.run.collective)
+      self:cmdThrust(entry.id, self.run.collective + self:levelDelta(entry.spec))
       if entry.id ~= exceptId then
         self:cmdVector(entry.id, 0, 0)
       end
@@ -350,6 +389,7 @@ function SelfConfig:tick(ctx)
   end
 
   self:heartbeat(now)
+  self:updateLevel(ctx, now)     -- keep the craft level (differential lift) so probes read clean
 
   local phase = self.run.phase
   if phase == "float" then
