@@ -172,9 +172,16 @@ end
 local token = nil
 
 local function fetchOnce(url)
-  local headers = nil
-  if token then headers = { Authorization = "token " .. token } end
-  local ok, handle, err = pcall(http.get, url, headers)
+  -- CACHE-BUST. raw.githubusercontent.com is served through a CDN (Fastly) that can keep serving a
+  -- file for minutes after a push. Left alone, a just-pushed manifest/file is invisible until the
+  -- edge TTL expires -- exactly the "Already current" that hid a real update. A unique query string
+  -- is a fresh cache key, and no-cache headers ask the edge to revalidate; together the update lands
+  -- immediately. GitHub ignores the extra query param and returns the same file.
+  local sep = url:find("?", 1, true) and "&" or "?"
+  local bustUrl = url .. sep .. "cb=" .. tostring((os.epoch and os.epoch("utc")) or os.time())
+  local headers = { ["Cache-Control"] = "no-cache", ["Pragma"] = "no-cache" }
+  if token then headers.Authorization = "token " .. token end
+  local ok, handle, err = pcall(http.get, bustUrl, headers)
   if not ok then return nil, tostring(handle) end
   if not handle then return nil, tostring(err or "no response") end
   local body = handle.readAll()
