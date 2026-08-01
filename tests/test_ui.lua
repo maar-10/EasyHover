@@ -118,6 +118,7 @@ local function sent()
       out[#out + 1] = { cmd = "setSlot", kind = kind, key = key, peripheral = pe }
     end,
     selfTest = function(action) out[#out + 1] = { cmd = "selfTest", action = action } end,
+    comLevel = function(action) out[#out + 1] = { cmd = "comLevel", action = action } end,
     dayNight = function() out[#out + 1] = { cmd = "dayNight" } end,
     setHeadingSource = function(s) out[#out + 1] = { cmd = "setHeadingSource", source = s } end,
     setNavTable = function(p) out[#out + 1] = { cmd = "setNavTable", peripheral = p } end,
@@ -1342,7 +1343,7 @@ T.it("the BIT/CONF menu entries stay readable and on-screen at every width", fun
     local panel = navRig(width, size[2])
     panel.update(navModel())
     local labels = { ["FCS TEST"] = false, ["SELF TEST"] = false,
-      ["AXIS MAP"] = false }
+      ["AXIS MAP"] = false, ["CoM LEVEL"] = false }
     for _, button in ipairs(panel.buttons or {}) do
       local text = button:getText()
       T.notNil(labels[text], ("%dx%d: %q is not a full label"):format(width, size[2], text))
@@ -1374,6 +1375,65 @@ T.it("BIT/CONF opens a menu, and each entry replaces the nav view", function()
   panel.show(panel.pages.axisMap)
   T.isTrue(panel.pages.axisMap:getVisible(), "AXIS MAP too")
   T.isFalse(panel.pages.fcs:getVisible(), "one at a time")
+
+  panel.show(panel.pages.comLevel)
+  T.isTrue(panel.pages.comLevel:getVisible(), "CoM LEVEL too")
+  T.isFalse(panel.pages.axisMap:getVisible(), "still one at a time")
+end)
+
+-- ---------------------------------------------------- nav: CoM leveling
+
+T.suite("CoM leveling screen")
+
+local function comModel(comLevel)
+  local m = navModel()
+  m.telemetry.comLevel = comLevel
+  return m
+end
+
+T.it("shows the craft's own reported state, never what a button merely requested", function()
+  local panel = navRig()
+  panel.update(comModel({ state = "settling", detail = "settling 1.2 / 4.0 s",
+    comTrim = { pitch = 0, roll = 0 } }))
+  T.isTrue(panel.elements.comStatus:getText():find("SETTLING") ~= nil,
+    "the state line reads what the craft reports: " .. panel.elements.comStatus:getText())
+  T.isTrue(panel.elements.comDetail:getText():find("4.0") ~= nil,
+    "and the craft's own progress hint: " .. panel.elements.comDetail:getText())
+end)
+
+T.it("ACCEPT lights only once the craft has a proposal, and shows what it is", function()
+  local panel = navRig()
+
+  panel.update(comModel({ state = "settling", comTrim = { pitch = 0, roll = 0 } }))
+  T.eq(panel.elements.comAccept:getBackground(), Theme.buttonBg, "nothing to accept while settling")
+  T.eq(panel.elements.comProposal:getText(), "", "and no proposal shown")
+
+  panel.update(comModel({ state = "proposed", proposal = { pitch = 0.12, roll = -0.05 },
+    comTrim = { pitch = 0, roll = 0 } }))
+  T.eq(panel.elements.comAccept:getBackground(), Theme.ok, "ACCEPT lights when a proposal exists")
+  T.isTrue(panel.elements.comProposal:getText():find("0.12") ~= nil,
+    "and the proposed pitch is shown: " .. panel.elements.comProposal:getText())
+end)
+
+T.it("shows the trim the craft is currently carrying", function()
+  local panel = navRig()
+  panel.update(comModel({ state = "idle", comTrim = { pitch = 0.30, roll = -0.20 } }))
+  local text = panel.elements.comTrim:getText()
+  T.isTrue(text:find("0.30") ~= nil and text:find("0.20") ~= nil,
+    "the stored feedforward is on show: " .. text)
+end)
+
+T.it("the three buttons send start, accept and discard", function()
+  local panel, commands = navRig()
+  panel.update(comModel({ state = "proposed", proposal = { pitch = 0.1, roll = 0 },
+    comTrim = { pitch = 0, roll = 0 } }))
+  click(panel.elements.comStart)
+  click(panel.elements.comAccept)
+  click(panel.elements.comDiscard)
+  T.eq(#commands, 3, "three commands")
+  T.eq(commands[1].cmd, "comLevel"); T.eq(commands[1].action, "start", "START -> start")
+  T.eq(commands[2].action, "accept", "ACCEPT -> accept")
+  T.eq(commands[3].action, "discard", "DISCARD -> discard")
 end)
 
 -- ---------------------------------------------------- nav: nozzle axis map

@@ -271,6 +271,24 @@ function Config.defaults()
         vectorTrimAuthority = 0.15,
       },
       translation = { p = 0.30, i = 0.0, d = 0.05, iClamp = 0.3, dAlpha = 0.30 },
+
+      -- CoM feedforward: a steady pitch/roll torque bias that holds the craft LEVEL against an
+      -- off-centre centre of mass, so the attitude PID integral does not have to carry it. -1..1
+      -- in the same units as the attitude loop's torque output, and applied in both feel modes
+      -- because a CoM offset is a physical bias, not a mode. Captured ONCE per loading by CoM
+      -- LEVELING; a fresh craft (comTrim 0) simply flies on the integral as before.
+      comTrim = { pitch = 0.0, roll = 0.0 },
+      -- CoM LEVELING watches the running flight loop until the craft is hovering dead level and
+      -- still, then folds the steady torque it is holding into comTrim above. The tolerances are
+      -- what "settled" means; the craft must stay inside all of them, airborne, for dwellSec before
+      -- the reading is trusted. maxTrim caps the captured bias so it can never alone saturate an axis.
+      comLevel = {
+        angleTolDeg = 1.5,   -- |pitch| and |roll| this close to level
+        rateTolDps = 2.0,    -- turning slower than this on both axes
+        vsTolMps = 0.3,      -- holding altitude this tightly
+        dwellSec = 4.0,      -- for this long, continuously
+        maxTrim = 0.5,       -- clamp on the captured feedforward
+      },
       oscillation = {
         windowMs = 2000,
         signFlipsToTrip = 8,   -- flips per window that count as oscillation
@@ -638,6 +656,21 @@ function Config.validate(cfg)
         break
       end
     end
+  end
+
+  -- CoM feedforward + leveling
+  local ct = cfg.control.comTrim
+  if type(ct) == "table" then
+    num(ct.pitch, "control.comTrim.pitch", -1, 1)
+    num(ct.roll, "control.comTrim.roll", -1, 1)
+  end
+  local cl = cfg.control.comLevel
+  if type(cl) == "table" then
+    num(cl.angleTolDeg, "control.comLevel.angleTolDeg", 0)
+    num(cl.rateTolDps, "control.comLevel.rateTolDps", 0)
+    num(cl.vsTolMps, "control.comLevel.vsTolMps", 0)
+    num(cl.dwellSec, "control.comLevel.dwellSec", 0)
+    num(cl.maxTrim, "control.comLevel.maxTrim", 0, 1)
   end
 
   -- engine

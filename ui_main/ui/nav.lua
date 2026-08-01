@@ -207,8 +207,8 @@ function Nav.build(frame, opts)
     return p
   end
 
-  local navPage, bitPage, fcsPage, selfPage, axisPage =
-    page(), page(), page(), page(), page()
+  local navPage, bitPage, fcsPage, selfPage, axisPage, comPage =
+    page(), page(), page(), page(), page(), page()
   navPage:setVisible(true)
 
   local function show(target)
@@ -271,6 +271,7 @@ function Nav.build(frame, opts)
     { "FCS TEST", function() show(fcsPage) end },
     { "SELF TEST", function() show(selfPage) end },
     { "AXIS MAP", function() show(axisPage) end },
+    { "CoM LEVEL", function() show(comPage) end },
   }
   local testButtons = {}
   for i, entry in ipairs(BIT_ENTRIES) do
@@ -369,6 +370,70 @@ function Nav.build(frame, opts)
       background = Theme.bg, foreground = Theme.dim })
     stampLabel:setText(BUILD:sub(1, stampWidth))
     stampLabel.eh_width = stampWidth
+  end
+
+  -- --------------------------------------------------------------- CoM level
+  --
+  -- Watch the craft trim ITSELF. Hover level and hands-off; once it holds still long enough the
+  -- craft proposes the steady lean it has been correcting, and ACCEPT stores that as the trim for
+  -- this loading. Passive on the craft side -- this screen only starts the watch and confirms it.
+  Theme.line(comPage, 1, width, Theme.centre("CoM LEVEL", width), Theme.accent)
+  -- Mandatory: title, status, trim, the START/ACCEPT row, BACK. Everything else is spent from spare.
+  local comSpare = height - (1 + 1 + 1 + 1 + 1)
+  local ck = 2
+  local function takeCom()
+    local row = ck
+    ck = ck + 1
+    return row
+  end
+  local comWarn = optionalLine(comPage, comSpare >= 1 and takeCom() or nil,
+    "HOVER LEVEL, HANDS OFF", Theme.caution)
+  local comStatus = Theme.line(comPage, takeCom(), width, "", Theme.fg)
+  local comDetail = optionalLine(comPage, comSpare >= 2 and takeCom() or nil, "", Theme.dim)
+  if comSpare >= 4 then Theme.rule(comPage, takeCom(), width) end
+  local comTrimLine = Theme.line(comPage, takeCom(), width, "", Theme.dim)
+  local comProposal = optionalLine(comPage, comSpare >= 3 and takeCom() or nil, "", Theme.accent)
+
+  -- START and ACCEPT share the second-last row; DISCARD sits beside BACK on the last.
+  local comAcceptX = math.max(1, width - 7)
+  local comStart = Theme.button(comPage, 1, height - 1,
+    math.max(4, math.min(9, comAcceptX - 2)), "START", function() actions.comLevel("start") end)
+  local comAccept = Theme.button(comPage, comAcceptX, height - 1, 8, "ACCEPT",
+    function() actions.comLevel("accept") end)
+  Theme.button(comPage, 1, height, math.min(6, width), "BACK", function() show(bitPage) end)
+  local comDiscard = Theme.button(comPage, math.max(8, width - 7), height, 8, "DISCARD",
+    function() actions.comLevel("discard") end)
+
+  --- Reflect the craft's own report -- never what the button merely requested (the no-optimism
+  --- rule). ACCEPT lights only when there is actually a proposal to accept.
+  local function refreshCom()
+    local c = live.comLevel or {}
+    local state = tostring(c.state or "idle")
+    local ct = c.comTrim or { pitch = 0, roll = 0 }
+    local label = ({ idle = "ready", settling = "SETTLING", proposed = "PROPOSAL READY" })[state]
+    comStatus:setText(Theme.fit(live.stale and "" or (label or state), width))
+    comStatus:setForeground(state == "proposed" and Theme.ok
+      or (state == "settling" and Theme.accent or Theme.dim))
+    comDetail:setText(Theme.fit((not live.stale) and tostring(c.detail or "") or "", width))
+    comTrimLine:setText(Theme.fit(("trim P%+.2f R%+.2f"):format(ct.pitch or 0, ct.roll or 0), width))
+    if state == "proposed" and c.proposal then
+      comProposal:setText(Theme.fit(("-> P%+.2f R%+.2f"):format(
+        c.proposal.pitch or 0, c.proposal.roll or 0), width))
+    else
+      comProposal:setText("")
+    end
+    local canAccept = (state == "proposed")
+    comAccept:setBackground(canAccept and Theme.ok or Theme.buttonBg)
+    comAccept:setForeground(canAccept and colours.black or Theme.buttonFg)
+    comStart:setText(state == "settling" and "WATCHING" or "START")
+    -- A refusal is the craft's to word (airborne/engine state); show it over the status line.
+    local ack = opts.lastAck and opts.lastAck()
+    if ack and ack.cmd == "comLevel" and ack.ack == false then
+      local detail = ack.detail or {}
+      local long = tostring(detail.error or "REFUSED")
+      comStatus:setText(Theme.fit(#long <= width and long or tostring(detail.errorShort or long), width))
+      comStatus:setForeground(Theme.warning)
+    end
   end
 
   -- --------------------------------------------------------------- axis map
@@ -680,6 +745,7 @@ function Nav.build(frame, opts)
     live.selfTest = t.selfTest or {}
     live.thrusterAxes = t.thrusterAxes or {}
     live.axisMap = t.axisMap or {}
+    live.comLevel = t.comLevel or {}
 
     -- Only refresh a subpage's elements when it is the page IN VIEW. The axis map (24 buttons) and the
     -- nav view were all being rebuilt every frame even while hidden, which is redraw cost spent on
@@ -688,6 +754,7 @@ function Nav.build(frame, opts)
     -- A page refreshes the frame it is opened on, so switching has no lag.
     local showAll = opts.renderAll
     if showAll or axisPage:getVisible() then refreshAxisRows() end
+    if showAll or comPage:getVisible() then refreshCom() end
     if showAll or navPage:getVisible() then refreshNav(model) end
 
     -- ---- FCS
@@ -871,7 +938,7 @@ function Nav.build(frame, opts)
     bitButton = bitButton,
     stacked = stacked,
     pages = { nav = navPage, bit = bitPage, fcs = fcsPage, selfTest = selfPage,
-      axisMap = axisPage },
+      axisMap = axisPage, comLevel = comPage },
     axisRows = axisRows,
     bars = bars,
     elements = {
@@ -882,6 +949,9 @@ function Nav.build(frame, opts)
       axisHint = axisHint, axisFooter = axisFooter, axisHolding = axisHolding,
       axisRelease = axisRelease, axisPrev = axisPrev, axisNext = axisNext,
       axisDirButtons = dirButtons,
+      comStatus = comStatus, comDetail = comDetail, comTrim = comTrimLine,
+      comProposal = comProposal, comStart = comStart, comAccept = comAccept,
+      comDiscard = comDiscard, comWarn = comWarn,
       headingTape = headingTapeLine, headingDetail = headingDetail,
       navPos = navPosLine, navInfo = navInfoLine, times = timesLine,
       dayNight = dayNightButton,

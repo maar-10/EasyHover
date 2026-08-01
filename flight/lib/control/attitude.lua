@@ -54,7 +54,25 @@ function Attitude.new(cfg, log, oscillation)
   }
   self.last = {}
   self.rate = { pitch = 0, roll = 0, yaw = 0 }
+
+  -- CoM feedforward: a steady pitch/roll torque bias that holds the craft level against an
+  -- off-centre load, captured by CoM leveling. See loadComTrim / steadyTorque / commitComTrim.
+  self.comTrim = { pitch = 0, roll = 0 }
+  self:loadComTrim(cfg)
   return self
+end
+
+--- Cap on the captured bias, so a feedforward can never on its own drive an axis to saturation.
+function Attitude:comTrimLimit()
+  return (self.cfg.control.comLevel and self.cfg.control.comLevel.maxTrim) or 0.5
+end
+
+--- (Re)load the CoM feedforward from config -- at construction, and whenever the config changes.
+function Attitude:loadComTrim(cfg)
+  local ct = (cfg.control and cfg.control.comTrim) or {}
+  local lim = self:comTrimLimit()
+  self.comTrim.pitch = Util.clamp(ct.pitch or 0, -lim, lim)
+  self.comTrim.roll = Util.clamp(ct.roll or 0, -lim, lim)
 end
 
 function Attitude:setMode(mode)
@@ -127,6 +145,14 @@ function Attitude:update(demand, measured, dt)
     out.rollTorque = axis("roll", demand.roll, measured.roll, "roll")
   end
 
+  -- CoM feedforward. A steady bias that holds the craft level against an off-centre load, so the
+  -- PID integral does not have to. Added to the loop's own output and clamped to the same rails;
+  -- applied in BOTH feel modes because the offset is physical, not a mode. dbg carries it so a UI
+  -- can show the craft is trimmed rather than fighting.
+  out.pitchTorque = Util.clamp(out.pitchTorque + self.comTrim.pitch, -1, 1)
+  out.rollTorque = Util.clamp(out.rollTorque + self.comTrim.roll, -1, 1)
+  dbg.comTrim = { pitch = self.comTrim.pitch, roll = self.comTrim.roll }
+
   -- Yaw is always a rate demand. Closed loop only if the gimbal gives us yaw.
   if type(measured.yaw) == "number" then
     out.yawTorque = axis("yaw", demand.yawRate, self.rate.yaw, "yawRate")
@@ -140,6 +166,35 @@ function Attitude:update(demand, measured, dt)
   return out, dbg
 end
 
+--- The steady pitch/roll torque the craft is CURRENTLY holding to stay level: the feedforward
+--- already applied plus whatever the angle-mode integral has wound up to carry on top of it. At a
+--- settled level hover the P and D terms are ~0, so this is the whole CoM load -- which is exactly
+--- the value CoM leveling proposes as the new feedforward. Read-only; nothing is committed here.
+function Attitude:steadyTorque()
+  local lim = self:comTrimLimit()
+  return {
+    pitch = Util.clamp(self.comTrim.pitch + self.pidAngle.pitch:getIntegral(), -lim, lim),
+    roll = Util.clamp(self.comTrim.roll + self.pidAngle.roll:getIntegral(), -lim, lim),
+  }
+end
+
+--- Adopt a captured feedforward: set it, and ZERO the angle-mode integrals that were carrying the
+--- load, so the hand-off is bump-less -- the total torque is unchanged, it has just moved from the
+--- integral to the feedforward. Returns the applied (clamped) value.
+function Attitude:commitComTrim(pitch, roll)
+  local lim = self:comTrimLimit()
+  self.comTrim.pitch = Util.clamp(pitch or 0, -lim, lim)
+  self.comTrim.roll = Util.clamp(roll or 0, -lim, lim)
+  self.pidAngle.pitch:clearIntegral()
+  self.pidAngle.roll:clearIntegral()
+  self.log:info("CoM trim committed: pitch %.3f roll %.3f", self.comTrim.pitch, self.comTrim.roll)
+  return { pitch = self.comTrim.pitch, roll = self.comTrim.roll }
+end
+
+function Attitude:getComTrim()
+  return { pitch = self.comTrim.pitch, roll = self.comTrim.roll }
+end
+
 --- Live retune from the config UI without losing integrator state.
 function Attitude:applyGains(cfg)
   self.cfg = cfg
@@ -147,6 +202,8 @@ function Attitude:applyGains(cfg)
     self.pidAngle[axis]:setGains(cfg.control.attitude[axis])
     self.pidRate[axis]:setGains(cfg.control.attitudeRate[axis])
   end
+  -- comTrim can also change from the config UI (or a fresh config after accept); keep it in step.
+  self:loadComTrim(cfg)
 end
 
 return Attitude

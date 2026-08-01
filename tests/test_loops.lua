@@ -482,6 +482,138 @@ T.it("the detector re-applies its gain scale every cycle, across mode switches",
     "gain scale re-applied from the detector")
 end)
 
+-- --------------------------------------------------- CoM feedforward + leveling
+
+T.suite("CoM feedforward")
+
+T.it("a stored comTrim biases the attitude output, in both feel modes", function()
+  local cfg = simConfig({ control = { comTrim = { pitch = 0.2, roll = -0.1 } } })
+  local m = build(cfg)
+  -- Level craft, level demand: the PID contributes ~0, so the output IS the feedforward.
+  local out = m.attitude:update({ pitch = 0, roll = 0 }, { pitch = 0, roll = 0 }, 0.05)
+  T.near(out.pitchTorque, 0.2, 1e-6, "pitch carries the feedforward")
+  T.near(out.rollTorque, -0.1, 1e-6, "roll too")
+  -- Rate mode: still applied, because a CoM offset is physical, not a mode.
+  m.attitude:setMode("rate")
+  local rout = m.attitude:update({ pitchRate = 0, rollRate = 0, yawRate = 0 },
+    { pitch = 0, roll = 0 }, 0.05)
+  T.near(rout.pitchTorque, 0.2, 1e-6, "feedforward applies in rate mode as well")
+end)
+
+T.it("the feedforward is clamped so it can never alone saturate an axis", function()
+  local cfg = simConfig({ control = { comTrim = { pitch = 5.0, roll = 0 },
+    comLevel = { maxTrim = 0.5 } } })
+  local m = build(cfg)
+  T.near(m.attitude:getComTrim().pitch, 0.5, 1e-9, "loaded value is clamped to maxTrim")
+end)
+
+T.it("steadyTorque reports the feedforward PLUS the integral carrying the rest", function()
+  local m = build(simConfig())
+  -- An off-centre load looks like a constant attitude error the integral winds up against.
+  for _ = 1, 60 do
+    m.attitude:update({ pitch = 0, roll = 0 }, { pitch = 3, roll = 0 }, 0.05)
+  end
+  local wound = m.attitude.pidAngle.pitch:getIntegral()
+  T.isTrue(math.abs(wound) > 1e-3, "the integral wound up against the lean")
+  local steady = m.attitude:steadyTorque()
+  T.near(steady.pitch, wound, 1e-9, "steadyTorque = comTrim(0) + integral")
+end)
+
+T.it("committing a trim is bump-less: same total torque, integral now zero", function()
+  local m = build(simConfig())
+  for _ = 1, 60 do
+    m.attitude:update({ pitch = 0, roll = 0 }, { pitch = 3, roll = 0 }, 0.05)
+  end
+  local before = m.attitude:update({ pitch = 0, roll = 0 }, { pitch = 3, roll = 0 }, 0.05)
+  local proposal = m.attitude:steadyTorque()
+  m.attitude:commitComTrim(proposal.pitch, proposal.roll)
+  T.near(m.attitude.pidAngle.pitch:getIntegral(), 0, 1e-9, "integral handed off, now zero")
+  local after = m.attitude:update({ pitch = 0, roll = 0 }, { pitch = 3, roll = 0 }, 0.05)
+  -- The total torque the mixer sees is unchanged across the hand-off (within one PID step).
+  T.near(after.pitchTorque, before.pitchTorque, 0.01, "no jump in commanded torque")
+  T.near(m.attitude:getComTrim().pitch, proposal.pitch, 1e-9, "feedforward now carries it")
+end)
+
+T.suite("CoM leveling watcher")
+
+local ComLevel = require("lib.control.comlevel")
+
+local function levelRig(overrides)
+  local cfg = simConfig(overrides)
+  local m = build(cfg)
+  local cl = ComLevel.new(cfg, m.attitude, quietLog())
+  return cl, m, cfg
+end
+
+--- A craft sitting dead level and still, hands off, airborne, in angle mode.
+local function settledSample()
+  return { pitch = 0, roll = 0, pitchRate = 0, rollRate = 0, verticalSpeed = 0,
+    angleMode = true, levelDemand = true, airborne = true }
+end
+
+T.it("does nothing until it is started", function()
+  local cl = levelRig()
+  cl:observe(settledSample(), 10)   -- a huge dt; must not settle while idle
+  T.eq(cl.state, "idle", "idle observes nothing")
+  T.isFalse(cl:isRunning())
+end)
+
+T.it("will not settle while the craft is not actually a level, still, hands-off hover", function()
+  for _, bad in ipairs({
+    { field = "airborne", value = false, why = "on the ground" },
+    { field = "angleMode", value = false, why = "in rate mode" },
+    { field = "levelDemand", value = false, why = "the pilot is commanding a tilt" },
+    { field = "pitch", value = 10, why = "pitched over" },
+    { field = "rollRate", value = 20, why = "still rolling" },
+    { field = "verticalSpeed", value = 3, why = "climbing" },
+  }) do
+    local cl = levelRig()
+    cl:start()
+    local s = settledSample()
+    s[bad.field] = bad.value
+    for _ = 1, 200 do cl:observe(s, 0.1) end   -- 20 s of trying
+    T.eq(cl.state, "settling", "stays settling when " .. bad.why)
+    T.eq(cl.dwell, 0, "and the dwell never accumulates (" .. bad.why .. ")")
+  end
+end)
+
+T.it("settles after the dwell and proposes the steady torque", function()
+  local cl, m = levelRig({ control = { comLevel = { dwellSec = 4.0 } } })
+  -- Give the attitude loop a real lean to have wound an integral against, so the proposal is
+  -- a number worth capturing rather than zero.
+  for _ = 1, 60 do m.attitude:update({ pitch = 0, roll = 0 }, { pitch = 3, roll = 0 }, 0.05) end
+  local expect = m.attitude:steadyTorque()
+  cl:start()
+  for _ = 1, 39 do cl:observe(settledSample(), 0.1) end   -- 3.9 s: not yet
+  T.eq(cl.state, "settling", "not settled a hair before the dwell")
+  cl:observe(settledSample(), 0.1)                          -- crosses 4.0 s
+  T.eq(cl.state, "proposed", "settled once the dwell elapses")
+  T.near(cl.proposal.pitch, expect.pitch, 1e-6, "proposes the steady pitch torque")
+  T.isTrue(cl:hasProposal())
+end)
+
+T.it("a wobble mid-dwell resets the timer -- it must be CONTINUOUSLY settled", function()
+  local cl = levelRig({ control = { comLevel = { dwellSec = 2.0 } } })
+  cl:start()
+  for _ = 1, 15 do cl:observe(settledSample(), 0.1) end   -- 1.5 s in
+  local wobble = settledSample(); wobble.pitch = 9
+  cl:observe(wobble, 0.1)                                  -- knocked out of level
+  T.eq(cl.dwell, 0, "the wobble reset the dwell")
+  for _ = 1, 15 do cl:observe(settledSample(), 0.1) end   -- only 1.5 s again
+  T.eq(cl.state, "settling", "so it has NOT settled yet")
+end)
+
+T.it("taking the proposal returns it and resets to idle", function()
+  local cl, m = levelRig({ control = { comLevel = { dwellSec = 0.1 } } })
+  cl:start()
+  cl:observe(settledSample(), 0.2)
+  T.eq(cl.state, "proposed")
+  local p = cl:takeProposal()
+  T.notNil(p, "the proposal comes back")
+  T.eq(cl.state, "idle", "and the watcher resets")
+  T.isNil(cl.proposal, "nothing left holding")
+end)
+
 -- ------------------------------------------- oscillation, end to end
 
 T.suite("oscillation end to end")

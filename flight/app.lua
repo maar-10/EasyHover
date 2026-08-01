@@ -27,6 +27,7 @@ local Assist = require("lib.control.assist")
 local Brake = require("lib.control.brake")
 local SelfTest = require("lib.control.selftest")
 local AxisMap = require("lib.control.axismap")
+local ComLevel = require("lib.control.comlevel")
 local Modes = require("lib.modes")
 local Pilot = require("lib.input.pilot")
 local Telemetry = require("lib.telemetry")
@@ -76,6 +77,9 @@ function App.new(opts)
   self.telemetry = Telemetry.new(cfg, self.log, self.state)
   self.selfTest = SelfTest.new(self.thrusters, self.per, cfg, self.log, self.state)
   self.axisMap = AxisMap.new(self.thrusters, self.per, cfg, self.log, self.state)
+  -- A passive watcher, not a control owner: it rides beside the flight loop and captures the
+  -- steady trim once the craft is hovering level. Never commands a thruster.
+  self.comLevel = ComLevel.new(cfg, self.attitude, self.log)
   -- A remap changes the mixer's matrix, so it must be rebuilt and saved the moment it happens.
   self.axisMap.onAssigned = function()
     self.thrusters:invalidate()
@@ -368,6 +372,13 @@ function App:cycleBody(dt)
   end
   self._lastOwner = owner
 
+  -- CoM leveling only watches while the mixer is genuinely flying. Any preflight owner (axis map,
+  -- self test, identify) or a disarmed craft means there is no level hover to read, so a run in
+  -- progress is cancelled rather than left to "settle" on a craft that is not actually hovering.
+  if owner ~= "mixer" and self.comLevel:isActive() then
+    self.comLevel:cancel("flight control taken over")
+  end
+
   -- Publish the arbitration so the cockpit can explain a SILENT-BUT-ENGAGED craft. Flipping ENGAGE
   -- is not the same as firing: the mixer still holds until the engine is on AND the craft is either
   -- airborne or being commanded to climb. Without this the pilot sees "ENGAGED" and a dead throttle
@@ -432,6 +443,9 @@ function App:cycleBody(dt)
 
   -- DAMPED / FAILSAFE: stop steering, keep flying. Vectors to neutral, thrust untouched.
   if state == "DAMPED" or state == "FAILSAFE" then
+    -- Not a level hover by definition -- oscillating or flying on degraded sensors -- so any CoM
+    -- leveling run is void.
+    if self.comLevel:isActive() then self.comLevel:cancel("hover degraded") end
     self.thrusters:neutralVectors()
     self.state:raise(state == "DAMPED" and "oscillation" or "sensors",
       "warning", state == "DAMPED" and "damped hover: oscillation detected"
@@ -490,6 +504,20 @@ function App:cycleBody(dt)
   -- ---- inner loop
   local torques = self.attitude:update(limited, measured, dt)
 
+  -- ---- CoM leveling watches the settled hover (passive; the feedforward is already inside torques)
+  if self.comLevel:isRunning() then
+    self.comLevel:observe({
+      pitch = measured.pitch, roll = measured.roll,
+      pitchRate = self.attitude.rate.pitch, rollRate = self.attitude.rate.roll,
+      verticalSpeed = measured.verticalSpeed,
+      angleMode = (self.attitude.mode == "angle"),
+      -- The pilot must not be commanding a tilt: we can only read the CoM trim from a HANDS-OFF
+      -- level hold, where the loop's steady torque is the CoM load and nothing else.
+      levelDemand = math.abs(limited.pitch or 0) < 0.5 and math.abs(limited.roll or 0) < 0.5,
+      airborne = (self.state:get("ground.contact") == false),
+    }, dt)
+  end
+
   -- ---- outer loop, at its own slower rate
   self.altitudeAccumulator = self.altitudeAccumulator + dt
   local altitudePeriod = 1 / self.cfg.tuning.altitudeHz
@@ -542,6 +570,7 @@ function App:publish(measured, capability, dt, overrun)
   local trim = select(1, self.altitude:learnedTrim())
   self.state:set("control.hoverTrim", trim)
   self.state:set("control.trimAuthority", self.altitude.trimAuthority)
+  self.state:set("comLevel", self.comLevel:facts())
 
   -- envelope violations are for annunciation, not control
   local violations = self.envelope:violations({
@@ -1043,6 +1072,39 @@ function App:handleCommand(cmd)
         tostring(self:knownAirborne()), tostring(self.engine.master))
     end
     return ok, { error = err, errorShort = short }
+
+  elseif cmd.cmd == "comLevel" then
+    if cmd.action == "discard" or cmd.action == "stop" then
+      self.comLevel:cancel("by the pilot")
+      return true, { state = self.comLevel.state }
+    elseif cmd.action == "accept" then
+      if not self.comLevel:hasProposal() then
+        return false, { error = "nothing to accept yet", errorShort = "NO PROPOSAL" }
+      end
+      local p = self.comLevel:takeProposal()
+      local applied = self.attitude:commitComTrim(p.pitch, p.roll)
+      -- Persist the captured feedforward so it survives a reboot -- a contraption reboots often.
+      self.cfg.control.comTrim.pitch = applied.pitch
+      self.cfg.control.comTrim.roll = applied.roll
+      local saved, err = Config.save(self.configPath, self.cfg)
+      if saved then
+        self.log:info("CoM trim persisted: pitch %.3f roll %.3f", applied.pitch, applied.roll)
+      else
+        self.log:warn("could not persist CoM trim: %s", tostring(err))
+      end
+      return saved, { comTrim = applied, error = saved and nil or err }
+    else
+      -- start. Decided HERE, not by the sender: the craft must actually be hovering, so there is a
+      -- level hold to read. Engine off or on the ground, there is no steady trim to capture.
+      if not self.engine.master then
+        return false, { error = "engine master is off", errorShort = "ENGINE OFF" }
+      end
+      if not self:knownAirborne() then
+        return false, { error = "get airborne and hover first", errorShort = "ON GROUND" }
+      end
+      self.comLevel:start()
+      return true, { state = self.comLevel.state }
+    end
 
   elseif cmd.cmd == "setAxes" then
     local target

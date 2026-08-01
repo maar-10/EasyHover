@@ -46,6 +46,9 @@ local COMMANDS = {
   setSlot        = { kind = "enum:lift,main,lateral,velocity,altitude,gimbal,optical",
                      key = "string", peripheral = "string" },
   selfTest       = { action = "enum:start,abort" },
+  -- CoM leveling: start watching for a settled level hover, then accept the captured trim (or
+  -- discard/stop the run). Passive -- it never commands a thruster; see lib/control/comlevel.lua.
+  comLevel       = { action = "enum:start,accept,discard,stop" },
   -- Latch one nozzle at full deflection so the pilot can see which way it really points, then tap
   -- the direction it points (assign). A LATCH rather than a held switch because CC gives a monitor
   -- `monitor_touch` and nothing at all for the release. `direction` is only meaningful for assign;
@@ -310,6 +313,7 @@ function Telemetry:build(extra, includeSlow)
     pilot = s:get("pilot"),
     selfTest = s:get("selfTest"),
     axisMap = s:get("axisMap"),
+    comLevel = s:get("comLevel"),
     oscillation = s:get("oscillation"),
     envelopeClipped = s:get("envelope.clipped"),
     alarms = s:activeAlarms(),

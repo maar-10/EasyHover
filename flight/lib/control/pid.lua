@@ -90,6 +90,18 @@ function PID:update(setpoint, measurement, dt, flags)
   }
 end
 
+--- Read the accumulated integral without disturbing it. CoM leveling proposes a feedforward from
+--- the steady load the loop is holding, and must do so before the pilot has accepted anything.
+function PID:getIntegral()
+  return self.integral
+end
+
+--- Zero the integral, keeping every other part of the state. Used when a feedforward has taken
+--- over the steady load the integral was carrying, so that load is never applied twice.
+function PID:clearIntegral()
+  self.integral = 0
+end
+
 --- Gain scheduling hook for the oscillation detector. 1.0 = full authority.
 function PID:setGainScale(scale)
   self.gainScale = Util.clamp(scale or 1.0, 0.0, 1.0)

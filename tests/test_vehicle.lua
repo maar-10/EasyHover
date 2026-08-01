@@ -2517,5 +2517,86 @@ T.it("a remap REBUILDS the mixer, so it applies without a reboot", function()
   fs.delete(path)
 end)
 
+-- ---------------------------------------------------------------- CoM leveling command
+
+T.suite("CoM leveling command")
+
+local function airborneCraft()
+  local app, path = appRig(fullCraft())
+  app.state:set("measured", { groundContact = false })
+  app.engine.master = true
+  return app, path
+end
+
+--- A craft sitting dead level and still, hands off, airborne, in angle mode.
+local function comSettled()
+  return { pitch = 0, roll = 0, pitchRate = 0, rollRate = 0, verticalSpeed = 0,
+    angleMode = true, levelDemand = true, airborne = true }
+end
+
+T.it("refuses to start on the ground -- there is no hover to read", function()
+  local app, path = appRig(fullCraft())
+  app.state:set("measured", { groundContact = true })
+  app.engine.master = true
+  local ok, detail = app:handleCommand({ cmd = "comLevel", action = "start" })
+  T.isFalse(ok, "refused on the ground")
+  T.eq((detail or {}).errorShort, "ON GROUND", "with a 15-column reason")
+  fs.delete(path)
+end)
+
+T.it("refuses to start with the engine off", function()
+  local app, path = appRig(fullCraft())
+  app.state:set("measured", { groundContact = false })
+  app.engine.master = false
+  local ok, detail = app:handleCommand({ cmd = "comLevel", action = "start" })
+  T.isFalse(ok, "refused with no engine")
+  T.eq((detail or {}).errorShort, "ENGINE OFF", "with a 15-column reason")
+  fs.delete(path)
+end)
+
+T.it("accept refuses when nothing has settled yet", function()
+  local app, path = airborneCraft()
+  app:handleCommand({ cmd = "comLevel", action = "start" })
+  local ok, detail = app:handleCommand({ cmd = "comLevel", action = "accept" })
+  T.isFalse(ok, "no proposal, nothing to accept")
+  T.isTrue(tostring((detail or {}).error):find("nothing") ~= nil, "and says so")
+  fs.delete(path)
+end)
+
+T.it("captures the trim, applies it, and PERSISTS it across a reload", function()
+  local app, path = airborneCraft()
+  -- Wind the pitch integral against a standing lean, so there is a real trim to capture.
+  for _ = 1, 60 do app.attitude:update({ pitch = 0, roll = 0 }, { pitch = 3, roll = 0 }, 0.05) end
+  T.isTrue((app:handleCommand({ cmd = "comLevel", action = "start" })), "started")
+  -- Feed the passive watcher a settled hover directly (dwell 4 s at dt 0.1 -> 40+ samples).
+  for _ = 1, 60 do app.comLevel:observe(comSettled(), 0.1) end
+  T.isTrue(app.comLevel:hasProposal(), "it settled and proposed")
+  local proposed = app.comLevel.proposal.pitch
+  T.isTrue(math.abs(proposed) > 1e-3, "the proposal is a real, non-zero trim")
+
+  local ok, detail = app:handleCommand({ cmd = "comLevel", action = "accept" })
+  T.isTrue(ok, "accepted")
+  T.near((detail or {}).comTrim.pitch, proposed, 1e-9, "the accepted value is the proposal")
+  T.near(app.attitude:getComTrim().pitch, proposed, 1e-9, "the loop now carries it as feedforward")
+  T.near(app.attitude.pidAngle.pitch:getIntegral(), 0, 1e-9, "and the integral was handed off")
+
+  -- The whole point of persisting: a contraption reboots, and the trim must survive.
+  local reloaded = Config.load(path)
+  T.near(reloaded.control.comTrim.pitch, proposed, 1e-9, "written to disk")
+  fs.delete(path)
+end)
+
+T.it("a preflight owner taking over cancels a run in progress", function()
+  local app, path = airborneCraft()
+  app:handleCommand({ cmd = "comLevel", action = "start" })
+  T.isTrue(app.comLevel:isRunning(), "running")
+  -- The axis map latches a nozzle -- a preflight owner. On the next cycle CoM leveling must void.
+  app.state:set("measured", { groundContact = true })   -- back on the pad so the latch is allowed
+  app.engine.master = false
+  app:handleCommand({ cmd = "vectorHold", action = "latch", id = "lift_fl", axis = "x", sign = 1 })
+  app:cycle(0.05)
+  T.isFalse(app.comLevel:isActive(), "the run was cancelled when control was taken over")
+  fs.delete(path)
+end)
 
 return true
