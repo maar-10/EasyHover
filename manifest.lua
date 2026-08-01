@@ -27,9 +27,9 @@
       ["files"] = {
         {
           ["dst"] = "flight/app.lua",
-          ["size"] = 61012,
+          ["size"] = 61536,
           ["src"] = "flight/app.lua",
-          ["sum"] = "db8ced56",
+          ["sum"] = "b0d58fad",
         },
         {
           ["dst"] = "flight/diskmenu.lua",
@@ -63,9 +63,9 @@
         },
         {
           ["dst"] = "flight/lib/control/axismap.lua",
-          ["size"] = 11972,
+          ["size"] = 14641,
           ["src"] = "flight/lib/control/axismap.lua",
-          ["sum"] = "48288464",
+          ["sum"] = "97c01d7f",
         },
         {
           ["dst"] = "flight/lib/control/brake.lua",
@@ -195,9 +195,9 @@
         },
         {
           ["dst"] = "flight/lib/telemetry.lua",
-          ["size"] = 18180,
+          ["size"] = 18348,
           ["src"] = "flight/lib/telemetry.lua",
-          ["sum"] = "dbb7e61f",
+          ["sum"] = "7d5e8c61",
         },
         {
           ["dst"] = "flight/lib/util.lua",
@@ -515,9 +515,9 @@
         },
         {
           ["dst"] = "ui_main/app.lua",
-          ["size"] = 14668,
+          ["size"] = 14708,
           ["src"] = "ui_main/app.lua",
-          ["sum"] = "dffcd8cd",
+          ["sum"] = "e519d6f0",
         },
         {
           ["dst"] = "ui_main/lib/config.lua",
@@ -551,9 +551,9 @@
         },
         {
           ["dst"] = "ui_main/ui/nav.lua",
-          ["size"] = 40455,
+          ["size"] = 42153,
           ["src"] = "ui_main/ui/nav.lua",
-          ["sum"] = "34489ff3",
+          ["sum"] = "d6b25c5f",
         },
         {
           ["dst"] = "ui_main/ui/overhead.lua",
@@ -618,5 +618,5 @@
     ["size"] = 37557,
     ["sum"] = "e26e319d",
   },
-  ["version"] = "199ec464",
+  ["version"] = "ffb1637b",
 }

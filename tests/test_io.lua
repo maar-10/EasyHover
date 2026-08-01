@@ -450,8 +450,8 @@ T.it("ground contact is the down laser alone -- baro jitter cannot fake being ai
   T.isTrue(r.state:get("ground.contact"), "within range of the ground = contact")
 
   -- A jump in baro altitude gives a large differentiated vertical speed. The OLD logic read that
-  -- as flight and reported airborne -- the false positive that stopped SELF CONFIG on the ground.
-  -- The laser is still close, so the craft is still, correctly, on the ground.
+  -- as flight and reported airborne -- a false positive that would take the craft for airborne while
+  -- it sat on the ground. The laser is still close, so the craft is still, correctly, on the ground.
   mock.vehicle.altitude = 71.0
   sensors:read(0.1)
   T.isTrue(r.state:get("ground.contact"), "still grounded: the laser is close, whatever vs says")

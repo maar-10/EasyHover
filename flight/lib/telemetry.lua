@@ -46,11 +46,12 @@ local COMMANDS = {
   setSlot        = { kind = "enum:lift,main,lateral,velocity,altitude,gimbal,optical",
                      key = "string", peripheral = "string" },
   selfTest       = { action = "enum:start,abort" },
-  -- Latch one nozzle at full deflection so the pilot can see which way it really points, then
-  -- name it with a/d/s/w. A LATCH rather than a held switch because CC gives a monitor
-  -- `monitor_touch` and nothing at all for the release.
-  vectorHold     = { action = "enum:latch,release", id = "string",
-                     axis = "enum:x,y", sign = "number" },
+  -- Latch one nozzle at full deflection so the pilot can see which way it really points, then tap
+  -- the direction it points (assign). A LATCH rather than a held switch because CC gives a monitor
+  -- `monitor_touch` and nothing at all for the release. `direction` is only meaningful for assign;
+  -- latch/release send "" (every field is required, so it always rides along).
+  vectorHold     = { action = "enum:latch,release,assign", id = "string",
+                     axis = "enum:x,y", sign = "number", direction = "string" },
   -- Which way a nozzle's own axes point in the CRAFT's frame. Addressed by thruster id, not by
   -- list index: setSlot reorders the list, so an index would silently retarget.
   setAxes        = { id = "string", swap = "boolean",

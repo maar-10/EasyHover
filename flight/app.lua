@@ -973,6 +973,18 @@ function App:handleCommand(cmd)
   elseif cmd.cmd == "vectorHold" then
     if cmd.action == "release" then
       return true, { released = self.axisMap:release("by the pilot") }
+    elseif cmd.action == "assign" then
+      -- The pilot tapped the direction the LATCHED nozzle actually points -- name it (writes the
+      -- vectorMap + invert on the live spec) and rebuild the mixer so the fix takes at once.
+      local ok, err, short = self.axisMap:assignHeld(cmd.direction)
+      if ok then
+        self.thrusters:invalidate()
+        self.mixer:build()
+        self:publishThrusterAxes()
+        if self.telemetry and self.telemetry.markSlowDirty then self.telemetry:markSlowDirty() end
+        Config.save(self.configPath, self.cfg)
+      end
+      return ok, { error = err, errorShort = short }
     end
     -- Same contract as the self test: it moves the same nozzles, so it wants the same silence.
     local allowed = (not self.engine.master)

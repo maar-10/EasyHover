@@ -84,6 +84,28 @@ AxisMap.NAMES = {
   z = { [1] = "FWD",   [-1] = "BACK" },
 }
 
+--- The reverse of NAMES: a spoken direction (as the guided map UI's buttons are labelled) back to a
+--- craft axis and sign. Long and short forms both accepted so the UI label and a typed value agree.
+AxisMap.DIRECTIONS = {
+  RIGHT = { axis = "x", sign = 1 },  LEFT = { axis = "x", sign = -1 },
+  UP    = { axis = "y", sign = 1 },  DOWN = { axis = "y", sign = -1 },
+  FWD   = { axis = "z", sign = 1 },  FORWARD = { axis = "z", sign = 1 },
+  BACK  = { axis = "z", sign = -1 },
+}
+
+--- The craft directions a nozzle CAN point -- the plane's two axes, both signs -- for the guided
+--- map UI to offer as buttons. A lateral thruster returns UP/DOWN/FWD/BACK, never LEFT/RIGHT, so the
+--- pilot is never offered a direction the geometry cannot hold.
+function AxisMap.directionsFor(spec)
+  local out = {}
+  for _, axis in ipairs(AxisMap.planeFor(spec)) do
+    local names = AxisMap.NAMES[axis]
+    out[#out + 1] = names[1]
+    out[#out + 1] = names[-1]
+  end
+  return out
+end
+
 --- The four reassignment keys. What each one MEANS depends on the nozzle's plane -- see keyPlan.
 AxisMap.KEY_NAMES = { "a", "d", "s", "w" }
 
@@ -194,6 +216,32 @@ function AxisMap:release(reason)
   return true
 end
 
+--- Name the CURRENTLY HELD nozzle from a spoken direction the pilot tapped on the monitor -- the
+--- guided-UI equivalent of the a/d/w/s keys. The pilot latched this nozzle axis, walked out, saw
+--- which way it points, and tapped that direction; we write the mapping and keep holding so it can
+--- be re-confirmed. Refuses a direction the thruster's plane cannot hold (assign checks it).
+function AxisMap:assignHeld(directionName)
+  if not self.hold then return false, "no nozzle is latched", "NOT HELD" end
+  local dir = AxisMap.DIRECTIONS[tostring(directionName):upper()]
+  if not dir then return false, "unknown direction: " .. tostring(directionName), "BAD DIR" end
+  local entry = self.per.thrusters[self.hold.id]
+  if not entry or not entry.spec then return false, "thruster is gone", "GONE" end
+
+  local ok, err, short = AxisMap.assign(entry.spec, self.hold.axis, self.hold.sign, dir.axis, dir.sign)
+  if ok then
+    self.hold.assigned = AxisMap.believedDirection(entry.spec, self.hold.axis, self.hold.sign)
+    self.hold.error, self.hold.errorShort = nil, nil
+    self.log:info("axis map: %s nozzle %s%s named %s", self.hold.id,
+      self.hold.sign > 0 and "+" or "-", self.hold.axis, tostring(directionName):upper())
+    if self.onAssigned then self.onAssigned(self.hold.id) end
+  else
+    self.hold.error, self.hold.errorShort = err, short
+    self.log:warn("axis map: %s", tostring(err))
+  end
+  self:publish()
+  return ok, err, short
+end
+
 --- Hold the nozzle where it was told to, and watch for a reassignment key.
 ---
 --- `pressed` is a set of key CODES currently down, straight from the typewriter poll. The normal
@@ -292,6 +340,9 @@ function AxisMap:publish()
     direction = spec and AxisMap.believedDirection(spec, self.hold.axis, self.hold.sign) or nil,
     group = spec and spec.group or nil,
     legend = legend,
+    -- The craft directions this nozzle CAN point, computed where the plane rule lives, for the
+    -- guided UI to lay out as buttons -- never a direction the geometry cannot hold.
+    directions = spec and AxisMap.directionsFor(spec) or nil,
     error = self.hold.error,
     errorShort = self.hold.errorShort,
     remainingMs = math.max(0, self.timeoutMs - (os.epoch("utc") - self.hold.startedAt)),

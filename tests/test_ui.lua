@@ -124,8 +124,9 @@ local function sent()
     setNavSign = function(s) out[#out + 1] = { cmd = "setNavSign", sign = s } end,
     setGimbalSign = function(s) out[#out + 1] = { cmd = "setGimbalSign", sign = s } end,
     navSelfAlign = function() out[#out + 1] = { cmd = "navSelfAlign" } end,
-    vectorHold = function(action, id, axis, sign)
-      out[#out + 1] = { cmd = "vectorHold", action = action, id = id, axis = axis, sign = sign }
+    vectorHold = function(action, id, axis, sign, direction)
+      out[#out + 1] = { cmd = "vectorHold", action = action, id = id, axis = axis, sign = sign,
+        direction = direction }
     end,
     setAxes = function(id, swap, ix, iy)
       out[#out + 1] = { cmd = "setAxes", id = id, swap = swap, invertX = ix, invertY = iy }
@@ -1528,18 +1529,35 @@ T.it("marks the held deflection on the grid", function()
     "and neither is the same deflection on another thruster")
 end)
 
-T.it("shows THE CRAFT'S key legend rather than one of its own", function()
-  -- The plane rule lives on the craft. A panel that hardcoded "a/d = left/right" would be
-  -- lying on all four lateral thrusters, whose nozzles cannot point sideways at all.
-  local panel = axisNavRig({ holding = true, id = "lateral_fl", axis = "x", sign = 1,
-    direction = "DOWN", group = "lateral", legend = "a/d DOWN/UP w/s FWD/BACK" })
-  T.isTrue(panel.elements.axisHint:getText():find("DOWN/UP") ~= nil,
-    "a/d are down/up on a lateral: " .. panel.elements.axisHint:getText())
+T.it("offers the CRAFT'S plane-valid directions as buttons, never an impossible one", function()
+  -- The plane rule lives on the craft, which publishes the valid directions. A lateral nozzle
+  -- cannot point sideways, so LEFT/RIGHT must never appear as a button for one.
+  local panel = axisNavRig({ holding = true, id = "lateral_fl", axis = "y", sign = 1,
+    direction = "DOWN", group = "lateral", directions = { "UP", "DOWN", "FWD", "BACK" } })
+  local shown = {}
+  for _, b in ipairs(panel.elements.axisDirButtons) do
+    if b:getVisible() then shown[b:getText()] = b end
+  end
+  T.notNil(shown["UP"], "UP is offered on a lateral")
+  T.notNil(shown["DOWN"], "DOWN is offered")
+  T.isNil(shown["LEFT"], "LEFT is NOT offered -- a lateral cannot point sideways")
+  T.isNil(shown["RIGHT"], "nor RIGHT")
+  -- The believed direction is highlighted, so a correct label is obvious at a glance.
+  T.eq(shown["DOWN"]:getBackground(), Theme.ok, "the believed direction (DOWN) is lit")
+  T.eq(shown["UP"]:getBackground(), Theme.buttonBg, "the others are not")
+end)
 
-  panel = axisNavRig({ holding = true, id = "main_1", axis = "y", sign = 1,
-    direction = "UP", group = "main", legend = "a/d LEFT/RIGHT w/s UP/DOWN" })
-  T.isTrue(panel.elements.axisHint:getText():find("UP/DOWN") ~= nil,
-    "and w/s are up/down on an accelerator: " .. panel.elements.axisHint:getText())
+T.it("tapping a direction button names the held nozzle that direction", function()
+  local panel, commands = axisNavRig({ holding = true, id = "lift_fl", axis = "x", sign = 1,
+    direction = "FWD", group = "lift", directions = { "RIGHT", "LEFT", "FWD", "BACK" } })
+  for _, b in ipairs(panel.elements.axisDirButtons) do
+    if b:getVisible() and b:getText() == "LEFT" then click(b) end
+  end
+  T.eq(#commands, 1, "one command sent")
+  T.eq(commands[1].cmd, "vectorHold", "a vectorHold")
+  T.eq(commands[1].action, "assign", "an assign")
+  T.eq(commands[1].id, "lift_fl", "for the held thruster")
+  T.eq(commands[1].direction, "LEFT", "naming it the direction the pilot tapped")
 end)
 
 T.it("goes quiet when nothing is held", function()

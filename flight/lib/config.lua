@@ -175,7 +175,7 @@ function Config.defaults()
         -- oddly-behaving install can degrade the assistant rather than push the wrong way.
         signed = true,
         -- Readings whose magnitude is <= this are the sensor's own deadband reporting 0, not a
-        -- true zero. SELF CONFIG treats a within-deadband response as "no movement seen".
+        -- true zero -- a within-deadband response counts as "no movement seen".
         deadband = 0.05,
       },
       optical = {
@@ -248,8 +248,8 @@ function Config.defaults()
         -- TAKEOFF. Until the craft has hovered, hoverTrim is 0 and the rate loop's authority
         -- (p*err + iClamp ~= 0.5) tops out below the thrust a heavy craft needs to leave the ground,
         -- so a climb command would sit at partial thrust forever. On the ground with a climb
-        -- commanded, the collective ramps open-loop toward full at this rate (per second) -- the same
-        -- way SELF CONFIG lifts the craft -- until it is airborne, then the rate loop takes over.
+        -- commanded, the collective ramps open-loop toward full at this rate (per second) until the
+        -- craft is airborne, then the rate loop takes over.
         takeoffRamp = 0.5,
         -- Pilot vertical authority. The rate loop's gains are tiny (gentle altitude hold), so on
         -- their own a climb/descend command barely moves a craft whose hover sits near full thrust.

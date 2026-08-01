@@ -2223,6 +2223,29 @@ T.it("naming the second axis does not undo the first", function()
   T.eq(AxisMap.believedDirection(spec, "x", 1), "LEFT", "and the first still holds")
 end)
 
+T.it("directionsFor offers exactly the plane's directions, never an impossible one", function()
+  -- The guided UI labels its buttons from this, so it must never offer a direction the nozzle
+  -- cannot point. A set, because button order is the UI's business, not the engine's.
+  local function set(list)
+    local s = {}; for _, d in ipairs(list) do s[d] = true end; return s
+  end
+
+  local lift = set(AxisMap.directionsFor({ thrustAxis = "down", group = "lift" }))
+  T.isTrue(lift.RIGHT and lift.LEFT and lift.FWD and lift.BACK, "a lift nozzle: the four flat ones")
+  T.isFalse(lift.UP == true, "never UP -- that is the way it already thrusts")
+  T.isFalse(lift.DOWN == true, "nor DOWN")
+
+  local lateral = set(AxisMap.directionsFor({ thrustAxis = "right", group = "lateral" }))
+  T.isTrue(lateral.UP and lateral.DOWN and lateral.FWD and lateral.BACK, "a lateral nozzle")
+  T.isFalse(lateral.LEFT == true, "never LEFT -- a lateral cannot point sideways")
+  T.isFalse(lateral.RIGHT == true, "nor RIGHT")
+
+  local main = set(AxisMap.directionsFor({ thrustAxis = "back", group = "main" }))
+  T.isTrue(main.LEFT and main.RIGHT and main.UP and main.DOWN, "an accelerator nozzle")
+  T.isFalse(main.FWD == true, "never FWD -- that is the way it already thrusts")
+  T.isFalse(main.BACK == true, "nor BACK")
+end)
+
 -- ------------------------------------------------------------ the live latch
 
 local function axisRig()
@@ -2256,6 +2279,38 @@ T.it("every nozzle-mapping refusal carries a form that fits the narrowest monito
       ("%s: %q is %d columns"):format(case.name, tostring(short), #tostring(short)))
     fs.delete(path)
   end
+end)
+
+T.it("naming a held nozzle a direction rewrites its map and keeps holding", function()
+  -- The guided workflow: latch a nozzle, walk out, see which way it points, tap that direction.
+  local app, path = axisRig()
+  app.engine.master = false
+  T.isTrue((app:handleCommand({ cmd = "vectorHold", action = "latch", id = "lift_fl",
+    axis = "x", sign = 1 })), "latched +X")
+
+  local ok = app:handleCommand({ cmd = "vectorHold", action = "assign", id = "lift_fl",
+    axis = "x", sign = 1, direction = "LEFT" })
+  T.isTrue(ok, "named +X as LEFT")
+  T.isTrue(app.axisMap:isHolding(), "still holding, so the pilot can re-confirm")
+
+  local spec = app.per.thrusters.lift_fl.spec
+  T.eq(AxisMap.believedDirection(spec, "x", 1), "LEFT", "the map now reads LEFT")
+  fs.delete(path)
+end)
+
+T.it("naming a held nozzle a direction its plane cannot hold is refused", function()
+  local app, path = axisRig()
+  app.engine.master = false
+  T.isTrue((app:handleCommand({ cmd = "vectorHold", action = "latch", id = "lift_fl",
+    axis = "x", sign = 1 })), "latched")
+  -- A lift nozzle steers left/right and fore/aft; UP is the way it already thrusts.
+  local ok, detail = app:handleCommand({ cmd = "vectorHold", action = "assign", id = "lift_fl",
+    axis = "x", sign = 1, direction = "UP" })
+  T.isFalse(ok, "UP is not in a lift nozzle's plane")
+  local short = (detail or {}).errorShort
+  T.notNil(short, "and it carries a short refusal")
+  T.isTrue(#short <= 15, ("%q is %d columns"):format(tostring(short), #tostring(short)))
+  fs.delete(path)
 end)
 
 --- A held nozzle OUTRANKS the sweep in App:cycle, so a latch left over from the axis map let the

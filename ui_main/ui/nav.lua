@@ -449,6 +449,25 @@ function Nav.build(frame, opts)
     end)
   end
 
+  --- DIRECTION BUTTONS. When a nozzle is latched, the footer row turns into up to four buttons --
+  --- the craft directions this nozzle CAN point (from the craft, which owns the plane rule, so a
+  --- lateral is never offered LEFT/RIGHT). You walk out, see which way the latched nozzle points,
+  --- and tap THAT -- which names it with no keyboard. `dirState[j]` carries each button's live
+  --- direction so the one closure reads the current thruster's options, not the ones at build time.
+  local dirBtnWidth = math.max(3, math.floor(width / 4))
+  local dirState = {}
+  local dirButtons = {}
+  for j = 1, 4 do
+    dirButtons[j] = Theme.button(axisPage, (j - 1) * dirBtnWidth + 1, axisFooterRow, dirBtnWidth,
+      "", function()
+        local held = live.axisMap or {}
+        if held.holding and dirState[j] then
+          actions.vectorHold("assign", held.id, held.axis, held.sign, dirState[j])
+        end
+      end)
+    dirButtons[j]:setVisible(false)
+  end
+
   --- Pages are built PER GROUP, not by slicing the flat list. Two reasons: the row labels are
   --- bare keys, which are only unique WITHIN a group -- the craft really does have a lift `fl`
   --- and a lateral `fl` -- and one group to a page matches the SELF TEST's three steps, so you
@@ -530,8 +549,12 @@ function Nav.build(frame, opts)
       axisFooter:setText(Theme.fit(text, axisFooterWidth))
       axisFooter:setForeground(Theme.dim)
     end
-    if axisPrev then axisPrev:setVisible(pagesTotal > 1) end
-    if axisNext then axisNext:setVisible(pagesTotal > 1) end
+    -- The footer row is SHARED: page arrows while browsing, direction buttons while a nozzle is
+    -- latched. Only one set shows at a time so they never overlap.
+    local browsing = not held.holding
+    if axisPrev then axisPrev:setVisible(browsing and pagesTotal > 1) end
+    if axisNext then axisNext:setVisible(browsing and pagesTotal > 1) end
+    axisFooter:setVisible(browsing)
 
     -- THE LIT PANEL: what is deflected, and what the system thinks that direction is.
     if held.holding then
@@ -546,16 +569,30 @@ function Nav.build(frame, opts)
       axisHolding:setText(#long <= width and long
         or Theme.fit(("%s = %s"):format(deflection, direction), width))
       axisHolding:setForeground(Theme.ok)
-      -- The legend comes from the CRAFT, which owns the plane rule. A lateral nozzle cannot
-      -- point sideways, so a hardcoded "a/d = left/right" here would be a lie on four of them.
-      axisHint:setText(Theme.fit(tostring(held.legend or "hold a/d w/s"), width))
+      axisHint:setText(Theme.fit("tap the way it points ->", width))
       axisHint:setForeground(Theme.accent)
+      -- The DIRECTION BUTTONS, labelled from the craft's own plane-valid list. Each carries its live
+      -- direction in dirState so a tap names the nozzle exactly what the pilot saw it do.
+      local dirs = held.directions or {}
+      for j = 1, 4 do
+        local dir = dirs[j]
+        dirState[j] = dir
+        dirButtons[j]:setVisible(dir ~= nil)
+        if dir then
+          -- The believed direction gets the OK colour, so a correct label is obvious at a glance.
+          local believed = (tostring(dir):upper() == direction)
+          dirButtons[j]:setText(Theme.fit(tostring(dir), dirBtnWidth))
+          dirButtons[j]:setBackground(believed and Theme.ok or Theme.buttonBg)
+          dirButtons[j]:setForeground(believed and colours.black or Theme.buttonFg)
+        end
+      end
       axisRelease:setBackground(Theme.warning)
       axisRelease:setForeground(colours.white)
     else
       axisHolding:setText("")
-      axisHint:setText(Theme.fit("tap a nozzle, then hold a/d/w/s", width))
+      axisHint:setText(Theme.fit("tap a nozzle to latch it", width))
       axisHint:setForeground(Theme.dim)
+      for j = 1, 4 do dirButtons[j]:setVisible(false) end
       axisRelease:setBackground(Theme.buttonBg)
       axisRelease:setForeground(Theme.buttonFg)
     end
@@ -844,9 +881,7 @@ function Nav.build(frame, opts)
       watch = selfWatch, result = selfResult, start = startButton,
       axisHint = axisHint, axisFooter = axisFooter, axisHolding = axisHolding,
       axisRelease = axisRelease, axisPrev = axisPrev, axisNext = axisNext,
-      cfgWarn = cfgWarn, cfgStatus = cfgStatus, cfgDetail1 = cfgDetail1,
-      cfgDetail2 = cfgDetail2, cfgCheck = cfgCheckBtn, cfgStart = cfgStartBtn,
-      cfgAccept = cfgAcceptBtn, cfgDiscard = cfgDiscardBtn,
+      axisDirButtons = dirButtons,
       headingTape = headingTapeLine, headingDetail = headingDetail,
       navPos = navPosLine, navInfo = navInfoLine, times = timesLine,
       dayNight = dayNightButton,
