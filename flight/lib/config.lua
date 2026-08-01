@@ -258,6 +258,14 @@ function Config.defaults()
         -- real, immediate authority. Zero the instant the stick is released (altitude hold).
         verticalAuthority = 0.6,
         trimLearnRate = 0.002,
+        -- ANTI-PIN. A craft held above its target by a mooring rope reads as "settled" but is not
+        -- hovering, so the learner above cannot correct the over-thrust. When holding, sitting more
+        -- than trimUnstickBand blocks above the target while sinking slower than trimUnstickStill,
+        -- bleed the hover trim down at trimUnstickRate (fraction/second) until the craft can descend.
+        trimUnstickBand = 0.5,
+        trimUnstickStill = 0.20,
+        trimUnstickRate = 0.05,
+        trimUnstickDwell = 1.0,   -- seconds the pin must persist before the bleed starts
         -- share of vertical authority given to symmetric nozzle trim (the continuous
         -- axis) rather than the 16-step thrust axis
         vectorTrimAuthority = 0.15,

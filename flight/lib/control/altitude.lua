@@ -98,9 +98,21 @@ function Altitude:update(target, measured, dt)
       -- so a climb command sat at partial thrust forever (the reported bug). While grounded and
       -- commanded UP, ramp the collective open-loop toward full, exactly as SELF CONFIG's float does
       -- (which is why SELF CONFIG lifts the craft when normal flight could not).
+      --
+      -- ...but FREEZE the ramp the instant the craft actually breaks free of the skids. The thrust
+      -- that just started it rising is ~hover, and that is what seeds the feedforward at the handoff
+      -- below. Left ramping to full past liftoff it seeded an inflated hover trim, and the craft
+      -- launched at the ceiling and hung there (reported: "hold the throttle a little too long and it
+      -- lifts me into the ropes"). Once rising, the pilot's vertical-authority feedforward gives the
+      -- climb its punch; the ramp's only job was to get the wheels off the ground.
       local floor = ac.minAirborneCollective or 0.20
-      local ramp = (ac.takeoffRamp or 0.5) * math.max(dt or 0, 0)
-      self.takeoffCollective = Util.clamp((self.takeoffCollective or floor) + ramp, floor, 1)
+      local rising = (measured.verticalSpeed or 0) > (ac.takeoffLiftoffVs or 0.10)
+      if rising then
+        self.takeoffCollective = self.takeoffCollective or floor
+      else
+        local ramp = (ac.takeoffRamp or 0.5) * math.max(dt or 0, 0)
+        self.takeoffCollective = Util.clamp((self.takeoffCollective or floor) + ramp, floor, 1)
+      end
       -- Hold integrators at zero: the ramp is the command, not the PID, so nothing may wind up.
       -- hoverTrim is NOT touched here -- a ramp that never lifts (an underpowered craft held at
       -- full) must not persist a runaway hover estimate. It is seeded at the liftoff moment below.
@@ -190,7 +202,10 @@ function Altitude:update(target, measured, dt)
   dbg.trimAuthority = authority
   dbg.trimSaturated = math.abs(residual) > authority
 
-  -- ---- hover trim learning: only while genuinely settled
+  -- ---- hover trim learning: track the operating point while genuinely settled
+  -- Learn toward the thrust that is actually holding the craft, but only when it is nearly still AND
+  -- barely demanding vertical speed. This is stable -- it low-passes the (already damped) demand, it
+  -- adds no position integral -- which is why it does not limit-cycle in the hold.
   local settled = math.abs(vsDemand) < 0.25
     and math.abs((measured.verticalSpeed or 0)) < 0.25
     and not rateInfo.dtSkipped
@@ -198,6 +213,37 @@ function Altitude:update(target, measured, dt)
     local rate = ac.trimLearnRate or 0
     self.hoverTrim = Util.clamp(self.hoverTrim + (demand - self.hoverTrim) * rate, 0, 1)
     self.trimLearned = true
+  end
+
+  -- ---- anti-pin: un-stick an inflated trim that the gentle hold cannot overcome
+  -- The settled learner above is blind to one case: a craft pinned ABOVE its hold target by a
+  -- mooring rope is dead still (settled) yet is holding NO altitude -- the rope is, at a thrust well
+  -- over hover. A tap-down just sagged and sprang back to the ceiling (the reported bug), because the
+  -- trim stayed inflated and the rate loop is far too gentle to fight it. So when we are HOLDING and
+  -- sitting clearly above the target while not descending, bleed the trim DOWN until the craft can
+  -- come down. One-directional (it never adds lift), gated on being still so it can never fight an
+  -- in-progress descent into a limit cycle, and it stops the moment the craft is back within the band.
+  -- The rate loop's integral is the honest tell. At a real pin the loop is asking for LESS thrust to
+  -- descend and cannot (integral wound negative); a windup overshoot on the way to a hold has the
+  -- integral still POSITIVE (unwinding from the earlier undershoot), and bleeding there would fight
+  -- the settled learner's convergence. So only bleed when the loop itself wants down.
+  local pinnedNow = (not directCommand) and type(target.altitude) == "number"
+    and type(measured.altitude) == "number" and not rateInfo.dtSkipped
+    and (measured.altitude - target.altitude) > (ac.trimUnstickBand or 0.5)
+    and math.abs(measured.verticalSpeed or 0) < (ac.trimUnstickStill or 0.20)
+    and (rateInfo.i or 0) <= 0
+  if pinnedNow then
+    -- Require the pin to PERSIST before bleeding, so a transient overshoot above the target on the
+    -- way to a hold (which the settled learner is legitimately correcting) is not mistaken for a rope
+    -- pin and fought. A real pin dwells; an overshoot passes through in well under a second.
+    self.pinnedElapsed = (self.pinnedElapsed or 0) + math.max(dt or 0, 0)
+    if self.pinnedElapsed > (ac.trimUnstickDwell or 1.0) then
+      self.hoverTrim = Util.clamp(self.hoverTrim - (ac.trimUnstickRate or 0.05) * math.max(dt or 0, 0),
+        0, 1)
+      self.trimLearned = true
+    end
+  else
+    self.pinnedElapsed = 0
   end
   dbg.hoverTrim = self.hoverTrim
   dbg.settled = settled

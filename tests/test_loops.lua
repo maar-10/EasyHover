@@ -312,6 +312,40 @@ T.it("hover trim is learned while settled", function()
   T.isTrue(trim > 0.55, ("trim moved toward the true hover value (got %.3f)"):format(trim))
 end)
 
+--- THE REPORTED FLIGHT BUG. However the hover trim gets too high -- an over-eager takeoff ramp, a
+--- stale persisted value, or the quantiser forcing the committed step above hover -- the craft then
+--- sits against the hangar rope and will NOT come down: a tap-down sags and springs back to the roof.
+--- The old learner only adapted the trim while the craft was nearly still AND barely demanding
+--- vertical speed, so a craft pinned several blocks above a commanded hold (a big speed demand, yet
+--- dead still on the rope) taught it nothing and hung there forever. Learning from the HOLD ERROR
+--- instead bleeds the inflated trim down until the craft actually holds the altitude it was given.
+T.it("bleeds an inflated hover trim to hold a slightly lower target, not pin against the ceiling", function()
+  local cfg = simConfig({ control = { altitude = {
+    hoverTrim = 1.0,           -- badly inflated: full thrust at the neutral point
+  } } })
+  local groundY, ceiling = 64, 64 + 6
+  -- heavy craft: hover sits near 0.85, so the inflated trim genuinely overpowers the gentle hold and
+  -- the craft rides the rope (each 1/15 step is a big lurch at this thrust).
+  local plant = Sim.newPlant({ altitude = ceiling, groundY = groundY, ceiling = ceiling,
+    maxThrust = (1.0 * 9.8) / (4 * 0.85) })
+  local m = build(cfg)
+
+  -- A hold target just over a block below the rope -- exactly a tap-down. The gentle rate loop alone
+  -- cannot overcome the inflated trim to reach it (its integral barely winds at this small error), so
+  -- without the anti-pin bleed the craft springs back to the ceiling. With it, the trim bleeds down
+  -- until the craft settles at the commanded height.
+  local target = ceiling - 1.3
+  local trace = Sim.run(m, {
+    cfg = cfg, seconds = 40, plantObject = plant,
+    target = { altitude = target },
+  })
+  local finalErr = Sim.last(trace, "altitude") - target
+  T.isTrue(math.abs(finalErr) < 0.8,
+    ("came off the ceiling and held the commanded (tap-down) target, err %.2f"):format(finalErr))
+  local trim = select(1, m.altitude:learnedTrim())
+  T.isTrue(trim < 0.95, ("and bled the inflated trim down toward hover, got %.3f"):format(trim))
+end)
+
 T.it("on the ground the loop commands nothing at all", function()
   local m = build(simConfig())
   local out, dbg = m.altitude:update({ altitude = 100 },

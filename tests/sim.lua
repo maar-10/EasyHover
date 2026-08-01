@@ -97,6 +97,7 @@ function Sim.newPlant(opts)
   self.angularDamping = opts.angularDamping or 1.2
   self.linearDamping = opts.linearDamping or 0.08
   self.groundY = opts.groundY or 64
+  self.ceiling = opts.ceiling        -- a hard height cap (a mooring rope / hangar roof), or nil
   self.noise = opts.noise or 0
 
   self.y = opts.altitude or 70
@@ -195,6 +196,12 @@ function Plant:step(commands, dt)
     self.pitchRate, self.rollRate = 0, 0
   end
 
+  -- ceiling: a mooring rope or hangar roof arrests upward motion, but does NOT push back down.
+  if self.ceiling and self.y >= self.ceiling then
+    self.y = self.ceiling
+    if self.vy > 0 then self.vy = 0 end
+  end
+
   return self
 end
 
@@ -245,9 +252,15 @@ function Sim.run(modules, opts)
       measured.groundContact = true
     end
 
+    -- The target may vary over the run (a climb command then a hold), so a scenario can drive the
+    -- pilot's stick. ignoreGround is derived exactly as the app does: a positive climb command is a
+    -- takeoff and must be let through the ground guard.
+    local target = (opts.targetAt and opts.targetAt(t)) or opts.target or {}
+    target.ignoreGround = (target.verticalSpeed or 0) > 0
+
     -- outer loop at its own, slower rate
     if i % attitudeEvery == 1 or attitudeEvery == 1 then
-      lastAltOut, lastAltDbg = modules.altitude:update(opts.target or {}, measured,
+      lastAltOut, lastAltDbg = modules.altitude:update(target, measured,
         thisDt * attitudeEvery)
     end
 

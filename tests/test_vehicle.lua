@@ -1197,6 +1197,28 @@ T.it("takeoff ramp climbs toward full, and seeds hoverTrim only at liftoff", fun
     "liftoff seeds hoverTrim = the collective that actually lifted the craft")
 end)
 
+--- The ramp must STOP the moment the craft breaks free of the skids, so it seeds ~hover and not
+--- something near full. Left ramping to full past liftoff it flung the craft at the hangar ceiling
+--- and hung it there (the reported "hold the throttle a little too long and it lifts me into the
+--- ropes"). Once the craft is rising, the ramp holds and the pilot's authority feedforward flies it.
+T.it("the takeoff ramp freezes the instant the craft starts rising", function()
+  local Altitude = require("lib.control.altitude")
+  local alt = Altitude.new(vehicleCfg(), quietLog(), nil)
+  local climb = { verticalSpeed = 4, ignoreGround = true }
+
+  -- dead still on the skids: the ramp builds thrust toward full
+  local a, b
+  for _ = 1, 5 do a = alt:update(climb, { altitude = 74.5, verticalSpeed = 0, groundContact = true }, 0.1) end
+  b = alt:update(climb, { altitude = 74.5, verticalSpeed = 0, groundContact = true }, 0.1)
+  T.isTrue(b.collective > a.collective, "still ramping while dead still on the skids")
+
+  -- now it is rising (broken free, but the ground laser still reads contact for a moment): freeze
+  local c = alt:update(climb, { altitude = 74.6, verticalSpeed = 0.3, groundContact = true }, 0.1)
+  local d = alt:update(climb, { altitude = 74.7, verticalSpeed = 0.3, groundContact = true }, 0.1)
+  T.near(d.collective, c.collective, 1e-9,
+    ("frozen once rising -- no further ramp toward full (%.3f -> %.3f)"):format(c.collective, d.collective))
+end)
+
 --- A silent-but-engaged craft must be explainable: the loop publishes WHY the mixer is holding, so
 --- the cockpit can tell "ready, give it a climb" from "the engine is off" from "actually broken".
 T.it("publishes WHY the mixer is holding, so an engaged-but-silent craft is explained", function()
