@@ -101,7 +101,9 @@ T.it("markSlowDirty pushes it out immediately", function()
   tel:publish(t0)
   local firstSlow = tel.lastSlowAt
   tel:markSlowDirty()
-  tel:publish(t0 + 100)
+  -- Past one fast-frame period (telemetryHz 5 -> 200 ms), NOT a full second: markSlowDirty rides the
+  -- very next frame rather than waiting out the slow-frame interval.
+  tel:publish(t0 + 300)
   T.isTrue(tel.lastSlowAt > firstSlow,
     "a re-scan or re-map does not make the pilot wait a second to see it")
 end)
@@ -343,6 +345,18 @@ T.it("reports what it migrated rather than changing the craft silently", functio
   local changes = Config.migrate(cfg)
   T.eq(#changes, 1, "one change")
   T.isTrue(changes[1]:find("intervalMs") ~= nil, "and it says which: " .. changes[1])
+end)
+
+T.it("lowers a pre-v2 config's telemetryHz so the loop-rate fix does not flood the UI", function()
+  -- Before the loop-rate fix telemetryHz 10 was never actually reached; now it is, and 10 Hz drops
+  -- the UI/NAV computers' clicks. A pre-v2 config is brought to 5, once; a fresh (v2) config is left.
+  local old = Config.withDefaults({ version = 1, tuning = { telemetryHz = 10 } })
+  T.eq(old.tuning.telemetryHz, 5, "an old 10 Hz config is lowered")
+  T.eq(old.version, 2, "and stamped v2 so it is not migrated twice")
+
+  -- A pilot who deliberately picks a rate AFTER the upgrade (already v2) keeps it.
+  local kept = Config.withDefaults({ version = 2, tuning = { telemetryHz = 12 } })
+  T.eq(kept.tuning.telemetryHz, 12, "a post-upgrade choice is respected")
 end)
 
 -- ------------------------------------------------------------------ config paths

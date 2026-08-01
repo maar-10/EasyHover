@@ -78,7 +78,7 @@ end
 
 function Config.defaults()
   return {
-    version = 1,
+    version = 2,
 
     hardware = {
       thrusterTemplate = thrusterTemplate(),
@@ -199,7 +199,7 @@ function Config.defaults()
       attitudeHz = 20,     -- inner loop
       altitudeHz = 5,      -- outer loop: must stay <= attitudeHz/3
       inputHz = 20,
-      telemetryHz = 10,
+      telemetryHz = 5,      -- UI/NAV redraw at ~5 Hz; sending faster only floods their event queues
       dtMinMs = 20,
       dtMaxMs = 250,       -- beyond this the cycle is treated as a stall
       -- write-on-change thresholds: what the thruster module considers "moved"
@@ -548,6 +548,18 @@ function Config.migrate(cfg)
         :format(engine.intervalMs)
       engine.intervalMs = 3600000
     end
+  end
+
+  -- v2: the control loop used to be capped near 1 Hz by a mainThread-timer bug, so telemetryHz = 10
+  -- was never actually reached. With that fixed the loop genuinely sends ~10 Hz, which floods the UI
+  -- and NAV computers and drops their clicks. 5 Hz matches the UI's render rate. One-time and
+  -- version-gated, so a pilot who deliberately raises it after the upgrade keeps their choice.
+  if (cfg.version or 1) < 2 then
+    if type(cfg.tuning) == "table" and cfg.tuning.telemetryHz == 10 then
+      changes[#changes + 1] = "tuning.telemetryHz 10 -> 5 (10 Hz floods the UI now the loop runs at rate)"
+      cfg.tuning.telemetryHz = 5
+    end
+    cfg.version = 2
   end
   return changes
 end
