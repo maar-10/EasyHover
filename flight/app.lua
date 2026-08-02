@@ -209,8 +209,19 @@ end
 --- nil is not evidence, it is the absence of a sensor -- and the pilot, who is standing next to
 --- the craft reading GROUND ONLY on the screen, is a better authority than a guess.
 function App:knownAirborne()
-  local measured = self.state:get("measured") or {}
-  return measured.groundContact == false
+  -- Read the RAW ground channel the sensors actually publish. This used to read a state key
+  -- "measured" that ONLY the tests ever set -- so in flight it was always nil and this always
+  -- returned false, i.e. "on the ground" at any altitude. Harmless for the self test (which
+  -- inverts it and just stayed permissive) but it made CoM leveling refuse to start forever.
+  return self.state:get("ground.contact") == false
+end
+
+--- Not POSITIVELY on the ground: `false` (laser says we are up) OR `nil` (no reading -- typically
+--- because we are too high for the down laser to see a surface). Only a positive `true` is refused.
+--- Used where a missing ground reading should NOT block a passive, thrust-free tool -- unlike
+--- knownAirborne, which demands positive evidence because it gates things that command thrust.
+function App:notOnGround()
+  return self.state:get("ground.contact") ~= true
 end
 
 function App:devices()
@@ -520,7 +531,9 @@ function App:cycleBody(dt)
       -- The pilot must not be commanding a tilt: we can only read the CoM trim from a HANDS-OFF
       -- level hold, where the loop's steady torque is the CoM load and nothing else.
       levelDemand = math.abs(limited.pitch or 0) < 0.5 and math.abs(limited.roll or 0) < 0.5,
-      airborne = (self.state:get("ground.contact") == false),
+      -- notOnGround (nil OR false): a high hover reads nil from the down laser, and observe only
+      -- runs while the mixer is flying anyway, so a positive `true` is the only real "grounded".
+      airborne = self:notOnGround(),
     }, dt)
   end
 
@@ -1122,7 +1135,10 @@ function App:handleCommand(cmd)
       if not self.engine.master then
         return false, { error = "engine master is off", errorShort = "ENGINE OFF" }
       end
-      if not self:knownAirborne() then
+      -- notOnGround, not knownAirborne: this is a passive tool that commands nothing, and a craft
+      -- hovering high enough that the down laser sees no surface reads ground.contact = nil, not
+      -- false. Refuse only when the laser POSITIVELY says we are on the ground.
+      if not self:notOnGround() then
         return false, { error = "get airborne and hover first", errorShort = "ON GROUND" }
       end
       self.comLevel:start()
