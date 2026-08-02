@@ -165,9 +165,9 @@
         },
         {
           ["dst"] = "flight/lib/io/sensors.lua",
-          ["size"] = 12563,
+          ["size"] = 13397,
           ["src"] = "flight/lib/io/sensors.lua",
-          ["sum"] = "0df3cabe",
+          ["sum"] = "77119a96",
         },
         {
           ["dst"] = "flight/lib/io/thrusters.lua",
@@ -624,5 +624,5 @@
     ["size"] = 37557,
     ["sum"] = "e26e319d",
   },
-  ["version"] = "a6c884f9",
+  ["version"] = "6031ef7c",
 }

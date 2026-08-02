@@ -67,6 +67,21 @@ function Sensors:readAttitude()
   local angles = safeCall(self, dev, "getAngles", "gimbal")
   if type(angles) ~= "table" then return nil end
 
+  -- RAW gimbal output, before any index/sign mapping -- the ground truth for wiring up pitch/roll.
+  -- Tilt the craft a known way and watch which numbered element moves, and which sign: that element
+  -- is that axis. The config's pitchIndex/rollIndex/invert must match what this shows. Throttled.
+  if self.log then
+    local parts = {}
+    for i = 1, #angles do
+      local v = type(angles[i]) == "number" and angles[i] or 0
+      parts[i] = ("%d=%+.1f"):format(i, v)
+    end
+    self.log:throttled("gimbalraw", 2000, "info", "gimbal raw: [%s]  (cfg pitch=idx%s%s roll=idx%s%s)",
+      table.concat(parts, "  "),
+      tostring(self.cfg.sensors.gimbal.pitchIndex), self.cfg.sensors.gimbal.pitchInvert and " inv" or "",
+      tostring(self.cfg.sensors.gimbal.rollIndex), self.cfg.sensors.gimbal.rollInvert and " inv" or "")
+  end
+
   local g = self.cfg.sensors.gimbal
   local function element(index, invert, filter)
     if not index or index < 1 then return nil end
