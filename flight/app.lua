@@ -726,6 +726,17 @@ function App:recordLoop(execMs, dt)
   self.log:throttled("loopphases", 2000, "info",
     "  phases sense %.0f  ctrl %.0f  write %.0f ms  [pIO %s]",
     st.sensorEma, st.controlEma, st.writeEma, self.cfg.tuning.parallelIO and "on" or "off")
+  -- ATTITUDE POLARITY CHECK. What the gimbal actually reports, with the sign convention the control
+  -- loop REQUIRES spelled out inline. A two-axis flip means the gimbal reads tilt backwards; tip the
+  -- craft a known way and read this: nose-up must show PCH positive, right-wing-down must show RLL
+  -- positive. If either reads the wrong sign, that axis's gimbal invert is wrong -- and that is the
+  -- runaway. (The loop can never detect this itself: its command is always consistent with what it
+  -- MEASURES; the error is between the measurement and the world.)
+  local mp, mr = self.state:get("attitude.pitch"), self.state:get("attitude.roll")
+  if type(mp) == "number" and type(mr) == "number" then
+    self.log:throttled("attreadout", 2000, "info",
+      "  att PCH %+.1f  RLL %+.1f deg  (want: nose-up=PCH+, right-wing-down=RLL+)", mp, mr)
+  end
 end
 
 -- ---------------------------------------------------------------- commands
