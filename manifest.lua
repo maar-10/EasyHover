@@ -533,9 +533,9 @@
         },
         {
           ["dst"] = "ui_main/app.lua",
-          ["size"] = 14805,
+          ["size"] = 14909,
           ["src"] = "ui_main/app.lua",
-          ["sum"] = "a7eb87c3",
+          ["sum"] = "985f4e89",
         },
         {
           ["dst"] = "ui_main/lib/config.lua",
@@ -569,9 +569,9 @@
         },
         {
           ["dst"] = "ui_main/ui/nav.lua",
-          ["size"] = 47533,
+          ["size"] = 53178,
           ["src"] = "ui_main/ui/nav.lua",
-          ["sum"] = "023b8ab5",
+          ["sum"] = "3c1e4b11",
         },
         {
           ["dst"] = "ui_main/ui/overhead.lua",
@@ -636,5 +636,5 @@
     ["size"] = 37557,
     ["sum"] = "e26e319d",
   },
-  ["version"] = "efbd8b8b",
+  ["version"] = "51e0ce9f",
 }

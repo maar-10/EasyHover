@@ -119,6 +119,7 @@ local function sent()
     end,
     selfTest = function(action) out[#out + 1] = { cmd = "selfTest", action = action } end,
     comLevel = function(action) out[#out + 1] = { cmd = "comLevel", action = action } end,
+    sensorCal = function(action) out[#out + 1] = { cmd = "sensorCal", action = action } end,
     dayNight = function() out[#out + 1] = { cmd = "dayNight" } end,
     setHeadingSource = function(s) out[#out + 1] = { cmd = "setHeadingSource", source = s } end,
     setNavTable = function(p) out[#out + 1] = { cmd = "setNavTable", peripheral = p } end,
@@ -1368,7 +1369,7 @@ T.it("the BIT/CONF menu entries stay readable and on-screen at every width", fun
     local panel = navRig(width, size[2])
     panel.update(navModel())
     local labels = { ["FCS TEST"] = false, ["SELF TEST"] = false,
-      ["AXIS MAP"] = false, ["CoM LEVEL"] = false }
+      ["AXIS MAP"] = false, ["SENSOR CAL"] = false, ["CoM LEVEL"] = false }
     for _, button in ipairs(panel.buttons or {}) do
       local text = button:getText()
       T.notNil(labels[text], ("%dx%d: %q is not a full label"):format(width, size[2], text))
@@ -1459,6 +1460,71 @@ T.it("the three buttons send start, accept and discard", function()
   T.eq(commands[1].cmd, "comLevel"); T.eq(commands[1].action, "start", "START -> start")
   T.eq(commands[2].action, "accept", "ACCEPT -> accept")
   T.eq(commands[3].action, "discard", "DISCARD -> discard")
+end)
+
+-- ---------------------------------------------------- nav: SENSOR CAL
+
+local function calModel(sc)
+  local m = navModel()
+  m.telemetry.sensorCal = sc
+  return m
+end
+
+T.it("idle: CHECK asks the craft; START lights and begins only when ready", function()
+  local panel, commands = navRig()
+  panel.update(calModel({ state = "idle" }))
+  T.eq(panel.elements.calPrimary:getText(), "CHECK", "primary is CHECK when idle")
+  click(panel.elements.calPrimary)
+  T.eq(commands[#commands].cmd, "sensorCal", "sends a sensorCal command")
+  T.eq(commands[#commands].action, "checkReady", "CHECK -> checkReady")
+
+  -- Not ready: START is not green, and the failing prerequisite is named.
+  panel.update(calModel({ state = "idle", ready = { ok = false, checks = {
+    { name = "on ground", ok = false, detail = "put it on the pad" } } } }))
+  T.eq(panel.elements.calSecondary:getBackground(), Theme.buttonBg, "START is not green when not ready")
+  T.isTrue(panel.elements.calChecks:getText():find("on ground") ~= nil,
+    "names the failing prerequisite: " .. panel.elements.calChecks:getText())
+
+  -- Ready: START lights and sends start.
+  panel.update(calModel({ state = "idle", ready = { ok = true, checks = {} } }))
+  T.eq(panel.elements.calSecondary:getBackground(), Theme.ok, "START lights green when ready")
+  click(panel.elements.calSecondary)
+  T.eq(commands[#commands].action, "start", "START -> start")
+end)
+
+T.it("running: shows the step, CONFIRM advances (green only when detected), RETRY re-arms", function()
+  local panel, commands = navRig()
+  panel.update(calModel({ state = "running", stepIndex = 2, stepCount = 6,
+    prompt = "Pitch the NOSE UP", detected = false }))
+  T.isTrue(panel.elements.calStep:getText():find("STEP 2/6") ~= nil,
+    "shows which step: " .. panel.elements.calStep:getText())
+  T.eq(panel.elements.calPrimary:getText(), "CONFIRM", "primary is CONFIRM while running")
+  T.eq(panel.elements.calPrimary:getBackground(), Theme.buttonBg,
+    "CONFIRM is not green until the craft reports a reading")
+
+  panel.update(calModel({ state = "running", stepIndex = 2, stepCount = 6,
+    prompt = "Pitch the NOSE UP", detected = true }))
+  T.eq(panel.elements.calPrimary:getBackground(), Theme.ok, "CONFIRM lights once a change is detected")
+  click(panel.elements.calPrimary)
+  T.eq(commands[#commands].action, "confirm", "CONFIRM -> confirm")
+  click(panel.elements.calSecondary)
+  T.eq(commands[#commands].action, "retry", "RETRY -> retry")
+end)
+
+T.it("review: APPLY writes the mapping and there is no secondary", function()
+  local panel, commands = navRig()
+  panel.update(calModel({ state = "review" }))
+  T.eq(panel.elements.calPrimary:getText(), "APPLY", "primary is APPLY at review")
+  T.isFalse(panel.elements.calSecondary:getVisible(), "no RETRY/START to offer at review")
+  click(panel.elements.calPrimary)
+  T.eq(commands[#commands].action, "apply", "APPLY -> apply")
+end)
+
+T.it("ABORT cancels the run from any state", function()
+  local panel, commands = navRig()
+  panel.update(calModel({ state = "running", stepIndex = 3, stepCount = 6, prompt = "x" }))
+  click(panel.elements.calAbort)
+  T.eq(commands[#commands].cmd, "sensorCal"); T.eq(commands[#commands].action, "abort", "ABORT -> abort")
 end)
 
 -- ---------------------------------------------------- nav: nozzle axis map

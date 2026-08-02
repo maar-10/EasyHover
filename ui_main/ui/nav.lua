@@ -207,8 +207,8 @@ function Nav.build(frame, opts)
     return p
   end
 
-  local navPage, bitPage, fcsPage, selfPage, axisPage, comPage =
-    page(), page(), page(), page(), page(), page()
+  local navPage, bitPage, fcsPage, selfPage, axisPage, comPage, calPage =
+    page(), page(), page(), page(), page(), page(), page()
   navPage:setVisible(true)
 
   local function show(target)
@@ -278,6 +278,7 @@ function Nav.build(frame, opts)
     { "FCS TEST", function() show(fcsPage) end },
     { "SELF TEST", function() show(selfPage) end },
     { "AXIS MAP", function() show(axisPage) end },
+    { "SENSOR CAL", function() show(calPage) end },
     { "CoM LEVEL", function() show(comPage) end },
   }
   local testButtons = {}
@@ -440,6 +441,109 @@ function Nav.build(frame, opts)
       local long = tostring(detail.error or "REFUSED")
       comStatus:setText(Theme.fit(#long <= width and long or tostring(detail.errorShort or long), width))
       comStatus:setForeground(Theme.warning)
+    end
+  end
+
+  -- --------------------------------------------------------------- sensor cal
+  --
+  -- Guided sensor calibration. CHECK the prerequisites, START, then a fixed sequence of moves the
+  -- operator does BY HAND and CONFIRMs, and finally APPLY. Reported state only: every line is the
+  -- craft's own sensorCal facts, never what a button asked for. The craft owns the detection; this
+  -- screen only relays it and sends the six commands.
+  Theme.line(calPage, 1, width, Theme.centre("SENSOR CAL", width), Theme.accent)
+  -- Mandatory: title, the step/ready line, the craft's detail, the button row, BACK. Extras spent.
+  local calSpare = height - (1 + 1 + 1 + 1 + 1)
+  local qk = 2
+  local function takeCal() local r = qk; qk = qk + 1; return r end
+  local calWarn = optionalLine(calPage, calSpare >= 1 and takeCal() or nil,
+    "GROUND, DISARMED", Theme.caution)
+  local calStep = Theme.line(calPage, takeCal(), width, "", Theme.fg)
+  local calStatus = Theme.line(calPage, takeCal(), width, "", Theme.dim)
+  local calChecks = optionalLine(calPage, calSpare >= 2 and takeCal() or nil, "", Theme.warning)
+  if calSpare >= 3 then Theme.rule(calPage, takeCal(), width) end
+
+  -- Context buttons share the second-last row: a PRIMARY (CHECK / CONFIRM / APPLY, by state) and a
+  -- SECONDARY (START / RETRY). Each handler reads the live state so one button serves every phase.
+  local calSecX = math.max(1, width - 8)
+  local calPrimary = Theme.button(calPage, 1, height - 1,
+    math.max(4, math.min(9, calSecX - 2)), "CHECK", function()
+      local st = (live.sensorCal or {}).state or "idle"
+      if st == "running" then actions.sensorCal("confirm")
+      elseif st == "review" then actions.sensorCal("apply")
+      else actions.sensorCal("checkReady") end
+    end)
+  local calSecondary = Theme.button(calPage, calSecX, height - 1, 9, "START", function()
+      local st = (live.sensorCal or {}).state or "idle"
+      if st == "running" then actions.sensorCal("retry")
+      elseif st ~= "review" then actions.sensorCal("start") end
+    end)
+  Theme.button(calPage, 1, height, math.min(6, width), "BACK", function() show(bitPage) end)
+  local calAbort = Theme.button(calPage, math.max(8, width - 7), height, 8, "ABORT",
+    function() actions.sensorCal("abort") end)
+
+  --- Reflect the craft's sensorCal facts. START lights green only when the LAST check said ready;
+  --- CONFIRM lights green only when the craft reports a detected reading -- never on hope.
+  local function refreshCal()
+    local c = live.sensorCal or {}
+    local state = tostring(c.state or "idle")
+
+    if state == "running" then
+      local n = ("%s/%s"):format(tostring(c.stepIndex or "?"), tostring(c.stepCount or "?"))
+      calStep:setText(Theme.fit("STEP " .. n .. " " .. tostring(c.prompt or ""), width))
+      calStep:setForeground(Theme.accent)
+    elseif state == "review" then
+      calStep:setText(Theme.fit("REVIEW -- APPLY to save", width))
+      calStep:setForeground(Theme.ok)
+    elseif c.ready then
+      calStep:setText(Theme.fit(c.ready.ok and "READY -- press START" or "NOT READY", width))
+      calStep:setForeground(c.ready.ok and Theme.ok or Theme.warning)
+    else
+      calStep:setText(Theme.fit("press CHECK READY", width))
+      calStep:setForeground(Theme.dim)
+    end
+    calStatus:setText(Theme.fit((not live.stale) and tostring(c.detail or "") or "", width))
+    calStatus:setForeground(Theme.dim)
+
+    -- The first failing prerequisite, so the operator knows exactly what to fix.
+    if calChecks then
+      local msg = ""
+      if state == "idle" and c.ready and c.ready.checks then
+        for _, chk in ipairs(c.ready.checks) do
+          if not chk.ok then
+            msg = ("x %s: %s"):format(tostring(chk.name), tostring(chk.detail or "")); break
+          end
+        end
+      end
+      calChecks:setText(Theme.fit(msg, width))
+    end
+
+    if state == "running" then
+      calPrimary:setText("CONFIRM")
+      local can = c.detected == true
+      calPrimary:setBackground(can and Theme.ok or Theme.buttonBg)
+      calPrimary:setForeground(can and colours.black or Theme.buttonFg)
+      calSecondary:setVisible(true); calSecondary:setText("RETRY")
+      calSecondary:setBackground(Theme.buttonBg); calSecondary:setForeground(Theme.buttonFg)
+    elseif state == "review" then
+      calPrimary:setText("APPLY")
+      calPrimary:setBackground(Theme.ok); calPrimary:setForeground(colours.black)
+      calSecondary:setVisible(false)
+    else
+      calPrimary:setText("CHECK")
+      calPrimary:setBackground(Theme.buttonBg); calPrimary:setForeground(Theme.buttonFg)
+      calSecondary:setVisible(true); calSecondary:setText("START")
+      local ready = c.ready and c.ready.ok
+      calSecondary:setBackground(ready and Theme.ok or Theme.buttonBg)
+      calSecondary:setForeground(ready and colours.black or Theme.buttonFg)
+    end
+
+    -- A refusal is the craft's to word (not ready / nothing to apply / do the move first).
+    local ack = opts.lastAck and opts.lastAck()
+    if ack and ack.cmd == "sensorCal" and ack.ack == false then
+      local d = ack.detail or {}
+      local long = tostring(d.error or "REFUSED")
+      calStatus:setText(Theme.fit(#long <= width and long or tostring(d.errorShort or long), width))
+      calStatus:setForeground(Theme.warning)
     end
   end
 
@@ -768,6 +872,7 @@ function Nav.build(frame, opts)
     live.thrusterAxes = t.thrusterAxes or {}
     live.axisMap = t.axisMap or {}
     live.comLevel = t.comLevel or {}
+    live.sensorCal = t.sensorCal or {}
 
     -- Only refresh a subpage's elements when it is the page IN VIEW. The axis map (24 buttons) and the
     -- nav view were all being rebuilt every frame even while hidden, which is redraw cost spent on
@@ -777,6 +882,7 @@ function Nav.build(frame, opts)
     local showAll = opts.renderAll
     if showAll or axisPage:getVisible() then refreshAxisRows() end
     if showAll or comPage:getVisible() then refreshCom() end
+    if showAll or calPage:getVisible() then refreshCal() end
     if showAll or navPage:getVisible() then refreshNav(model) end
 
     -- ---- FCS
@@ -960,7 +1066,7 @@ function Nav.build(frame, opts)
     bitButton = bitButton,
     stacked = stacked,
     pages = { nav = navPage, bit = bitPage, fcs = fcsPage, selfTest = selfPage,
-      axisMap = axisPage, comLevel = comPage },
+      axisMap = axisPage, comLevel = comPage, sensorCal = calPage },
     axisRows = axisRows,
     bars = bars,
     elements = {
@@ -974,6 +1080,8 @@ function Nav.build(frame, opts)
       comStatus = comStatus, comDetail = comDetail, comTrim = comTrimLine,
       comProposal = comProposal, comStart = comStart, comAccept = comAccept,
       comDiscard = comDiscard, comWarn = comWarn,
+      calStep = calStep, calStatus = calStatus, calChecks = calChecks,
+      calPrimary = calPrimary, calSecondary = calSecondary, calAbort = calAbort, calWarn = calWarn,
       headingTape = headingTapeLine, headingDetail = headingDetail, hwAnnun = hwAnnun,
       navPos = navPosLine, navInfo = navInfoLine, times = timesLine,
       dayNight = dayNightButton,

@@ -92,6 +92,7 @@ function App:buildActions()
     end,
     selfTest = function(action) link:send({ cmd = "selfTest", action = action or "start" }) end,
     comLevel = function(action) link:send({ cmd = "comLevel", action = action or "start" }) end,
+    sensorCal = function(action) link:send({ cmd = "sensorCal", action = action or "checkReady" }) end,
     vectorHold = function(action, id, axis, sign, direction)
       link:send({ cmd = "vectorHold", action = action or "latch", id = id or "",
                   axis = axis or "x", sign = sign or 1, direction = direction or "" })
