@@ -94,16 +94,18 @@ local SECTION_SLOTS = {
     { key = "rl", label = "RL", title = "LAT REAR L", hint = "precision" },
     { key = "rr", label = "RR", title = "LAT REAR R", hint = "precision" },
   }) },
-  -- NAMED BY WHAT THEY MEASURE, not by an axis letter. x/y/z depend on whose convention you
-  -- are using and which way the sensor is bolted on; "medial" is unambiguous. The keys stay
-  -- x/y/z because that is what the control code reads (velocity.x, velocity.z).
+  -- NAMED BY POSITION, not by an axis letter. The keys are the Config.VELOCITY_ROLES: one MEDIAL
+  -- (fore/aft) sensor, and TWO lateral sensors -- front and rear -- whose mean is sideways drift
+  -- and whose difference is yaw rate. There is no vertical slot: vertical speed comes from the
+  -- barometer, never a velocity sensor. SENSOR CAL is the guided way to fill these; this is the
+  -- manual fallback. (SENSOR CAL also fixes each sensor's sign, which this picker leaves alone.)
   velocity = { source = "velocity", hint = "velocity sensor", slots = {
-    { kind = "velocity", key = "z", label = "MEDIAL", title = "MEDIAL VEL",
+    { kind = "velocity", key = "medial", label = "MEDIAL", title = "MEDIAL VEL",
       hint = "forward / back" },
-    { kind = "velocity", key = "x", label = "LATERAL", title = "LATERAL VEL",
-      hint = "left / right" },
-    { kind = "velocity", key = "y", label = "VERTICAL", title = "VERTICAL VEL",
-      hint = "up / down" },
+    { kind = "velocity", key = "lateralFront", label = "LAT FRONT", title = "LAT FRONT VEL",
+      hint = "front, left / right" },
+    { kind = "velocity", key = "lateralRear", label = "LAT REAR", title = "LAT REAR VEL",
+      hint = "rear, left / right" },
   } },
   attitude = { hint = "sensor", slots = {
     { kind = "altitude", key = "sensor", label = "ALT", title = "ALTIMETER",

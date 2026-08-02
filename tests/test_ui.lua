@@ -987,18 +987,19 @@ T.it("accel has no corners, so its extras are just numbered further (M5..M8)", f
   T.eq(byKey["x1"].kind, "main", "still main thrusters")
 end)
 
-T.it("velocity axes are named by WHAT THEY MEASURE, not by a letter", function()
-  -- x/y/z depends on whose convention you use and which way the sensor is bolted on. The keys
-  -- stay x/y/z because the control code reads velocity.x and velocity.z.
+T.it("velocity sensors are named by POSITION, and there is no vertical slot", function()
+  -- The keys are the Config.VELOCITY_ROLES: one medial (fore/aft) and TWO laterals (front + rear),
+  -- whose mean is drift and whose difference is yaw rate. Vertical speed is baro-derived, so there
+  -- is deliberately no vertical velocity slot to bolt a sensor onto.
   local byKey = {}
   for _, slot in ipairs(ConfigPanel.SECTION_SLOTS.velocity.slots) do byKey[slot.key] = slot end
-  T.eq(byKey.z.label, "MEDIAL", "forward/back is medial")
-  T.eq(byKey.z.hint, "forward / back", "and says so")
-  T.eq(byKey.x.label, "LATERAL", "sideways is lateral")
-  T.eq(byKey.x.hint, "left / right", "and says so")
-  T.eq(byKey.y.label, "VERTICAL", "spelled in full -- an abbreviation reads as a typo")
-  T.eq(byKey.y.hint, "up / down", "and vertical says so")
-  T.eq(ConfigPanel.SECTION_SLOTS.velocity.slots[1].key, "z",
+  T.eq(byKey.medial.label, "MEDIAL", "forward/back is medial")
+  T.eq(byKey.medial.hint, "forward / back", "and says so")
+  T.eq(byKey.lateralFront.label, "LAT FRONT", "front side-facing sensor")
+  T.eq(byKey.lateralRear.label, "LAT REAR", "rear side-facing sensor")
+  T.isNil(byKey.y, "no vertical slot -- vertical speed comes from the barometer")
+  T.isNil(byKey.vertical, "no vertical slot under any spelling")
+  T.eq(ConfigPanel.SECTION_SLOTS.velocity.slots[1].key, "medial",
     "medial is offered first -- it is the one the brake law needs most")
 end)
 

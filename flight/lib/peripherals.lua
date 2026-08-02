@@ -151,11 +151,12 @@ function Peripherals:scan()
     local dev = safeWrap(entry.peripheral)
     if dev then
       self.sensors.velocityVector[#self.sensors.velocityVector + 1] = {
-        name = entry.peripheral, dev = dev, axis = entry.axis, invert = entry.invert and true or false,
+        name = entry.peripheral, dev = dev, axis = entry.axis, role = entry.role,
+        invert = entry.invert and true or false,
       }
     else
       self.missing[#self.missing + 1] =
-        ("velocity axis %s (%s: not present)"):format(tostring(entry.axis), tostring(entry.peripheral))
+        ("velocity %s (%s: not present)"):format(tostring(entry.role or entry.axis), tostring(entry.peripheral))
       self.log:warn("velocityVector[%d] (%s) missing", i, tostring(entry.peripheral))
     end
   end

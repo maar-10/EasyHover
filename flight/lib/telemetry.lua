@@ -135,8 +135,11 @@ local function slotView(cfg)
     end
   end
   for _, entry in ipairs(cfg.hardware.sensors.velocityVector or {}) do
-    if entry.axis and entry.peripheral ~= "" then
-      slots["velocity:" .. entry.axis] = entry.peripheral
+    -- Keyed by ROLE when it has one -- two lateral sensors share axis x, so an axis key would
+    -- collide and hide one of them. A legacy entry still keys by its bare axis.
+    local slot = entry.role or entry.axis
+    if slot and entry.peripheral ~= "" then
+      slots["velocity:" .. slot] = entry.peripheral
     end
   end
   for _, entry in ipairs(cfg.hardware.sensors.optical or {}) do
@@ -271,6 +274,7 @@ function Telemetry:build(extra, includeSlow)
       scalar = s:get("speed.scalar"),
       x = s:get("velocity.x"),
       z = s:get("velocity.z"),
+      yawRate = s:get("velocity.yawRate"),
       horizontal = s:get("velocity.horizontal"),
       capability = s:get("velocity.capability"),
     },

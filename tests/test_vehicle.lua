@@ -693,10 +693,15 @@ T.it("a config with one nozzle in two slots is REFUSED, as a backstop", function
   T.containsMatch(errors, "already assigned", "and says which: " .. table.concat(errors, "; "))
 end)
 
-T.it("assigns velocity axes, the altimeter, the gimbal and a laser direction", function()
+T.it("assigns velocity roles, the altimeter, the gimbal and a laser direction", function()
   local app, path = appRig()
-  T.isTrue((app:handleCommand({ cmd = "setSlot", kind = "velocity", key = "z",
-    peripheral = "velocity_sensor_0" })), "velocity z")
+  T.isTrue((app:handleCommand({ cmd = "setSlot", kind = "velocity", key = "medial",
+    peripheral = "velocity_sensor_0" })), "velocity medial")
+  -- Two lateral sensors legitimately share axis x -- distinguished by role, they must COEXIST.
+  T.isTrue((app:handleCommand({ cmd = "setSlot", kind = "velocity", key = "lateralFront",
+    peripheral = "velocity_sensor_1" })), "velocity lateralFront")
+  T.isTrue((app:handleCommand({ cmd = "setSlot", kind = "velocity", key = "lateralRear",
+    peripheral = "velocity_sensor_2" })), "velocity lateralRear")
   T.isTrue((app:handleCommand({ cmd = "setSlot", kind = "altitude", key = "sensor",
     peripheral = "altitude_sensor_0" })), "altimeter")
   T.isTrue((app:handleCommand({ cmd = "setSlot", kind = "gimbal", key = "sensor",
@@ -704,10 +709,21 @@ T.it("assigns velocity axes, the altimeter, the gimbal and a laser direction", f
   T.isTrue((app:handleCommand({ cmd = "setSlot", kind = "optical", key = "forward",
     peripheral = "optical_sensor_0" })), "forward laser")
 
-  T.eq(app.cfg.hardware.sensors.velocityVector[1].axis, "z", "axis recorded")
+  local vv = app.cfg.hardware.sensors.velocityVector
+  T.eq(#vv, 3, "all three velocity sensors survive -- roles do not collide")
+  local byRole = {}
+  for _, e in ipairs(vv) do byRole[e.role] = e end
+  T.eq(byRole.lateralFront.axis, "x", "lateralFront senses x")
+  T.eq(byRole.lateralRear.axis, "x", "lateralRear senses x too")
+  T.eq(byRole.medial.axis, "z", "medial senses z")
   T.eq(app.cfg.hardware.sensors.altitude, "altitude_sensor_0", "altimeter recorded")
   T.eq(app.cfg.hardware.sensors.gimbal, "gimbal_sensor_0", "gimbal recorded")
   T.eq(app.cfg.hardware.sensors.optical[1].direction, "forward", "direction recorded")
+
+  -- Reassigning a role REPLACES that role's sensor, and never touches the other lateral.
+  T.isTrue((app:handleCommand({ cmd = "setSlot", kind = "velocity", key = "lateralFront",
+    peripheral = "velocity_sensor_1" })), "re-set lateralFront")
+  T.eq(#app.cfg.hardware.sensors.velocityVector, 3, "still three, not four")
   fs.delete(path)
 end)
 

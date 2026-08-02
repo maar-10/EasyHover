@@ -25,8 +25,9 @@ local vehicle = {
   roll       = -0.75,
   yaw        = 132.0,
   angles     = nil,   -- set to override the gimbal return outright
-  speed      = 0.0,   -- read by velocity_sensor_0 (craft +z / forward)
-  lateralSpeed = 0.0, -- read by velocity_sensor_1 (craft +x / right)
+  speed      = 0.0,   -- read by velocity_sensor_0 (craft +z / forward = medial)
+  lateralSpeed = 0.0, -- read by velocity_sensor_1 (craft +x / right = lateral front)
+  lateralRearSpeed = 0.0, -- read by velocity_sensor_2 (craft +x / right = lateral rear)
   groundDist = 2.5,
   groundBlock = "minecraft:grass_block",
   tick       = 0,
@@ -224,12 +225,16 @@ local function defaultDevices()
 
   d["altitude_sensor_0"] = { type = "altitude_sensor", dev = M.altitudeSensor() }
   d["gimbal_sensor_0"] = { type = "gimbal_sensor", dev = M.gimbalSensor() }
-  -- two velocity sensors on different axes: what a velocity VECTOR needs
+  -- three velocity sensors: a medial (fore/aft) and two lateral (front + rear), which is what the
+  -- role-based velocity VECTOR needs -- the lateral pair gives both sideways drift and yaw rate.
   d["velocity_sensor_0"] = { type = "velocity_sensor", dev = {
     getVelocity = function() return vehicle.speed end,
   } }
   d["velocity_sensor_1"] = { type = "velocity_sensor", dev = {
     getVelocity = function() return vehicle.lateralSpeed end,
+  } }
+  d["velocity_sensor_2"] = { type = "velocity_sensor", dev = {
+    getVelocity = function() return vehicle.lateralRearSpeed end,
   } }
   d["optical_sensor_0"] = { type = "optical_sensor", dev = M.opticalSensor() }
   d["navigation_table_0"] = { type = "navigation_table", dev = {

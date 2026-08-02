@@ -27,9 +27,9 @@
       ["files"] = {
         {
           ["dst"] = "flight/app.lua",
-          ["size"] = 71785,
+          ["size"] = 72468,
           ["src"] = "flight/app.lua",
-          ["sum"] = "ce1785c1",
+          ["sum"] = "1b060172",
         },
         {
           ["dst"] = "flight/diskmenu.lua",
@@ -39,9 +39,9 @@
         },
         {
           ["dst"] = "flight/lib/config.lua",
-          ["size"] = 49315,
+          ["size"] = 52002,
           ["src"] = "flight/lib/config.lua",
-          ["sum"] = "e36c9232",
+          ["sum"] = "cedd17ba",
         },
         {
           ["dst"] = "flight/lib/control/altitude.lua",
@@ -171,9 +171,9 @@
         },
         {
           ["dst"] = "flight/lib/io/sensors.lua",
-          ["size"] = 13469,
+          ["size"] = 14831,
           ["src"] = "flight/lib/io/sensors.lua",
-          ["sum"] = "e0a15241",
+          ["sum"] = "f45a706b",
         },
         {
           ["dst"] = "flight/lib/io/thrusters.lua",
@@ -195,9 +195,9 @@
         },
         {
           ["dst"] = "flight/lib/peripherals.lua",
-          ["size"] = 13005,
+          ["size"] = 13041,
           ["src"] = "flight/lib/peripherals.lua",
-          ["sum"] = "1b246235",
+          ["sum"] = "3919b206",
         },
         {
           ["dst"] = "flight/lib/state.lua",
@@ -207,9 +207,9 @@
         },
         {
           ["dst"] = "flight/lib/telemetry.lua",
-          ["size"] = 18835,
+          ["size"] = 19084,
           ["src"] = "flight/lib/telemetry.lua",
-          ["sum"] = "0df13e96",
+          ["sum"] = "f64f3ab4",
         },
         {
           ["dst"] = "flight/lib/util.lua",
@@ -557,9 +557,9 @@
         },
         {
           ["dst"] = "ui_main/ui/config_panel.lua",
-          ["size"] = 39129,
+          ["size"] = 39395,
           ["src"] = "ui_main/ui/config_panel.lua",
-          ["sum"] = "c37cad63",
+          ["sum"] = "c9b77a1f",
         },
         {
           ["dst"] = "ui_main/ui/nav.lua",
@@ -630,5 +630,5 @@
     ["size"] = 37557,
     ["sum"] = "e26e319d",
   },
-  ["version"] = "311d5b23",
+  ["version"] = "c9f9b73c",
 }

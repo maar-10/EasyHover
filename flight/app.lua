@@ -931,13 +931,26 @@ function App:handleSetSlot(cmd)
     end
 
   elseif kind == "velocity" then
-    if key ~= "x" and key ~= "y" and key ~= "z" then
-      return false, { errors = { "velocity axis must be x, y or z" } }
-    end
-    dropWhere(sensors.velocityVector, "axis", key)
-    if name ~= "" then
-      sensors.velocityVector[#sensors.velocityVector + 1] =
-        { peripheral = name, axis = key, invert = false }
+    local roleAxis = Config.VELOCITY_ROLES[key]
+    if roleAxis then
+      -- Role slot (lateralFront|lateralRear|medial): unique per role, carries its fixed axis.
+      dropWhere(sensors.velocityVector, "role", key)
+      if name ~= "" then
+        sensors.velocityVector[#sensors.velocityVector + 1] =
+          { peripheral = name, role = key, axis = roleAxis, invert = false }
+      end
+    elseif key == "x" or key == "y" or key == "z" then
+      -- Legacy axis slot: only touch entries that have NO role, so it can't wipe a role pair.
+      for i = #sensors.velocityVector, 1, -1 do
+        local e = sensors.velocityVector[i]
+        if e.role == nil and e.axis == key then table.remove(sensors.velocityVector, i) end
+      end
+      if name ~= "" then
+        sensors.velocityVector[#sensors.velocityVector + 1] =
+          { peripheral = name, axis = key, invert = false }
+      end
+    else
+      return false, { errors = { "velocity slot must be lateralFront, lateralRear, medial (or x/y/z)" } }
     end
 
   elseif kind == "optical" then

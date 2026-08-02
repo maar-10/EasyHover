@@ -168,6 +168,49 @@ T.it("a missing yaw index warns rather than blocks", function()
   T.containsMatch(warnings, "heading fallback", "yaw warning")
 end)
 
+T.it("a role-based velocity vector (front + rear + medial) validates", function()
+  local cfg = goodConfig()
+  cfg.hardware.sensors.velocityVector = {
+    { peripheral = "velocity_sensor_0", role = "medial", axis = "z" },
+    { peripheral = "velocity_sensor_1", role = "lateralFront", axis = "x" },
+    { peripheral = "velocity_sensor_2", role = "lateralRear", axis = "x" },
+  }
+  local ok, errors = Config.validate(cfg)
+  T.isTrue(ok, "two x-laterals coexist by role: " .. table.concat(errors, "; "))
+end)
+
+T.it("a duplicated velocity role is rejected", function()
+  local cfg = goodConfig()
+  cfg.hardware.sensors.velocityVector = {
+    { peripheral = "velocity_sensor_1", role = "lateralFront", axis = "x" },
+    { peripheral = "velocity_sensor_2", role = "lateralFront", axis = "x" },
+  }
+  local ok, errors = Config.validate(cfg)
+  T.isFalse(ok, "should reject")
+  T.containsMatch(errors, "role lateralFront is already mapped", "duplicate role error")
+end)
+
+T.it("a velocity role whose axis contradicts its position is rejected", function()
+  local cfg = goodConfig()
+  cfg.hardware.sensors.velocityVector = {
+    { peripheral = "velocity_sensor_1", role = "lateralFront", axis = "z" },
+  }
+  local ok, errors = Config.validate(cfg)
+  T.isFalse(ok, "should reject")
+  T.containsMatch(errors, "senses axis x", "role/axis mismatch error")
+end)
+
+T.it("only laterals, no medial, still warns about a degraded vector", function()
+  local cfg = goodConfig()
+  cfg.hardware.sensors.velocityVector = {
+    { peripheral = "velocity_sensor_1", role = "lateralFront", axis = "x" },
+    { peripheral = "velocity_sensor_2", role = "lateralRear", axis = "x" },
+  }
+  local ok, _, warnings = Config.validate(cfg)
+  T.isTrue(ok, "valid but degraded")
+  T.containsMatch(warnings, "velocity vector configured", "missing-medial warning")
+end)
+
 
 
 

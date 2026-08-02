@@ -159,17 +159,41 @@ function Sensors:readVelocityVector()
   if #entries == 0 then return nil end
 
   local vc = self.cfg.sensors.velocity
-  local vec = {}
+  -- Read every configured sensor once, apply scale + its own invert + its own LPF, and file it
+  -- under its role (or its bare axis, for a legacy install). One filter per sensor, keyed on the
+  -- same label, so front and rear each keep their own smoothing.
+  local read = {}
   for _, item in ipairs(entries) do
-    local label = "velocity_" .. tostring(item.axis)
+    local label = "velocity_" .. tostring(item.role or item.axis)
     local raw = safeCall(self, item.dev, "getVelocity", label)
     if type(raw) == "number" then
       local value = raw * (vc.scale or 1)
       if item.invert then value = -value end
       self.f[label] = self.f[label] or Filter.lpf(vc.filterAlpha)
-      vec[item.axis] = self.f[label]:update(value)
+      read[label] = self.f[label]:update(value)
     end
   end
+
+  local vec = {}
+  -- LATERAL (craft x). Front and rear side-facing sensors read OPPOSITE signs under a pure yaw and
+  -- the SAME sign under a true sideways slide, so their MEAN is the translation (yaw cancels) and
+  -- their DIFFERENCE over the fore/aft baseline is the yaw rate. A single lateral sensor -- or a
+  -- legacy x-axis one -- is used on its own, with no yaw rate available.
+  local lf, lr = read["velocity_lateralFront"], read["velocity_lateralRear"]
+  if lf ~= nil and lr ~= nil then
+    vec.x = (lf + lr) / 2
+    local base = vc.yawBaseline
+    if type(base) == "number" and base > 0 then
+      -- rad/s from (blocks/s difference) / (blocks of separation), reported in deg/s.
+      vec.yawRate = math.deg((lf - lr) / base)
+    end
+  elseif lf ~= nil then vec.x = lf
+  elseif lr ~= nil then vec.x = lr
+  elseif read["velocity_x"] ~= nil then vec.x = read["velocity_x"] end
+
+  -- MEDIAL (craft z): one fore/aft sensor.
+  vec.z = read["velocity_medial"] or read["velocity_z"]
+
   if vec.x == nil and vec.z == nil then return nil end
 
   vec.horizontal = math.sqrt((vec.x or 0) ^ 2 + (vec.z or 0) ^ 2)
@@ -192,8 +216,9 @@ function Sensors:velocityCapability()
   if #entries > 0 then
     local haveX, haveZ = false, false
     for _, item in ipairs(entries) do
-      if item.axis == "x" then haveX = true end
-      if item.axis == "z" then haveZ = true end
+      local role = item.role
+      if role == "lateralFront" or role == "lateralRear" or item.axis == "x" then haveX = true end
+      if role == "medial" or item.axis == "z" then haveZ = true end
     end
     if haveX and haveZ then
       return vc.signed and "vector" or "partial"

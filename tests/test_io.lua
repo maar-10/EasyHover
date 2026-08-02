@@ -470,6 +470,79 @@ T.it("yaw appears only when the gimbal actually provides it", function()
   T.near(r2.state:get("attitude.yaw"), 90, 1e-6, "yaw read from index 3")
 end)
 
+-- ------------------------------------------------------------ velocity vector
+
+T.suite("velocity vector")
+
+--- A role-based vector: one medial sensor and a front + rear lateral pair, wired to the mock's
+--- three velocity sensors. Filters are passthrough (testConfig), so an assertion is about the
+--- aggregation, not settling.
+local function vvConfig(overrides)
+  return testConfig(require("lib.util").deepMerge({
+    hardware = { sensors = { velocityVector = {
+      { peripheral = "velocity_sensor_0", role = "medial", axis = "z" },
+      { peripheral = "velocity_sensor_1", role = "lateralFront", axis = "x" },
+      { peripheral = "velocity_sensor_2", role = "lateralRear", axis = "x" },
+    } } },
+    sensors = { velocity = { yawBaseline = 4.0 } },
+  }, overrides or {}))
+end
+
+T.it("lateral is the MEAN of front and rear; a pure slide shows no yaw rate", function()
+  mock.reset(); _G.peripheral = mock.install()
+  mock.vehicle.lateralSpeed = 2.0
+  mock.vehicle.lateralRearSpeed = 2.0        -- both slide right together = translation
+  local r = rig(vvConfig())
+  local sensors = Sensors.new(r.per, r.cfg, r.log, r.state)
+  sensors:read(0.05)
+  T.near(r.state:get("velocity.x"), 2.0, 1e-6, "x = mean of the two laterals")
+  T.near(r.state:get("velocity.yawRate"), 0, 1e-6, "no yaw when they agree")
+end)
+
+T.it("front and rear disagreeing IS yaw rate, and cancels out of lateral", function()
+  mock.reset(); _G.peripheral = mock.install()
+  mock.vehicle.lateralSpeed = 2.0            -- front swings right
+  mock.vehicle.lateralRearSpeed = -2.0       -- rear swings left = rotation
+  local r = rig(vvConfig())
+  local sensors = Sensors.new(r.per, r.cfg, r.log, r.state)
+  sensors:read(0.05)
+  T.near(r.state:get("velocity.x"), 0, 1e-6, "pure yaw leaves no net drift")
+  -- (front - rear)/baseline = (2 - -2)/4 = 1 rad/s, reported in deg/s
+  T.near(r.state:get("velocity.yawRate"), math.deg(1.0), 1e-6, "yaw rate from the pair")
+end)
+
+T.it("a per-sensor invert flips only that sensor's contribution", function()
+  mock.reset(); _G.peripheral = mock.install()
+  mock.vehicle.lateralSpeed = 2.0
+  mock.vehicle.lateralRearSpeed = 2.0
+  local r = rig(vvConfig({ hardware = { sensors = { velocityVector = {
+    { peripheral = "velocity_sensor_0", role = "medial", axis = "z" },
+    { peripheral = "velocity_sensor_1", role = "lateralFront", axis = "x" },
+    { peripheral = "velocity_sensor_2", role = "lateralRear", axis = "x", invert = true },
+  } } } }))
+  local sensors = Sensors.new(r.per, r.cfg, r.log, r.state)
+  sensors:read(0.05)
+  T.near(r.state:get("velocity.x"), 0, 1e-6, "the inverted rear now cancels the front")
+end)
+
+T.it("capability is 'vector' with a lateral pair plus a medial", function()
+  mock.reset(); _G.peripheral = mock.install()
+  local r = rig(vvConfig())
+  local sensors = Sensors.new(r.per, r.cfg, r.log, r.state)
+  T.eq(sensors:velocityCapability(), "vector", "front+rear+medial roles give a full vector")
+end)
+
+T.it("yawBaseline 0 disables yaw rate but keeps lateral drift", function()
+  mock.reset(); _G.peripheral = mock.install()
+  mock.vehicle.lateralSpeed = 1.0
+  mock.vehicle.lateralRearSpeed = -1.0
+  local r = rig(vvConfig({ sensors = { velocity = { yawBaseline = 0 } } }))
+  local sensors = Sensors.new(r.per, r.cfg, r.log, r.state)
+  sensors:read(0.05)
+  T.isNil(r.state:get("velocity.yawRate"), "no yaw rate without a baseline")
+  T.near(r.state:get("velocity.x"), 0, 1e-6, "lateral is still computed")
+end)
+
 T.it("a short gimbal reply leaves attitude stale rather than wrong", function()
   mock.reset()
   _G.peripheral = mock.install()

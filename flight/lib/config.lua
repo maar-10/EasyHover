@@ -22,6 +22,14 @@ local OPTICAL_DIRECTIONS =
   { down = true, forward = true, back = true, left = true, right = true }
 Config.OPTICAL_DIRECTIONS = OPTICAL_DIRECTIONS
 
+--- Named POSITIONS a velocity sensor can hold, and the craft axis each one senses.
+--- lateralFront / lateralRear are BOTH lateral (craft x): their MEAN is sideways translation and
+--- their DIFFERENCE over the fore/aft baseline is yaw rate (see sensors.lua). `medial` is fore/aft
+--- (craft z). There is deliberately no vertical role -- vertical speed comes from the barometer
+--- (d altitude / dt), never from a velocity sensor, so a hull roll cannot corrupt it.
+local VELOCITY_ROLES = { lateralFront = "x", lateralRear = "x", medial = "z" }
+Config.VELOCITY_ROLES = VELOCITY_ROLES
+
 --- The slot key a thruster fills, as the config screens address it.
 ---
 --- Ids used to carry their group ("lift_fl"); the screens address the bare corner ("fl"),
@@ -92,10 +100,17 @@ function Config.defaults()
         altitude = "",
         gimbal = "",
         velocity = "",          -- scalar speed (legacy / single-sensor installs)
-        -- A velocity VECTOR assembled from several sensors, each mapped to a craft axis.
+        -- A velocity VECTOR assembled from several sensors. Each entry carries a `role` (its
+        -- POSITION on the craft, from Config.VELOCITY_ROLES) which fixes the craft axis it senses.
         -- Required for drift damping and for the brake law -- see docs/MODES.md section 6.
-        -- e.g. { { peripheral = "velocity_sensor_0", axis = "z" },
-        --        { peripheral = "velocity_sensor_1", axis = "x", invert = true } }
+        --   lateralFront + lateralRear  two side-facing sensors, fore and aft: their MEAN is
+        --                               sideways drift, their DIFFERENCE is yaw rate.
+        --   medial                      one fore/aft sensor.
+        -- SENSOR CAL fills these in and sets `invert` per sensor. A bare `axis` (x|y|z) with no
+        -- role is still accepted for configs written before roles existed.
+        -- e.g. { { peripheral = "velocity_sensor_0", role = "lateralFront", axis = "x" },
+        --        { peripheral = "velocity_sensor_1", role = "lateralRear",  axis = "x" },
+        --        { peripheral = "velocity_sensor_2", role = "medial",       axis = "z" } }
         velocityVector = {},
         navTable = "",
         -- Optical (laser) sensors, each pointed at a named direction:
@@ -177,6 +192,10 @@ function Config.defaults()
         -- Readings whose magnitude is <= this are the sensor's own deadband reporting 0, not a
         -- true zero -- a within-deadband response counts as "no movement seen".
         deadband = 0.05,
+        -- Fore/aft separation (blocks) between the lateralFront and lateralRear sensors. Yaw rate
+        -- is (front - rear) / yawBaseline, so this only has to be roughly right for the rate to be
+        -- correctly SIGNED and proportional; SENSOR CAL does not need it exact. 0 disables yaw rate.
+        yawBaseline = 4.0,
       },
       optical = {
         maxRange = 32.0,
@@ -771,23 +790,41 @@ function Config.validate(cfg)
       cfg.brake.maxTiltDeg, cfg.envelope.maxPitchDeg)
   end
 
-  -- velocity vector: needed by drift damping and the brake law
-  local axesSeen = {}
+  -- velocity vector: needed by drift damping and the brake law. Two lateral sensors legitimately
+  -- share axis x (front and rear), so uniqueness is enforced on the ROLE, not the axis; a role's
+  -- axis must match the one Config.VELOCITY_ROLES fixes for it. A legacy entry with only an axis
+  -- (no role) is still accepted, and there the axis must be unique.
+  local rolesSeen, plainAxesSeen = {}, {}
+  local haveLateral, haveMedial = false, false
   for i, entry in ipairs(cfg.hardware.sensors.velocityVector or {}) do
     local where = ("hardware.sensors.velocityVector[%d]"):format(i)
     if type(entry.peripheral) ~= "string" or entry.peripheral == "" then
       err("%s.peripheral is required", where)
     end
-    if not AXES[entry.axis] then
+    if entry.role ~= nil then
+      local roleAxis = VELOCITY_ROLES[entry.role]
+      if not roleAxis then
+        err("%s.role must be lateralFront|lateralRear|medial (got %s)", where, tostring(entry.role))
+      elseif rolesSeen[entry.role] then
+        err("%s: role %s is already mapped", where, entry.role)
+      else
+        rolesSeen[entry.role] = true
+        if entry.axis ~= nil and entry.axis ~= roleAxis then
+          err("%s: role %s senses axis %s, not %s", where, entry.role, roleAxis, tostring(entry.axis))
+        end
+        if entry.role == "medial" then haveMedial = true else haveLateral = true end
+      end
+    elseif not AXES[entry.axis] then
       err("%s.axis must be x|y|z (got %s)", where, tostring(entry.axis))
-    elseif axesSeen[entry.axis] then
+    elseif plainAxesSeen[entry.axis] then
       err("%s: axis %s is already mapped", where, entry.axis)
     else
-      axesSeen[entry.axis] = true
+      plainAxesSeen[entry.axis] = true
+      if entry.axis == "x" then haveLateral = true elseif entry.axis == "z" then haveMedial = true end
     end
   end
-  if not (axesSeen.x and axesSeen.z) then
-    warn("no horizontal velocity vector configured (need axes x and z): "
+  if not (haveLateral and haveMedial) then
+    warn("no horizontal velocity vector configured (need a lateral and a medial sensor): "
       .. "the flight assistant and the brake law will degrade -- see docs/MODES.md section 6")
   end
 
