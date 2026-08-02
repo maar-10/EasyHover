@@ -352,11 +352,30 @@ T.it("lowers a pre-v2 config's telemetryHz so the loop-rate fix does not flood t
   -- the UI/NAV computers' clicks. A pre-v2 config is brought to 5, once; a fresh (v2) config is left.
   local old = Config.withDefaults({ version = 1, tuning = { telemetryHz = 10 } })
   T.eq(old.tuning.telemetryHz, 5, "an old 10 Hz config is lowered")
-  T.eq(old.version, 2, "and stamped v2 so it is not migrated twice")
+  T.eq(old.version, 3, "and stamped current so it is not migrated twice")
 
   -- A pilot who deliberately picks a rate AFTER the upgrade (already v2) keeps it.
   local kept = Config.withDefaults({ version = 2, tuning = { telemetryHz = 12 } })
   T.eq(kept.tuning.telemetryHz, 12, "a post-upgrade choice is respected")
+end)
+
+T.it("v3 forces the timid attitude gains up to the assertive baseline, once", function()
+  -- A saved config carries the OLD gains, and withDefaults merges the file over the new defaults,
+  -- so without this migration the bump never reaches an existing craft. It must overwrite the old
+  -- default even though the value "exists" in the file.
+  local old = Config.withDefaults({ version = 2,
+    control = { attitude = { pitch = { p = 0.020, iClamp = 0.10 },
+                             roll = { p = 0.020, iClamp = 0.10 } } },
+    assist = { gain = 0.35, driftDeadband = 0.25 } })
+  T.eq(old.control.attitude.pitch.p, 0.070, "pitch p raised")
+  T.eq(old.control.attitude.roll.iClamp, 0.30, "roll integral clamp raised")
+  T.eq(old.assist.gain, 0.55, "drift damper gain raised")
+  T.eq(old.version, 3, "stamped v3")
+
+  -- But a pilot who retunes AFTER the upgrade (already v3) is left alone.
+  local kept = Config.withDefaults({ version = 3,
+    control = { attitude = { pitch = { p = 0.033 } } } })
+  T.eq(kept.control.attitude.pitch.p, 0.033, "a post-upgrade gain choice is respected")
 end)
 
 -- ------------------------------------------------------------------ config paths

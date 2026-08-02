@@ -39,9 +39,9 @@
         },
         {
           ["dst"] = "flight/lib/config.lua",
-          ["size"] = 46355,
+          ["size"] = 48605,
           ["src"] = "flight/lib/config.lua",
-          ["sum"] = "8caac411",
+          ["sum"] = "68302e04",
         },
         {
           ["dst"] = "flight/lib/control/altitude.lua",
@@ -624,5 +624,5 @@
     ["size"] = 37557,
     ["sum"] = "e26e319d",
   },
-  ["version"] = "948125ef",
+  ["version"] = "4ff10239",
 }

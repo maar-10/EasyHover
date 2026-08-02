@@ -78,7 +78,7 @@ end
 
 function Config.defaults()
   return {
-    version = 2,
+    version = 3,
 
     hardware = {
       thrusterTemplate = thrusterTemplate(),
@@ -219,12 +219,19 @@ function Config.defaults()
     },
 
     control = {
-      -- ANGLE mode (Cruise / Stutter): error is degrees. The small integral is what removes
-      -- the couple of degrees of residual bank that a pure PD leaves behind -- noticeable
-      -- as a slow drift in a vehicle meant to feel composed.
+      -- ANGLE mode (Cruise / Stutter): error is degrees, output is -1..1 torque.
+      --
+      -- These were once tiny (p 0.020, iClamp 0.10) -- composed for a light sim craft, but on the
+      -- real vehicle they left the loop taking SECONDS to answer a tilt, so a lean-driven drift ran
+      -- away before anything caught it. Raised assertively: p for a correction you can feel within a
+      -- few hundred ms, d raised MORE than p (ratio ~0.36) so the faster loop stays damped rather
+      -- than overshooting, and iClamp x3 so the integral can actually HOLD the craft level against a
+      -- centre-of-mass offset instead of saturating a couple of degrees short. Tune from here: p up
+      -- if it still feels sluggish, d up if it starts to hunt. The oscillation detector is the
+      -- backstop if a gain goes too hot. Capture CoM LEVELING once it holds, to offload the integral.
       attitude = {
-        pitch = { p = 0.020, i = 0.004, d = 0.006, iClamp = 0.10, dAlpha = 0.30 },
-        roll  = { p = 0.020, i = 0.004, d = 0.006, iClamp = 0.10, dAlpha = 0.30 },
+        pitch = { p = 0.070, i = 0.010, d = 0.025, iClamp = 0.30, dAlpha = 0.35 },
+        roll  = { p = 0.070, i = 0.010, d = 0.025, iClamp = 0.30, dAlpha = 0.35 },
         yaw   = { p = 0.015, i = 0.003, d = 0.004, iClamp = 0.10, dAlpha = 0.30 },
       },
       -- RATE mode: error is degrees/second, a different plant inversion entirely, so it
@@ -376,9 +383,12 @@ function Config.defaults()
     -- rear pair normal flight leaves idle. Needs a velocity VECTOR (docs/MODES.md s6).
     assist = {
       enabled = true,
-      driftDeadband = 0.25,     -- blocks/s of lateral drift left alone
-      gain = 0.35,
-      maxAuthority = 0.6,       -- ceiling on lateral thrust spent damping
+      -- Made more eager: catch drift sooner (smaller deadband) and push back harder (more gain), so
+      -- a hands-off craft arrests a slide instead of coasting for seconds. Still a velocity DAMPER,
+      -- so it opposes motion and cannot itself run away; back gain off if it starts to buzz.
+      driftDeadband = 0.15,     -- blocks/s of lateral drift left alone
+      gain = 0.55,
+      maxAuthority = 0.7,       -- ceiling on lateral thrust spent damping
       inputSuppressMs = 400,    -- hold-off after any deliberate input
       requireVelocityVector = true, -- degrade + annunciate rather than guess a direction
     },
@@ -544,6 +554,30 @@ function Config.migrate(cfg)
       cfg.tuning.telemetryHz = 5
     end
     cfg.version = 2
+  end
+
+  -- v3: the old pitch/roll gains (p 0.020, iClamp 0.10) were too timid on the real craft -- it took
+  -- SECONDS to answer a tilt, so a lean-driven drift ran away. A saved config carries those old
+  -- numbers, and withDefaults merges the FILE over the new defaults, so the bump would never reach an
+  -- existing craft without this. Force the pitch/roll gains + the drift-damper to the new baseline
+  -- ONCE. Deliberately overwrites, because the whole point is that these were never chosen -- they
+  -- were the default -- and after this a pilot's own retune sticks (version stays 3).
+  if (cfg.version or 1) < 3 then
+    local a = type(cfg.control) == "table" and cfg.control.attitude
+    if type(a) == "table" then
+      for _, axis in ipairs({ "pitch", "roll" }) do
+        if type(a[axis]) == "table" then
+          a[axis].p, a[axis].i, a[axis].d = 0.070, 0.010, 0.025
+          a[axis].iClamp, a[axis].dAlpha = 0.30, 0.35
+        end
+      end
+      changes[#changes + 1] = "control.attitude pitch/roll -> assertive gains (was too sluggish to hold level)"
+    end
+    if type(cfg.assist) == "table" then
+      cfg.assist.driftDeadband, cfg.assist.gain, cfg.assist.maxAuthority = 0.15, 0.55, 0.7
+      changes[#changes + 1] = "assist -> more eager drift damping"
+    end
+    cfg.version = 3
   end
   return changes
 end
