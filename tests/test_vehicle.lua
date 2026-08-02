@@ -2757,4 +2757,134 @@ T.it("a preflight owner taking over cancels a run in progress", function()
   fs.delete(path)
 end)
 
+-- ---------------------------------------------------------------- SENSOR CAL
+
+T.suite("SENSOR CAL")
+
+--- A full craft on the pad: four corner lifts (so the mixer has pitch AND roll authority, which is
+--- the "axis map" prerequisite) and the three role-based velocity sensors. Grounded and disarmed.
+local function calRig()
+  local app, path = appRig({ hardware = {
+    thrusters = {
+      { id = "lift_fl", peripheral = "vector_thruster_0", group = "lift", pos = { x = -1, y = 0, z = 1 } },
+      { id = "lift_fr", peripheral = "vector_thruster_1", group = "lift", pos = { x = 1, y = 0, z = 1 } },
+      { id = "lift_rl", peripheral = "vector_thruster_2", group = "lift", pos = { x = -1, y = 0, z = -1 } },
+      { id = "lift_rr", peripheral = "vector_thruster_3", group = "lift", pos = { x = 1, y = 0, z = -1 } },
+    },
+    sensors = { velocityVector = {
+      { peripheral = "velocity_sensor_0", role = "medial", axis = "z" },
+      { peripheral = "velocity_sensor_1", role = "lateralFront", axis = "x" },
+      { peripheral = "velocity_sensor_2", role = "lateralRear", axis = "x" },
+    } },
+  } })
+  mock.vehicle.groundDist = 1.0                  -- on the pad: the down laser sees the ground
+  mock.vehicle.angles = { 0, 0, 0 }              -- a three-element gimbal, at rest
+  mock.vehicle.speed, mock.vehicle.lateralSpeed, mock.vehicle.lateralRearSpeed = 0, 0, 0
+  app:cycle(0.05); app:cycle(0.05)               -- populate the state store
+  return app, path
+end
+
+local function cal(app, action) return app:handleCommand({ cmd = "sensorCal", action = action }) end
+
+--- Drive one motion step: settle a baseline, do the move, let it detect, then confirm.
+local function doMotion(app, label, moveFn)
+  app:cycle(0.05)          -- baseline captured at rest
+  moveFn()
+  app:cycle(0.05); app:cycle(0.05)
+  T.isTrue(app.sensorCal:facts().detected, label .. ": a change was detected before confirm")
+  T.isTrue((cal(app, "confirm")), label .. ": confirm advances")
+end
+
+T.it("checkReady passes on the pad, disarmed, with the axes mapped", function()
+  local app, path = calRig()
+  local ok, detail = cal(app, "checkReady")
+  T.isTrue(ok, "the command is accepted")
+  T.isTrue(app.sensorCal.ready.ok, "and every prerequisite is met: "
+    .. textutils.serialise(app.sensorCal.ready.checks))
+  fs.delete(path)
+end)
+
+T.it("checkReady FAILS airborne, and START is refused until it passes", function()
+  local app, path = calRig()
+  mock.vehicle.groundDist = 40          -- lifted well clear of the pad
+  app:cycle(0.05); app:cycle(0.05)
+  cal(app, "checkReady")
+  T.isFalse(app.sensorCal.ready.ok, "not ready off the ground")
+  local ok = cal(app, "start")
+  T.isFalse(ok, "START refuses while not ready")
+  T.eq(app.sensorCal.state, "idle", "and the walkthrough never began")
+  fs.delete(path)
+end)
+
+T.it("a full walkthrough learns the gimbal indices, signs and velocity inverts", function()
+  local app, path = calRig()
+  cal(app, "checkReady")
+  T.isTrue((cal(app, "start")), "starts once ready")
+  T.eq(app.sensorCal:facts().stepId, "upright", "first step is the upright confirm")
+
+  -- 1. upright: the laser sees the pad, so the operator can confirm.
+  app:cycle(0.05)
+  T.isTrue(app.sensorCal:facts().detected, "ground is seen")
+  T.isTrue((cal(app, "confirm")), "confirm upright")
+
+  -- 2..6. the six moves. Baselines are relative, so earlier moves need not be undone.
+  doMotion(app, "pitch", function() mock.vehicle.angles = { 20, 0, 0 } end)
+  doMotion(app, "roll", function() mock.vehicle.angles = { 20, 25, 0 } end)
+  doMotion(app, "slide", function()
+    mock.vehicle.lateralSpeed, mock.vehicle.lateralRearSpeed = 2.0, 2.0 end)
+  doMotion(app, "forward", function() mock.vehicle.speed = 2.0 end)
+  doMotion(app, "yaw", function()
+    mock.vehicle.angles = { 20, 25, 30 }
+    mock.vehicle.lateralSpeed, mock.vehicle.lateralRearSpeed = 2.0, -2.0 end)
+
+  T.eq(app.sensorCal.state, "review", "the walkthrough is complete")
+  T.isTrue((cal(app, "apply")), "apply writes the mapping")
+
+  local g = app.cfg.sensors.gimbal
+  T.eq(g.pitchIndex, 1, "pitch is element 1"); T.isFalse(g.pitchInvert, "and not inverted")
+  T.eq(g.rollIndex, 2, "roll is element 2"); T.isFalse(g.rollInvert, "and not inverted")
+  T.eq(g.yawIndex, 3, "yaw landed on the spare element 3")
+  local byRole = {}
+  for _, e in ipairs(app.cfg.hardware.sensors.velocityVector) do byRole[e.role] = e end
+  T.isFalse(byRole.lateralFront.invert, "front reads + for a rightward slide")
+  T.isFalse(byRole.medial.invert, "medial reads + for forward")
+  T.isTrue(app.cfg.sensors.velocity.yawBaseline > 0, "yaw-rate baseline signed for nose-right +")
+  fs.delete(path)
+end)
+
+T.it("a sensor that reads BACKWARDS is captured as an invert", function()
+  local app, path = calRig()
+  cal(app, "checkReady"); cal(app, "start")
+  app:cycle(0.05); cal(app, "confirm")                    -- upright
+  -- The gimbal's pitch element goes NEGATIVE when the nose goes up: an inverted mount.
+  doMotion(app, "pitch", function() mock.vehicle.angles = { -20, 0, 0 } end)
+  T.isTrue(app.sensorCal.result.gimbal.pitch.sign < 0, "the down-going element is flagged")
+  cal(app, "abort")
+  -- Confirm it would land as pitchInvert = true were the walkthrough completed.
+  app.cfg.sensors.gimbal.pitchInvert = (app.sensorCal.result.gimbal.pitch.sign < 0)
+  T.isTrue(app.cfg.sensors.gimbal.pitchInvert, "an inverted pitch axis")
+  fs.delete(path)
+end)
+
+T.it("confirm is refused until the operator actually moves the craft", function()
+  local app, path = calRig()
+  cal(app, "checkReady"); cal(app, "start")
+  app:cycle(0.05); cal(app, "confirm")                    -- upright done, now on the pitch step
+  app:cycle(0.05)                                         -- baseline only; nothing has moved
+  local ok, detail = cal(app, "confirm")
+  T.isFalse(ok, "no reading, no advance")
+  T.eq(app.sensorCal:facts().stepId, "pitch", "still on the same step")
+  fs.delete(path)
+end)
+
+T.it("arming flight control mid-calibration aborts the run", function()
+  local app, path = calRig()
+  cal(app, "checkReady"); cal(app, "start")
+  T.isTrue(app.sensorCal:isRunning(), "running")
+  app:handleCommand({ cmd = "flightArm", value = true })
+  app:cycle(0.05)
+  T.isFalse(app.sensorCal:isActive(), "a craft under power is no place for a hands-on procedure")
+  fs.delete(path)
+end)
+
 return true

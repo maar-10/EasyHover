@@ -163,16 +163,22 @@ function Sensors:readVelocityVector()
   -- under its role (or its bare axis, for a legacy install). One filter per sensor, keyed on the
   -- same label, so front and rear each keep their own smoothing.
   local read = {}
+  -- PRE-INVERT per-sensor values, keyed by role, for SENSOR CAL: it learns each sensor's invert
+  -- from the RAW sign of a demonstrated motion, so it must see the reading before the flag is
+  -- applied. Untouched by the flight loop, which only ever uses the aggregated vector below.
+  local rawByRole = {}
   for _, item in ipairs(entries) do
     local label = "velocity_" .. tostring(item.role or item.axis)
     local raw = safeCall(self, item.dev, "getVelocity", label)
     if type(raw) == "number" then
       local value = raw * (vc.scale or 1)
+      if item.role then rawByRole[item.role] = value end
       if item.invert then value = -value end
       self.f[label] = self.f[label] or Filter.lpf(vc.filterAlpha)
       read[label] = self.f[label]:update(value)
     end
   end
+  self.lastVelocityRaw = rawByRole
 
   local vec = {}
   -- LATERAL (craft x). Front and rear side-facing sensors read OPPOSITE signs under a pure yaw and

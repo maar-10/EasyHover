@@ -29,6 +29,7 @@ local Brake = require("lib.control.brake")
 local SelfTest = require("lib.control.selftest")
 local AxisMap = require("lib.control.axismap")
 local ComLevel = require("lib.control.comlevel")
+local SensorCal = require("lib.control.sensorcal")
 local Modes = require("lib.modes")
 local Pilot = require("lib.input.pilot")
 local Telemetry = require("lib.telemetry")
@@ -81,6 +82,9 @@ function App.new(opts)
   -- A passive watcher, not a control owner: it rides beside the flight loop and captures the
   -- steady trim once the craft is hovering level. Never commands a thruster.
   self.comLevel = ComLevel.new(cfg, self.attitude, self.log)
+  -- Also passive: SENSOR CAL watches the raw sensor stream while the OPERATOR moves the craft by
+  -- hand, and learns which gimbal element and which velocity sign is which axis. Never commands.
+  self.sensorCal = SensorCal.new(cfg, self.log)
 
   -- Blackbox recorder, keyed on the configured thruster ids (stable order) so every row lines up.
   local bbIds = {}
@@ -288,6 +292,22 @@ function App:cycleBody(dt)
     horizontal = self.state:get("velocity.horizontal"),
   }
   local capability = self.state:get("velocity.capability") or "none"
+
+  -- ---- SENSOR CAL watches the RAW sensor stream while the operator moves the craft by hand. Passive
+  -- and off the mixer path on purpose: it runs disarmed, on the ground, before the craft ever flies.
+  if self.sensorCal:isRunning() then
+    if self.modes:isArmed() then
+      -- Someone armed flight control mid-calibration. Abort rather than keep reading a craft that is
+      -- now under power -- the whole procedure assumes a still craft moved only by hand.
+      self.sensorCal:abort("flight control engaged")
+    else
+      self.sensorCal:observe({
+        rawAngles = self.sensors.lastRawAngles,
+        velRaw = self.sensors.lastVelocityRaw,
+        groundDist = self.state:get("ground.distance"),
+      })
+    end
+  end
 
   -- ---- pilot
   local axes, held, edges = self.pilot:read(self:devices(), dt)
@@ -645,6 +665,7 @@ function App:publish(measured, capability, dt, overrun)
   self.state:set("control.hoverTrim", trim)
   self.state:set("control.trimAuthority", self.altitude.trimAuthority)
   self.state:set("comLevel", self.comLevel:facts())
+  self.state:set("sensorCal", self.sensorCal:facts())
 
   -- envelope violations are for annunciation, not control
   local violations = self.envelope:violations({
@@ -1067,6 +1088,62 @@ function App:publishThrusterAxes()
   return rows
 end
 
+--- The SENSOR CAL prerequisites, each as { name, ok, detail }. Computed HERE, where the modes,
+--- sensors and mixer are visible; the owner only records the verdict. Same spirit as every other
+--- refusal: the craft decides, not the sender.
+function App:sensorCalPrereqs()
+  local caps = self.mixer:capabilities()
+  local healthy = self.sensors:isHealthy()
+  -- Positively on the ground: nil (a high hover the laser cannot see) is NOT good enough here, the
+  -- whole procedure is a hands-on ground operation, so it must read a real surface underneath.
+  local grounded = self.state:get("ground.contact") == true
+  local disengaged = not self.modes:isArmed()
+  local attitudeMapped = (caps.pitch and caps.roll) and true or false
+  return {
+    { name = "axis map", ok = attitudeMapped,
+      detail = attitudeMapped and "" or "map the nozzle axes first" },
+    { name = "on ground", ok = grounded, detail = grounded and "" or "put it on the pad" },
+    { name = "disengaged", ok = disengaged, detail = disengaged and "" or "disarm flight control" },
+    { name = "sensors ok", ok = healthy, detail = healthy and "" or "sensors not reporting" },
+  }
+end
+
+--- Write a completed SENSOR CAL result into config and persist it. Re-validates first and refuses to
+--- save an illegal mapping (it never would be, but the same contract as every other config write).
+function App:applySensorCal(result)
+  result = result or {}
+  local g = self.cfg.sensors.gimbal
+  local gm = result.gimbal or {}
+  if gm.pitch then g.pitchIndex, g.pitchInvert = gm.pitch.index, (gm.pitch.sign < 0) end
+  if gm.roll then g.rollIndex, g.rollInvert = gm.roll.index, (gm.roll.sign < 0) end
+  if gm.yaw then g.yawIndex, g.yawInvert = gm.yaw.index, (gm.yaw.sign < 0) end
+
+  local vc = result.velocity or {}
+  for _, entry in ipairs(self.cfg.hardware.sensors.velocityVector or {}) do
+    local learned = entry.role and vc[entry.role]
+    if learned then entry.invert = learned.invert and true or false end
+  end
+  -- Fold the demonstrated yaw direction into the baseline's SIGN, so yawRate reads + for it.
+  if result.yawRateSign then
+    local base = math.abs(self.cfg.sensors.velocity.yawBaseline or 0)
+    self.cfg.sensors.velocity.yawBaseline = base * result.yawRateSign
+  end
+
+  local ok, errors = Config.validate(self.cfg)
+  if not ok then return false, table.concat(errors, "; ") end
+  self:rebuildHardware()
+  local saved, err = Config.save(self.configPath, self.cfg)
+  if saved then
+    self.log:info("SENSOR CAL applied: pitch=idx%s%s roll=idx%s%s yaw=%s",
+      tostring(g.pitchIndex), g.pitchInvert and " inv" or "",
+      tostring(g.rollIndex), g.rollInvert and " inv" or "",
+      gm.yaw and ("idx" .. tostring(g.yawIndex)) or "unchanged")
+  else
+    self.log:warn("SENSOR CAL: could not save: %s", tostring(err))
+  end
+  return saved, err
+end
+
 --- Apply a validated command from a UI computer. Runs off a rednet message, not inside the cycle.
 function App:handleCommand(cmd)
   local now = os.epoch("utc")
@@ -1245,6 +1322,36 @@ function App:handleCommand(cmd)
       end
       self.comLevel:start()
       return true, { state = self.comLevel.state }
+    end
+
+  elseif cmd.cmd == "sensorCal" then
+    if cmd.action == "abort" then
+      self.sensorCal:abort("by the operator")
+      return true, { state = self.sensorCal.state }
+    elseif cmd.action == "checkReady" then
+      local checks = self:sensorCalPrereqs()
+      local verdict = self.sensorCal:checkReady(checks)
+      return true, { ready = verdict.ok, checks = checks }
+    elseif cmd.action == "start" then
+      -- RE-CHECK at the instant of start, never trusting the last checkReady: a craft that got armed
+      -- or lifted off between the two clicks must not be allowed into a hands-on ground procedure.
+      self.sensorCal:checkReady(self:sensorCalPrereqs())
+      local ok, err, short = self.sensorCal:start()
+      if not ok then self.log:warn("SENSOR CAL refused: %s", tostring(err)) end
+      return ok, { error = err, errorShort = short, state = self.sensorCal.state }
+    elseif cmd.action == "retry" then
+      return self.sensorCal:retry(), { state = self.sensorCal.state }
+    elseif cmd.action == "apply" then
+      if self.sensorCal.state ~= "review" then
+        return false, { error = "nothing to apply yet", errorShort = "NOT DONE" }
+      end
+      local result = self.sensorCal:takeResult()
+      local ok, err = self:applySensorCal(result)
+      return ok, { error = ok and nil or err, errorShort = ok and nil or "SAVE FAILED",
+        applied = ok and result or nil }
+    else  -- confirm
+      local ok, err, short = self.sensorCal:confirm()
+      return ok, { error = err, errorShort = short, state = self.sensorCal.state }
     end
 
   elseif cmd.cmd == "blackbox" then

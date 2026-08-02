@@ -49,6 +49,10 @@ local COMMANDS = {
   -- CoM leveling: start watching for a settled level hover, then accept the captured trim (or
   -- discard/stop the run). Passive -- it never commands a thruster; see lib/control/comlevel.lua.
   comLevel       = { action = "enum:start,accept,discard,stop" },
+  -- SENSOR CAL: the guided, operator-driven sensor calibration. checkReady tests the prerequisites,
+  -- start begins the walkthrough, confirm locks each detected axis and advances, retry re-arms the
+  -- current step, apply writes the learned mapping to config, abort cancels. See control/sensorcal.lua.
+  sensorCal      = { action = "enum:checkReady,start,confirm,retry,apply,abort" },
   -- Blackbox flight recorder: dump the ring buffer to CSV (save), wipe it (clear), or toggle
   -- recording. See lib/io/blackbox.lua.
   blackbox       = { action = "enum:save,clear,on,off" },
@@ -321,6 +325,7 @@ function Telemetry:build(extra, includeSlow)
     selfTest = s:get("selfTest"),
     axisMap = s:get("axisMap"),
     comLevel = s:get("comLevel"),
+    sensorCal = s:get("sensorCal"),
     oscillation = s:get("oscillation"),
     envelopeClipped = s:get("envelope.clipped"),
     alarms = s:activeAlarms(),

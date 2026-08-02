@@ -515,6 +515,15 @@ function Config.defaults()
       -- back under this angle. 0 disables the auto-save.
       autoSaveDeg = 55,
     },
+
+    -- SENSOR CAL: how big a manual move has to be before it is taken as the axis being taught. High
+    -- enough that sensor noise and a nudge never register, low enough that a deliberate move by hand
+    -- always does. Applied by lib/control/sensorcal.lua.
+    sensorCal = {
+      detectDeg = 12.0,        -- a gimbal axis must swing at least this far to be identified
+      detectVel = 0.35,        -- a velocity sensor must read at least this (blocks/s) to count
+      uprightMaxDist = 15.0,   -- the down laser must see a surface within this to confirm upright
+    },
   }
 end
 
