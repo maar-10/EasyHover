@@ -234,6 +234,13 @@ function Nav.build(frame, opts)
   -- Row 1: the heading tape, rewritten every frame. Row 2: what the heading rests on.
   local headingTapeLine = Theme.line(navPage, 1, width, ("-"):rep(width), Theme.dim)
   local headingDetail = Theme.line(navPage, 2, width, "", Theme.dim)
+  -- A MISSING-HARDWARE annunciator, painted red, sitting ON TOP of the heading detail: created
+  -- after it so it draws over it, and hidden until the craft reports a configured device that is
+  -- not on the network (a switched-off thruster modem, a pulled sensor). This is the exact fault
+  -- that rolled the craft on liftoff with nothing on screen to say a modem had dropped -- and the
+  -- primary heading still shows on the tape above, so borrowing this row costs nothing.
+  local hwAnnun = Theme.line(navPage, 2, width, "", Theme.warning)
+  hwAnnun:setVisible(false)
   Theme.rule(navPage, 3, width)
 
   local reservedTop = 4
@@ -732,6 +739,21 @@ function Nav.build(frame, opts)
 
     -- The day/night button shows the mode it is IN, as asked (press to switch).
     dayNightButton:setText((Theme.mode == "night") and "NGT" or "DAY")
+
+    -- THE RED HARDWARE ANNUNCIATOR. Reported state only (no-optimism): it lights from the craft's
+    -- own inventory, `hardware.complete == false`, and names the count plus the first missing slot.
+    -- Only trusted while the link is live -- a stale link cannot vouch for what is on the network.
+    local hw = (not model.stale) and model.telemetry and model.telemetry.hardware
+    if hw and hw.complete == false then
+      local miss = hw.missing or {}
+      local head = tostring(miss[1] or "hardware")
+      local long = (#miss <= 1) and ("HW MISSING: " .. head)
+        or ("HW MISSING x%d: %s"):format(#miss, head)
+      hwAnnun:setText(Theme.fit(long, width))
+      hwAnnun:setVisible(true)
+    else
+      hwAnnun:setVisible(false)
+    end
   end
   refreshNav({})
 
@@ -952,7 +974,7 @@ function Nav.build(frame, opts)
       comStatus = comStatus, comDetail = comDetail, comTrim = comTrimLine,
       comProposal = comProposal, comStart = comStart, comAccept = comAccept,
       comDiscard = comDiscard, comWarn = comWarn,
-      headingTape = headingTapeLine, headingDetail = headingDetail,
+      headingTape = headingTapeLine, headingDetail = headingDetail, hwAnnun = hwAnnun,
       navPos = navPosLine, navInfo = navInfoLine, times = timesLine,
       dayNight = dayNightButton,
     },

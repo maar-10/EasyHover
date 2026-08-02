@@ -351,6 +351,9 @@ function Telemetry:build(extra, includeSlow)
     }
     payload.config = configView(self.cfg)
     payload.slots = slotView(self.cfg)
+    -- Hardware inventory: complete + the list of configured-but-missing slots, so a panel can paint
+    -- a red annunciator naming what dropped off the network (a switched-off modem, a pulled sensor).
+    payload.hardware = s:get("hardware")
   end
 
   if extra then

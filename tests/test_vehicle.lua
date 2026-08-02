@@ -727,6 +727,52 @@ T.it("assigns velocity roles, the altimeter, the gimbal and a laser direction", 
   fs.delete(path)
 end)
 
+T.it("a configured device that is NOT on the network raises the red hardware alarm", function()
+  -- The exact fault that rolled the craft on liftoff: a lift-thruster modem quietly switched off,
+  -- and no screen said a configured device had gone missing. It must light the warning.
+  local app, path = appRig({ hardware = { thrusters = {
+    { id = "lift_fl", peripheral = "vector_thruster_0", group = "lift" },
+    { id = "lift_fr", peripheral = "vector_thruster_404", group = "lift" }, -- absent
+  } } })
+  local hw = app.state:get("hardware")
+  T.isFalse(hw.complete, "the inventory reports incomplete")
+  local level
+  for _, a in ipairs(app.state:activeAlarms()) do
+    if a.key == "hardware" then level = a.level end
+  end
+  T.eq(level, "warning", "a WARNING-level hardware alarm is raised")
+  fs.delete(path)
+end)
+
+T.it("the hardware alarm is clear when every configured device is present", function()
+  local app, path = appRig()   -- default: every configured device is in the mock network
+  T.isTrue(app.state:get("hardware").complete, "all present")
+  local raised = false
+  for _, a in ipairs(app.state:activeAlarms()) do
+    if a.key == "hardware" then raised = true end
+  end
+  T.isFalse(raised, "no hardware alarm when the inventory is complete")
+  fs.delete(path)
+end)
+
+T.it("losing hardware after boot raises the alarm; regaining it clears it", function()
+  local app, path = appRig()
+  T.isFalse((function()
+    for _, a in ipairs(app.state:activeAlarms()) do if a.key == "hardware" then return true end end
+    return false
+  end)(), "starts clear")
+  -- A configured thruster is added and its peripheral pulled: an attach/detach event drives the
+  -- rescan + annunciation, exactly as a dropped modem would in flight.
+  app.cfg.hardware.thrusters[#app.cfg.hardware.thrusters + 1] =
+    { id = "lift_rr", peripheral = "vector_thruster_404", group = "lift" }
+  app:onPeripheralChange("peripheral_detach", "vector_thruster_404")
+  T.isFalse(app.state:get("hardware").complete, "the missing thruster is seen")
+  local raised = false
+  for _, a in ipairs(app.state:activeAlarms()) do if a.key == "hardware" then raised = true end end
+  T.isTrue(raised, "and the alarm is up")
+  fs.delete(path)
+end)
+
 T.it("A NEW THRUSTER REACHES THE MIXER WITHOUT A REBOOT", function()
   -- The cockpit report that found this: configure the craft from the UI, and nothing takes
   -- effect until the flight computer is restarted. A rescan alone was not enough -- the mixer

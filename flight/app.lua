@@ -193,6 +193,9 @@ function App:boot()
 
   self.fuel:readAll()
   self.state:set("candidates", self.per:candidates())
+  -- ANNUNCIATE MISSING HARDWARE at boot: a configured thruster/sensor/modem that is not on the
+  -- network right now lights the red warning the pilot needs BEFORE takeoff, not after a roll.
+  self:annunciateHardware()
 
   return self.configValid
 end
@@ -986,6 +989,30 @@ function App:handleSetSlot(cmd)
   return true, { kind = kind, key = key, peripheral = name }
 end
 
+--- Publish the hardware inventory and RAISE OR CLEAR the "hardware" alarm from it.
+---
+--- The whole reason this exists: a lift-thruster modem that quietly switched off (a reboot, a
+--- reassemble) rolled the craft on liftoff, and nothing on any screen said a configured device had
+--- gone missing. peripherals.lua already knows -- summary().missing lists every configured slot it
+--- could not resolve on the last scan -- so this turns that into a WARNING alarm the UI paints red,
+--- and clears it the moment everything is present again. Called after every scan (boot, a slot
+--- reassignment, and an attach/detach event), so the annunciator always reflects the live network.
+function App:annunciateHardware()
+  local summary = self.per:summary()
+  self.state:set("hardware", summary)
+  if summary.complete then
+    self.state:clear("hardware")
+  else
+    local list = summary.missing or {}
+    -- Head item named in the alarm text; the full list rides in the `hardware` fact for the panel.
+    local msg = (#list == 1) and tostring(list[1])
+      or ("%d MISSING: %s"):format(#list, tostring(list[1] or "?"))
+    self.state:raise("hardware", "warning", msg)
+  end
+  if self.telemetry and self.telemetry.markSlowDirty then self.telemetry:markSlowDirty() end
+  return summary
+end
+
 --- Re-derive everything that depends on WHICH hardware is attached.
 ---
 --- A rescan alone is not enough and that gap was real: the mixer builds its matrix once, the
@@ -1005,6 +1032,7 @@ function App:rebuildHardware()
   self.state:set("layout", caps)
   self.state:set("velocity.capability", self.sensors:velocityCapability())
   self.state:set("candidates", self.per:candidates())
+  self:annunciateHardware()
   self:publishThrusterAxes()
   -- The hardware set moved, so push the slow half of the payload out at once rather than letting
   -- the screens wait up to a second for it.
@@ -1417,6 +1445,7 @@ function App:onPeripheralChange(event, name)
   self.engine:tick(os.epoch("utc"))
   self.disk:status()
   self.state:set("candidates", self.per:candidates())
+  self:annunciateHardware()
   self.log:warn("hardware changed: loops reset, engine output re-asserted")
   return true
 end

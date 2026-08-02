@@ -1318,6 +1318,30 @@ T.it("fits the standard single monitor, 15x10", function()
   T.isTrue(panel.pages.nav:getVisible(), "and it is the page on show")
 end)
 
+T.it("paints a RED hardware annunciator when a configured device is missing", function()
+  local panel = navRig(29, 19)
+  local m = navModel()
+  m.telemetry.hardware = { complete = false,
+    missing = { "thruster lift_fr (vector_thruster_404: not present)" } }
+  panel.update(m)
+  T.isTrue(panel.elements.hwAnnun:getVisible(), "the red annunciator shows")
+  T.isTrue(panel.elements.hwAnnun:getText():find("HW MISSING") ~= nil,
+    "and it names the fault: " .. panel.elements.hwAnnun:getText())
+
+  -- Cleared the moment the craft reports everything present again.
+  m.telemetry.hardware = { complete = true, missing = {} }
+  panel.update(m)
+  T.isFalse(panel.elements.hwAnnun:getVisible(), "hidden when the inventory is complete")
+end)
+
+T.it("does NOT trust the hardware annunciator when the craft link is stale", function()
+  local panel = navRig(29, 19)
+  panel.update({ stale = true, ageMs = math.huge,
+    telemetry = { hardware = { complete = false, missing = { "anything" } } } })
+  T.isFalse(panel.elements.hwAnnun:getVisible(),
+    "a stale link cannot vouch for what is on the network")
+end)
+
 --- The dangerous one. The bar loop stopped at `height - 5`, so a 10-row monitor drew three bars
 --- and silently dropped roll and yaw -- a dead roll input would have passed the very test that
 --- exists to catch it.
