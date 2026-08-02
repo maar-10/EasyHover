@@ -66,6 +66,7 @@ function Sensors:readAttitude()
   local dev = self.per.sensors.gimbal
   local angles = safeCall(self, dev, "getAngles", "gimbal")
   if type(angles) ~= "table" then return nil end
+  self.lastRawAngles = angles      -- exposed for the blackbox recorder
 
   -- RAW gimbal output, before any index/sign mapping -- the ground truth for wiring up pitch/roll.
   -- Tilt the craft a known way and watch which numbered element moves, and which sign: that element

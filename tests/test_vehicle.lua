@@ -2520,6 +2520,74 @@ T.it("a remap REBUILDS the mixer, so it applies without a reboot", function()
   fs.delete(path)
 end)
 
+-- ---------------------------------------------------------------- blackbox recorder
+
+T.suite("blackbox recorder")
+
+T.it("records a row per cycle and saves it on command", function()
+  local app, path = appRig(fullCraft())
+  app.blackboxPath = "/tmp_bb_cmd.csv"
+  app:handleCommand({ cmd = "flightArm", value = true })
+  app.engine.master = true
+  app.state:set("ground.contact", false)      -- armed + engine + airborne -> the mixer runs and records
+  for _ = 1, 3 do app:cycle(0.05) end
+  T.isTrue(app.blackbox:count() >= 3, "a row per flown cycle")
+
+  local ok, detail = app:handleCommand({ cmd = "blackbox", action = "save" })
+  T.isTrue(ok, "saved: " .. tostring((detail or {}).error))
+  T.isTrue((detail.rows or 0) >= 3, "and reports the row count")
+  T.isTrue(fs.exists(app.blackboxPath), "the CSV exists on disk")
+  fs.delete(app.blackboxPath)
+  fs.delete(path)
+end)
+
+T.it("clears the buffer on command", function()
+  local app, path = appRig(fullCraft())
+  app:handleCommand({ cmd = "flightArm", value = true })
+  app.engine.master = true
+  app.state:set("ground.contact", false)
+  app:cycle(0.05)
+  T.isTrue(app.blackbox:count() > 0, "has rows")
+  app:handleCommand({ cmd = "blackbox", action = "clear" })
+  T.eq(app.blackbox:count(), 0, "cleared")
+  fs.delete(path)
+end)
+
+T.it("AUTO-SAVES the moment the craft tips past the threshold, once per event", function()
+  -- The reason it exists: a pilot fighting a rollover cannot also press save.
+  local app, path = appRig(fullCraft())
+  app.blackboxPath = "/tmp_bb_auto.csv"
+  app.cfg.blackbox.autoSaveDeg = 30
+  app:handleCommand({ cmd = "flightArm", value = true })
+  app.engine.master = true
+  app.state:set("ground.contact", false)
+  fs.delete(app.blackboxPath)
+
+  -- The gimbal LPF lags, so settle the reading across a few cycles at each attitude.
+  local function settle(deg, n)
+    mock.vehicle.roll = deg
+    for _ = 1, (n or 8) do app:cycle(0.05) end
+  end
+
+  settle(5)                       -- upright: no save
+  T.isFalse(fs.exists(app.blackboxPath), "no auto-save while upright")
+
+  settle(85)                      -- tipped well past 30 deg: auto-save fires
+  T.isTrue(fs.exists(app.blackboxPath), "auto-saved on the tip")
+
+  -- It must not re-save every cycle it stays over: delete the file and confirm it does not reappear.
+  fs.delete(app.blackboxPath)
+  app:cycle(0.05)
+  T.isFalse(fs.exists(app.blackboxPath), "armed -- one event, one file")
+
+  -- Back upright re-arms; a fresh tip saves again.
+  settle(2)
+  settle(85)
+  T.isTrue(fs.exists(app.blackboxPath), "a NEW event auto-saves again")
+  fs.delete(app.blackboxPath)
+  fs.delete(path)
+end)
+
 -- ---------------------------------------------------------------- CoM leveling command
 
 T.suite("CoM leveling command")

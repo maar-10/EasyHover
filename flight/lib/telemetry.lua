@@ -49,6 +49,9 @@ local COMMANDS = {
   -- CoM leveling: start watching for a settled level hover, then accept the captured trim (or
   -- discard/stop the run). Passive -- it never commands a thruster; see lib/control/comlevel.lua.
   comLevel       = { action = "enum:start,accept,discard,stop" },
+  -- Blackbox flight recorder: dump the ring buffer to CSV (save), wipe it (clear), or toggle
+  -- recording. See lib/io/blackbox.lua.
+  blackbox       = { action = "enum:save,clear,on,off" },
   -- Latch one nozzle at full deflection so the pilot can see which way it really points, then tap
   -- the direction it points (assign). A LATCH rather than a held switch because CC gives a monitor
   -- `monitor_touch` and nothing at all for the release. `direction` is only meaningful for assign;

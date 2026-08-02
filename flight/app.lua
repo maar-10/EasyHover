@@ -18,6 +18,7 @@ local Fuel = require("lib.io.fuel")
 local Relays = require("lib.io.relays")
 local Engine = require("lib.io.engine")
 local Disk = require("lib.io.disk")
+local Blackbox = require("lib.io.blackbox")
 local Mixer = require("lib.control.mixer")
 local Attitude = require("lib.control.attitude")
 local Altitude = require("lib.control.altitude")
@@ -80,6 +81,12 @@ function App.new(opts)
   -- A passive watcher, not a control owner: it rides beside the flight loop and captures the
   -- steady trim once the craft is hovering level. Never commands a thruster.
   self.comLevel = ComLevel.new(cfg, self.attitude, self.log)
+
+  -- Blackbox recorder, keyed on the configured thruster ids (stable order) so every row lines up.
+  local bbIds = {}
+  for _, t in ipairs(cfg.hardware.thrusters or {}) do bbIds[#bbIds + 1] = t.id end
+  self.blackbox = Blackbox.new(cfg, bbIds)
+  self.blackboxPath = opts.blackboxPath or "/eh_blackbox.csv"
   -- A remap changes the mixer's matrix, so it must be rebuilt and saved the moment it happens.
   self.axisMap.onAssigned = function()
     self.thrusters:invalidate()
@@ -574,6 +581,49 @@ function App:cycleBody(dt)
   local writeStart = os.epoch("utc")
   self.thrusters:apply(commands)
   self._phaseWriteMs = os.epoch("utc") - writeStart
+
+  -- ---- blackbox: one row per cycle -- sensors in (raw + mapped), the loop's demands, and every
+  -- thruster's command. Cheap (a table build + insert), so it rides every cycle the mixer flies.
+  if self.blackbox.enabled then
+    local raw = self.sensors.lastRawAngles or {}
+    local vel = self.state:get("velocity") or {}
+    local gc = self.state:get("ground.contact")
+    local ao = self.lastAltitudeOut or {}
+    local row = {
+      g1 = raw[1], g2 = raw[2], g3 = raw[3],
+      pitch = measured.pitch, roll = measured.roll, yaw = measured.yaw,
+      prate = self.attitude.rate.pitch, rrate = self.attitude.rate.roll,
+      alt = measured.altitude, vs = measured.verticalSpeed,
+      vx = vel.x, vz = vel.z, vh = vel.horizontal,
+      grnd = (gc == true) and 1 or (gc == false and 0 or -1),
+      ptq = torques.pitchTorque, rtq = torques.rollTorque, ytq = torques.yawTorque,
+      coll = ao.collective, vtrim = ao.verticalTrim,
+      mode = self.modes:attitudeMode(), state = state,
+    }
+    for id, cmd in pairs(commands) do
+      row[id .. ".th"] = cmd.thrust
+      row[id .. ".dx"] = cmd.defX
+      row[id .. ".dz"] = cmd.defZ
+    end
+    self.blackbox:record(row, now)
+
+    -- AUTO-SAVE on a flip. If the craft tips past the threshold, dump the buffer once -- the pilot
+    -- fighting a rollover cannot also press save, and the interesting rows are the ones just before.
+    -- Re-arms once the craft is back under the angle, so one event writes one file.
+    local tip = math.max(math.abs(measured.pitch or 0), math.abs(measured.roll or 0))
+    local limitDeg = self.cfg.blackbox.autoSaveDeg or 0
+    if limitDeg > 0 and tip >= limitDeg then
+      if not self._blackboxArmed then
+        self._blackboxArmed = true
+        local ok, info = self.blackbox:save(self.blackboxPath)
+        if ok then
+          self.log:warn("blackbox: AUTO-SAVED %d rows to %s (tip %.0f deg)", info, self.blackboxPath, tip)
+        end
+      end
+    elseif tip < (limitDeg * 0.5) then
+      self._blackboxArmed = false
+    end
+  end
 
   self:publish(measured, capability, dt, overrun)
   return state
@@ -1155,6 +1205,26 @@ function App:handleCommand(cmd)
       self.comLevel:start()
       return true, { state = self.comLevel.state }
     end
+
+  elseif cmd.cmd == "blackbox" then
+    if cmd.action == "save" then
+      local ok, info = self.blackbox:save(self.blackboxPath)
+      if ok then
+        self.log:info("blackbox: saved %d rows to %s", info, self.blackboxPath)
+        return true, { rows = info, path = self.blackboxPath }
+      end
+      self.log:warn("blackbox: save failed: %s", tostring(info))
+      return false, { error = tostring(info), errorShort = "SAVE FAILED" }
+    elseif cmd.action == "clear" then
+      self.blackbox:clear()
+      self.log:info("blackbox: buffer cleared")
+      return true, { cleared = true }
+    elseif cmd.action == "on" or cmd.action == "off" then
+      self.blackbox:setEnabled(cmd.action == "on")
+      self.log:info("blackbox: recording %s", self.blackbox.enabled and "ON" or "OFF")
+      return true, { enabled = self.blackbox.enabled }
+    end
+    return false, { error = "unknown blackbox action", errorShort = "BAD ACTION" }
 
   elseif cmd.cmd == "setAxes" then
     local target

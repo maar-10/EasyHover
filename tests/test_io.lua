@@ -9,6 +9,7 @@ local Thrusters = require("lib.io.thrusters")
 local Sensors = require("lib.io.sensors")
 local Fuel = require("lib.io.fuel")
 local Relays = require("lib.io.relays")
+local Blackbox = require("lib.io.blackbox")
 
 local mock = dofile("/tests/mocks/peripherals.lua")
 
@@ -833,6 +834,48 @@ T.it("readback lists every relay for the UI", function()
   T.eq(#rows, 1, "one relay")
   T.eq(rows[1].label, "lights", "label")
   T.isTrue(rows[1].digital, "state read back")
+end)
+
+-- ------------------------------------------------------------ blackbox
+
+T.suite("blackbox")
+
+T.it("keeps only the last `capacity` rows, oldest-first, timed from the first row", function()
+  local bb = Blackbox.new({ blackbox = { capacity = 3 } }, { "lift_fl" })
+  for i = 1, 5 do bb:record({ roll = i }, i * 10) end
+  T.eq(bb:count(), 3, "the ring holds capacity, not everything")
+  local rows = bb:ordered()
+  T.eq(rows[1].roll, 3, "oldest retained is the 3rd row after two were overwritten")
+  T.eq(rows[3].roll, 5, "newest is the 5th")
+  T.eq(rows[1].t, 20, "t is relative to the FIRST recorded row (30ms - 10ms)")
+end)
+
+T.it("records nothing while disabled, and resumes when enabled", function()
+  local bb = Blackbox.new({ blackbox = { enabled = false } }, {})
+  bb:record({ roll = 1 }, 0)
+  T.eq(bb:count(), 0, "disabled -> nothing")
+  bb:setEnabled(true)
+  bb:record({ roll = 2 }, 5)
+  T.eq(bb:count(), 1, "enabled -> records")
+end)
+
+T.it("saves a CSV: a header, per-thruster columns, and one line per row", function()
+  local bb = Blackbox.new({ blackbox = { capacity = 10 } }, { "lift_fl", "lift_fr" })
+  bb:record({ roll = 1.5, ["lift_fl.th"] = 0.4, ["lift_fr.th"] = 0.6 }, 0)
+  bb:record({ roll = 2.5 }, 100)
+  local path = "/tmp_bb_test.csv"
+  local ok, n = bb:save(path)
+  T.isTrue(ok, "saved")
+  T.eq(n, 2, "two data rows")
+  local f = fs.open(path, "r")
+  local header = f.readLine()
+  T.isTrue(header:find("roll", 1, true) ~= nil, "header names the craft columns")
+  T.isTrue(header:find("lift_fl.th", 1, true) ~= nil, "and a per-thruster thrust column")
+  T.isTrue(header:find("lift_fr.dz", 1, true) ~= nil, "and its nozzle columns")
+  local line1 = f.readLine()
+  T.isTrue(line1:find("1.500", 1, true) ~= nil, "the first data row carries the value")
+  f.close()
+  fs.delete(path)
 end)
 
 return true

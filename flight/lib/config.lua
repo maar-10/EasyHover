@@ -483,6 +483,19 @@ function Config.defaults()
     },
 
     log = { level = "info", capacity = 200, path = nil },
+
+    -- Blackbox flight recorder: one row per control cycle into a ring buffer (sensors in, demands
+    -- out, every thruster's command), dumped to CSV on `blackbox save`. Always on by default -- it
+    -- is cheap and off the peripheral path -- so a runaway is already captured when you go to save.
+    -- capacity is rows retained; at ~10 Hz, 300 is ~30 s.
+    blackbox = {
+      enabled = true,
+      capacity = 300,
+      -- Auto-dump the buffer to CSV the moment the craft tips past this many degrees (a flip you
+      -- could not have triggered a save through). Once per event -- it re-arms after the craft comes
+      -- back under this angle. 0 disables the auto-save.
+      autoSaveDeg = 55,
+    },
   }
 end
 
