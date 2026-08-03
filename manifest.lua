@@ -39,9 +39,9 @@
         },
         {
           ["dst"] = "flight/lib/config.lua",
-          ["size"] = 53507,
+          ["size"] = 54292,
           ["src"] = "flight/lib/config.lua",
-          ["sum"] = "d15cb374",
+          ["sum"] = "4a5eadbf",
         },
         {
           ["dst"] = "flight/lib/control/altitude.lua",
@@ -569,9 +569,9 @@
         },
         {
           ["dst"] = "ui_main/ui/nav.lua",
-          ["size"] = 53178,
+          ["size"] = 53771,
           ["src"] = "ui_main/ui/nav.lua",
-          ["sum"] = "3c1e4b11",
+          ["sum"] = "95929620",
         },
         {
           ["dst"] = "ui_main/ui/overhead.lua",
@@ -636,5 +636,5 @@
     ["size"] = 37557,
     ["sum"] = "e26e319d",
   },
-  ["version"] = "a9199d0a",
+  ["version"] = "9cc3219a",
 }

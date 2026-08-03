@@ -850,10 +850,17 @@ function Nav.build(frame, opts)
     local hw = (not model.stale) and model.telemetry and model.telemetry.hardware
     if hw and hw.complete == false then
       local miss = hw.missing or {}
+      -- Show WHAT is missing, not merely THAT something is. The 12-char "HW MISSING: " prefix leaves
+      -- almost nothing on a 15-wide monitor (it truncated a whole entry to "vel"), so if the label
+      -- plus the entry will not fit, fall back to a 4-char tag, and last of all to the entry alone --
+      -- the red colour already carries "missing". This is what lets a stale scalar "velocity sensor"
+      -- be told apart from a role "velocity lateralRear" at a glance.
       local head = tostring(miss[1] or "hardware")
-      local long = (#miss <= 1) and ("HW MISSING: " .. head)
-        or ("HW MISSING x%d: %s"):format(#miss, head)
-      hwAnnun:setText(Theme.fit(long, width))
+      local count = (#miss > 1) and ("x%d "):format(#miss) or ""
+      local tag = "HW MISSING: " .. count
+      if #(tag .. head) > width then tag = "HW: " .. count end
+      if #(tag .. head) > width then tag = count end
+      hwAnnun:setText(Theme.fit(tag .. head, width))
       hwAnnun:setVisible(true)
     else
       hwAnnun:setVisible(false)

@@ -1326,7 +1326,8 @@ T.it("paints a RED hardware annunciator when a configured device is missing", fu
     missing = { "thruster lift_fr (vector_thruster_404: not present)" } }
   panel.update(m)
   T.isTrue(panel.elements.hwAnnun:getVisible(), "the red annunciator shows")
-  T.isTrue(panel.elements.hwAnnun:getText():find("HW MISSING") ~= nil,
+  -- It names WHICH device is missing (the identity survives even when the prefix cannot).
+  T.isTrue(panel.elements.hwAnnun:getText():find("lift_fr") ~= nil,
     "and it names the fault: " .. panel.elements.hwAnnun:getText())
 
   -- Cleared the moment the craft reports everything present again.

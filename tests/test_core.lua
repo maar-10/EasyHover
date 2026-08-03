@@ -233,6 +233,25 @@ T.it("migrate REPORTS dropping the vertical sensor rather than doing it silently
   T.containsMatch(changes, "vertical velocity", "and it says what it did")
 end)
 
+T.it("a stale legacy scalar velocity sensor is cleared once a role vector exists", function()
+  -- The scalar hardware.sensors.velocity is invisible on the VELOCITY SENS page (which lists the
+  -- roles), so a stale name there is an unclearable phantom "HW MISSING: vel". The role vector
+  -- supersedes it, so migrate clears it.
+  local cfg = Config.withDefaults({ hardware = { sensors = {
+    velocity = "velocity_sensor_9",
+    velocityVector = {
+      { peripheral = "velocity_sensor_0", role = "medial", axis = "z" },
+      { peripheral = "velocity_sensor_1", role = "lateralFront", axis = "x" },
+    } } } })
+  T.eq(cfg.hardware.sensors.velocity, "", "the redundant scalar is cleared")
+end)
+
+T.it("the scalar velocity sensor is LEFT ALONE when there is no role vector", function()
+  -- A genuine single-sensor install still relies on the scalar; only a role vector makes it dead.
+  local cfg = Config.withDefaults({ hardware = { sensors = { velocity = "velocity_sensor_0" } } })
+  T.eq(cfg.hardware.sensors.velocity, "velocity_sensor_0", "kept for a legacy scalar-only craft")
+end)
+
 
 
 

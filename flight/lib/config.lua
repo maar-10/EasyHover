@@ -577,14 +577,28 @@ function Config.migrate(cfg)
   -- report. There is no vertical role to reassign it to, so drop it outright.
   local sensors = type(cfg.hardware) == "table" and cfg.hardware.sensors
   local vv = type(sensors) == "table" and sensors.velocityVector
+  local hasRoleVector = false
   if type(vv) == "table" then
     for i = #vv, 1, -1 do
       if type(vv[i]) == "table" and vv[i].axis == "y" then
         changes[#changes + 1] = ("dropped a scrapped vertical velocity sensor (%s)")
           :format(tostring(vv[i].peripheral or "?"))
         table.remove(vv, i)
+      elseif type(vv[i]) == "table" and vv[i].role ~= nil then
+        hasRoleVector = true
       end
     end
+  end
+
+  -- The legacy SCALAR velocity sensor (hardware.sensors.velocity) is fully superseded by the
+  -- role-based velocityVector. It is NOT shown on the VELOCITY SENS page -- that lists the three
+  -- roles -- so a stale name left in it is an INVISIBLE missing-hardware alarm ("HW MISSING: vel")
+  -- the pilot cannot see or clear from any screen. Once a real role vector exists, clear it.
+  if hasRoleVector and type(sensors) == "table"
+    and type(sensors.velocity) == "string" and sensors.velocity ~= "" then
+    changes[#changes + 1] = ("cleared the redundant legacy scalar velocity sensor (%s)")
+      :format(sensors.velocity)
+    sensors.velocity = ""
   end
 
   local engine = cfg.engine
