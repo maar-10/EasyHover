@@ -52,7 +52,8 @@ function Peripherals.new(cfg, log)
   self.sensors = {}     -- role -> dev  (optical is a list)
   self.inputs = {}
   self.relays = {}      -- list of { spec, dev }
-  self.missing = {}
+  self.missing = {}         -- HARD: an explicitly-named device that is not on the network
+  self.optionalMissing = {} -- SOFT: a blank auto-pick slot with nothing of that type present
   self.scanCount = 0
   return self
 end
@@ -91,14 +92,19 @@ function Peripherals:resolve(name, ptype, label)
     return dev, name
   end
 
+  -- A BLANK slot that resolves to nothing is UNCONFIGURED, not a device that dropped off the wire.
+  -- The distinction matters because `missing` drives the red hardware annunciator: an optional input
+  -- nobody installed (a craft with a typewriter but no controller) must not light the same warning
+  -- as a lift-thruster modem that switched off. Soft cases go to `optionalMissing`, which is logged
+  -- but never alarmed; only an EXPLICITLY-NAMED device that will not wrap (above) is hard-missing.
   if not ptype then
-    self.missing[#self.missing + 1] = ("%s (not configured)"):format(label)
+    self.optionalMissing[#self.optionalMissing + 1] = ("%s (not configured)"):format(label)
     return nil, nil
   end
 
   local candidates = Peripherals.findByType(ptype)
   if #candidates == 0 then
-    self.missing[#self.missing + 1] = ("%s (no %s on the network)"):format(label, ptype)
+    self.optionalMissing[#self.optionalMissing + 1] = ("%s (no %s on the network)"):format(label, ptype)
     return nil, nil
   end
   if #candidates > 1 then
@@ -120,6 +126,7 @@ function Peripherals:scan()
   local cfg = self.cfg
   self.thrusters, self.order, self.sensors, self.inputs, self.relays = {}, {}, {}, {}, {}
   self.missing = {}
+  self.optionalMissing = {}
   self.scanCount = self.scanCount + 1
 
   -- thrusters: always by explicit name, never auto-picked. Guessing which physical
@@ -261,6 +268,11 @@ function Peripherals:scan()
     self.log:info("scan #%d: all configured hardware present (%d thrusters)",
       self.scanCount, #self.order)
   end
+  -- Soft cases are informational only -- an unconfigured optional slot is not a fault to alarm on.
+  if #self.optionalMissing > 0 then
+    self.log:info("scan #%d: %d unconfigured slot(s) -> %s", self.scanCount,
+      #self.optionalMissing, table.concat(self.optionalMissing, "; "))
+  end
 
   return self
 end
@@ -340,6 +352,7 @@ function Peripherals:summary()
     drives = #(self.drives or {}),
     engine = self.engine ~= nil,
     missing = Util.deepCopy(self.missing),
+    optionalMissing = Util.deepCopy(self.optionalMissing),
     complete = #self.missing == 0,
     scans = self.scanCount,
   }

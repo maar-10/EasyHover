@@ -81,6 +81,31 @@ T.it("blank sensor names auto-pick by type", function()
   T.notNil(r.per.sensors.velocity, "velocity auto-picked")
 end)
 
+T.it("a blank optional slot with nothing present is UNCONFIGURED, not missing hardware", function()
+  mock.reset(); _G.peripheral = mock.install()
+  mock.devices["tweaked_controller_0"] = nil     -- this craft has no controller...
+  mock.devices["linked_typewriter_0"] = nil      -- ...and no typewriter, both left blank in config
+  local r = rig()
+  -- Neither blank input may count as MISSING -- `missing` drives the red hardware alarm, and an
+  -- optional device nobody installed must not light the same warning as a modem that switched off.
+  for _, m in ipairs(r.per.missing) do
+    T.isFalse(m:find("controller") ~= nil or m:find("typewriter") ~= nil,
+      "a blank optional input is not hard-missing: " .. m)
+  end
+  T.isTrue(r.per:isComplete(), "so the inventory still reads complete")
+  -- They are recorded SOFTLY, for the log and diagnostics, just never alarmed.
+  T.isTrue(table.concat(r.per.optionalMissing, "; "):find("controller") ~= nil,
+    "the controller is noted as unconfigured, not missing")
+end)
+
+T.it("an explicitly-NAMED device that is absent is still hard-missing", function()
+  mock.reset(); _G.peripheral = mock.install()
+  local cfg = testConfig({ hardware = { inputs = { controller = "tweaked_controller_404" } } })
+  local r = rig(cfg)
+  T.containsMatch(r.per.missing, "tweaked_controller_404", "a named-but-absent device still flags")
+  T.isFalse(r.per:isComplete(), "and the inventory is incomplete")
+end)
+
 T.it("optical sensors are auto-discovered as a list", function()
   local r = rig()
   T.eq(#r.per.sensors.optical, 1, "one laser")

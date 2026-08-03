@@ -201,9 +201,9 @@
         },
         {
           ["dst"] = "flight/lib/peripherals.lua",
-          ["size"] = 13041,
+          ["size"] = 14118,
           ["src"] = "flight/lib/peripherals.lua",
-          ["sum"] = "3919b206",
+          ["sum"] = "ea13fe8a",
         },
         {
           ["dst"] = "flight/lib/state.lua",
@@ -636,5 +636,5 @@
     ["size"] = 37557,
     ["sum"] = "e26e319d",
   },
-  ["version"] = "51e0ce9f",
+  ["version"] = "d3f74d49",
 }
