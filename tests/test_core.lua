@@ -252,6 +252,39 @@ T.it("the scalar velocity sensor is LEFT ALONE when there is no role vector", fu
   T.eq(cfg.hardware.sensors.velocity, "velocity_sensor_0", "kept for a legacy scalar-only craft")
 end)
 
+T.it("a role-less legacy velocity VECTOR entry is dropped once a role vector exists", function()
+  -- The third phantom, after the y-axis and scalar ones: a pre-rebuild vector entry that carries an
+  -- axis but no POSITION role. It shows on no VELOCITY SENS page (those list the three roles), so it
+  -- is an unclearable "HW MISSING: velocity x". Once real roles exist it is redundant -- migrate it out.
+  local cfg = Config.withDefaults({ hardware = { sensors = { velocityVector = {
+    { peripheral = "velocity_sensor_0", role = "medial",       axis = "z" },
+    { peripheral = "velocity_sensor_1", role = "lateralFront", axis = "x" },
+    { peripheral = "velocity_sensor_7",                        axis = "x" }, -- the role-less leftover
+  } } } })
+  local vv = cfg.hardware.sensors.velocityVector
+  T.eq(#vv, 2, "the role-less entry is gone, the two roled sensors survive")
+  for _, e in ipairs(vv) do T.isTrue(e.role ~= nil, "every survivor carries a role") end
+end)
+
+T.it("migrate REPORTS dropping the role-less legacy vector entry", function()
+  local cfg = { hardware = { sensors = { velocityVector = {
+    { peripheral = "velocity_sensor_0", role = "medial", axis = "z" },
+    { peripheral = "velocity_sensor_7",                  axis = "x" },
+  } } } }
+  local changes = Config.migrate(cfg)
+  T.eq(#cfg.hardware.sensors.velocityVector, 1, "only the role-less entry is dropped")
+  T.containsMatch(changes, "role%-less legacy velocity", "and it says what it did")
+end)
+
+T.it("a role-less vector entry is LEFT ALONE when it is the only velocity source", function()
+  -- A craft flying on a single legacy lateral (no roles yet) still reads it via the velocity_x
+  -- fallback. Dropping it would strand that craft, so migrate keeps it until SENSOR CAL gives it a role.
+  local cfg = Config.withDefaults({ hardware = { sensors = { velocityVector = {
+    { peripheral = "velocity_sensor_0", axis = "x" },
+  } } } })
+  T.eq(#cfg.hardware.sensors.velocityVector, 1, "kept: it is the craft's only velocity sensor")
+end)
+
 
 
 

@@ -579,6 +579,8 @@ function Config.migrate(cfg)
   local vv = type(sensors) == "table" and sensors.velocityVector
   local hasRoleVector = false
   if type(vv) == "table" then
+    -- Pass 1: drop the scrapped vertical (y) sensor outright -- there is no vertical role to
+    -- reassign it to -- and learn whether a real role-based vector already exists.
     for i = #vv, 1, -1 do
       if type(vv[i]) == "table" and vv[i].axis == "y" then
         changes[#changes + 1] = ("dropped a scrapped vertical velocity sensor (%s)")
@@ -586,6 +588,22 @@ function Config.migrate(cfg)
         table.remove(vv, i)
       elseif type(vv[i]) == "table" and vv[i].role ~= nil then
         hasRoleVector = true
+      end
+    end
+    -- Pass 2: a ROLE-LESS entry (an axis with no craft POSITION) is a pre-rebuild legacy artifact.
+    -- The VELOCITY SENS page lists the three ROLES, so a role-less entry appears on no page: it can
+    -- only ever be an invisible "HW MISSING: velocity x" alarm the pilot has no screen to clear from
+    -- -- the exact affliction of the scalar sensor below. Once a real role vector exists it is pure
+    -- redundancy, so drop it. Guarded by hasRoleVector (like the scalar clear) so a craft still
+    -- flying on a single legacy lateral -- read via the velocity_x fallback in io/sensors.lua -- is
+    -- never stranded; that pilot re-runs SENSOR CAL, which gives the sensor a proper role.
+    if hasRoleVector then
+      for i = #vv, 1, -1 do
+        if type(vv[i]) == "table" and vv[i].role == nil then
+          changes[#changes + 1] = ("dropped a role-less legacy velocity sensor (%s, axis %s)")
+            :format(tostring(vv[i].peripheral or "?"), tostring(vv[i].axis or "?"))
+          table.remove(vv, i)
+        end
       end
     end
   end
