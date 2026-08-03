@@ -117,9 +117,9 @@
         },
         {
           ["dst"] = "flight/lib/control/sensorcal.lua",
-          ["size"] = 12979,
+          ["size"] = 13299,
           ["src"] = "flight/lib/control/sensorcal.lua",
-          ["sum"] = "308324c4",
+          ["sum"] = "050ca2d1",
         },
         {
           ["dst"] = "flight/lib/input/bindings.lua",
@@ -569,9 +569,9 @@
         },
         {
           ["dst"] = "ui_main/ui/nav.lua",
-          ["size"] = 53771,
+          ["size"] = 54409,
           ["src"] = "ui_main/ui/nav.lua",
-          ["sum"] = "95929620",
+          ["sum"] = "16f7b79c",
         },
         {
           ["dst"] = "ui_main/ui/overhead.lua",
@@ -636,5 +636,5 @@
     ["size"] = 37557,
     ["sum"] = "e26e319d",
   },
-  ["version"] = "4f9d6563",
+  ["version"] = "7b9c847a",
 }

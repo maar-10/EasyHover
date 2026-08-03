@@ -25,19 +25,23 @@ SensorCal.__index = SensorCal
 --- the two attitude axes first (independent of everything), then the lateral pair and the medial
 --- sensor (so their signs are known), and yaw LAST -- its rate sign is read from the now-calibrated
 --- lateral pair, and its gimbal element from whatever gimbal channels pitch and roll did not claim.
+--- Each prompt is DIRECTION-FIRST and kept short enough (<= 15 chars) to survive intact on the
+--- narrowest cockpit monitor -- the operator's move IS the calibration, so the one word that says
+--- which way (UP / RIGHT / FORWARD ...) must never be the casualty of a Theme.fit truncation. The
+--- hint spells out the sign convention the move establishes; it is advisory and may be clipped.
 local STEPS = {
   { id = "upright", kind = "upright",
-    prompt = "Is the craft UPRIGHT?", hint = "the down laser must see the ground" },
+    prompt = "IS IT UPRIGHT?", hint = "the down laser must see the ground" },
   { id = "pitch", kind = "gimbal", axis = "pitch",
-    prompt = "Pitch the NOSE UP", hint = "nose up = pitch +" },
+    prompt = "PITCH NOSE UP", hint = "nose up = pitch +" },
   { id = "roll", kind = "gimbal", axis = "roll",
-    prompt = "Roll the RIGHT wing DOWN", hint = "right wing down = roll +" },
+    prompt = "DIP RIGHT WING", hint = "right wing down = roll +" },
   { id = "slide", kind = "lateral",
-    prompt = "Slide the craft RIGHT", hint = "moving right = +x" },
+    prompt = "SLIDE RIGHT", hint = "moving right = +x" },
   { id = "fwd", kind = "medial",
-    prompt = "Move the craft FORWARD", hint = "forward = +z" },
+    prompt = "MOVE FORWARD", hint = "forward = +z" },
   { id = "yaw", kind = "yaw",
-    prompt = "Yaw the nose RIGHT", hint = "nose right = yaw +" },
+    prompt = "YAW NOSE RIGHT", hint = "nose right = yaw +" },
 }
 SensorCal.STEPS = STEPS
 
@@ -201,7 +205,7 @@ function SensorCal:observe(sample)
       self.detail = table.concat(parts, ", ") .. " -- confirm"
     else
       self.cur.detected = nil
-      self.detail = step.prompt .. " (" .. step.hint .. ")"
+      self.detail = "do the move"
     end
     return
   end

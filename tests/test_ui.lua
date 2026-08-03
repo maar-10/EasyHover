@@ -1496,20 +1496,42 @@ end)
 T.it("running: shows the step, CONFIRM advances (green only when detected), RETRY re-arms", function()
   local panel, commands = navRig()
   panel.update(calModel({ state = "running", stepIndex = 2, stepCount = 6,
-    prompt = "Pitch the NOSE UP", detected = false }))
-  T.isTrue(panel.elements.calStep:getText():find("STEP 2/6") ~= nil,
-    "shows which step: " .. panel.elements.calStep:getText())
+    prompt = "PITCH NOSE UP", detected = false }))
+  T.isTrue(panel.elements.calStep:getText():find("PITCH NOSE UP") ~= nil,
+    "the move is shown on its own line, direction and all: " .. panel.elements.calStep:getText())
+  T.isTrue(panel.elements.calStatus:getText():find("2/6") ~= nil,
+    "the step counter rides the status line now, not the move line: " .. panel.elements.calStatus:getText())
   T.eq(panel.elements.calPrimary:getText(), "CONFIRM", "primary is CONFIRM while running")
   T.eq(panel.elements.calPrimary:getBackground(), Theme.buttonBg,
     "CONFIRM is not green until the craft reports a reading")
 
   panel.update(calModel({ state = "running", stepIndex = 2, stepCount = 6,
-    prompt = "Pitch the NOSE UP", detected = true }))
+    prompt = "PITCH NOSE UP", detected = true }))
   T.eq(panel.elements.calPrimary:getBackground(), Theme.ok, "CONFIRM lights once a change is detected")
   click(panel.elements.calPrimary)
   T.eq(commands[#commands].action, "confirm", "CONFIRM -> confirm")
   click(panel.elements.calSecondary)
   T.eq(commands[#commands].action, "retry", "RETRY -> retry")
+end)
+
+T.it("running: the DIRECTION word survives on the narrowest cockpit monitor", function()
+  -- The bug this guards: at width 15 the old "STEP n/N " prefix shoved the direction off the end
+  -- ("Pitch the NOSE UP" rendered as "STEP 2/6 Pitch"), so the operator could not tell which way to
+  -- move -- and a wrong move bakes a wrong SIGN into the calibration. The move now stands alone.
+  local panel = navRig(15, 12)
+  for _, s in ipairs({
+    { prompt = "PITCH NOSE UP",  word = "UP" },
+    { prompt = "DIP RIGHT WING", word = "WING" },
+    { prompt = "SLIDE RIGHT",    word = "RIGHT" },
+    { prompt = "MOVE FORWARD",   word = "FORWARD" },
+    { prompt = "YAW NOSE RIGHT", word = "RIGHT" },
+  }) do
+    panel.update(calModel({ state = "running", stepIndex = 2, stepCount = 6,
+      prompt = s.prompt, detected = false }))
+    local shown = panel.elements.calStep:getText()
+    T.isTrue(shown:find(s.word, 1, true) ~= nil,
+      ("'%s' keeps its direction at width 15, got '%s'"):format(s.prompt, shown))
+  end
 end)
 
 T.it("review: APPLY writes the mapping and there is no secondary", function()

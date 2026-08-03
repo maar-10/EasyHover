@@ -488,8 +488,11 @@ function Nav.build(frame, opts)
     local state = tostring(c.state or "idle")
 
     if state == "running" then
-      local n = ("%s/%s"):format(tostring(c.stepIndex or "?"), tostring(c.stepCount or "?"))
-      calStep:setText(Theme.fit("STEP " .. n .. " " .. tostring(c.prompt or ""), width))
+      -- The MOVE owns this bright line ALONE and uncropped: the prompts are short and direction-first
+      -- (see sensorcal.lua) so the one word that says WHICH WAY survives on a 15-wide monitor. The
+      -- step counter that used to prefix it -- and truncate the direction off the end -- now rides the
+      -- status line below. A cropped "Pitch the NOSE [UP]" once risked a mis-signed calibration.
+      calStep:setText(Theme.fit(tostring(c.prompt or ""), width))
       calStep:setForeground(Theme.accent)
     elseif state == "review" then
       calStep:setText(Theme.fit("REVIEW -- APPLY to save", width))
@@ -501,7 +504,13 @@ function Nav.build(frame, opts)
       calStep:setText(Theme.fit("press CHECK READY", width))
       calStep:setForeground(Theme.dim)
     end
-    calStatus:setText(Theme.fit((not live.stale) and tostring(c.detail or "") or "", width))
+    -- Status: the craft's live detail ("do the move" -> "elem 2 +15 -- confirm"), prefixed while
+    -- running with the step counter that no longer shares the move line.
+    local detail = (not live.stale) and tostring(c.detail or "") or ""
+    if state == "running" and c.stepIndex then
+      detail = ("%s/%s %s"):format(tostring(c.stepIndex), tostring(c.stepCount or "?"), detail)
+    end
+    calStatus:setText(Theme.fit(detail, width))
     calStatus:setForeground(Theme.dim)
 
     -- The first failing prerequisite, so the operator knows exactly what to fix.
