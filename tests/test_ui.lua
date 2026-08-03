@@ -1515,22 +1515,25 @@ T.it("running: shows the step, CONFIRM advances (green only when detected), RETR
 end)
 
 T.it("running: the DIRECTION word survives on the narrowest cockpit monitor", function()
-  -- The bug this guards: at width 15 the old "STEP n/N " prefix shoved the direction off the end
-  -- ("Pitch the NOSE UP" rendered as "STEP 2/6 Pitch"), so the operator could not tell which way to
-  -- move -- and a wrong move bakes a wrong SIGN into the calibration. The move now stands alone.
+  -- The bug this guards: at width 15 the direction word was cropped off the end ("Pitch the NOSE UP"
+  -- rendered as "STEP 2/6 Pitch"), so the operator could not tell which way to move -- and a wrong
+  -- move bakes a wrong SIGN into the calibration. The move now WRAPS across two lines, so even a long
+  -- prompt (as an un-updated flight computer still sends) keeps its direction on screen.
   local panel = navRig(15, 12)
   for _, s in ipairs({
-    { prompt = "PITCH NOSE UP",  word = "UP" },
-    { prompt = "DIP RIGHT WING", word = "WING" },
-    { prompt = "SLIDE RIGHT",    word = "RIGHT" },
-    { prompt = "MOVE FORWARD",   word = "FORWARD" },
-    { prompt = "YAW NOSE RIGHT", word = "RIGHT" },
+    { prompt = "PITCH NOSE UP",            word = "UP" },
+    { prompt = "DIP RIGHT WING",           word = "WING" },
+    { prompt = "SLIDE RIGHT",              word = "RIGHT" },
+    { prompt = "MOVE FORWARD",             word = "FORWARD" },
+    { prompt = "YAW NOSE RIGHT",           word = "RIGHT" },
+    { prompt = "Pitch the NOSE UP",        word = "UP" },    -- legacy long prompt still wraps clean
+    { prompt = "Roll the RIGHT wing DOWN", word = "DOWN" },  -- legacy long prompt still wraps clean
   }) do
     panel.update(calModel({ state = "running", stepIndex = 2, stepCount = 6,
       prompt = s.prompt, detected = false }))
-    local shown = panel.elements.calStep:getText()
+    local shown = panel.elements.calStep:getText() .. " " .. panel.elements.calStep2:getText()
     T.isTrue(shown:find(s.word, 1, true) ~= nil,
-      ("'%s' keeps its direction at width 15, got '%s'"):format(s.prompt, shown))
+      ("'%s' keeps its direction across two lines at width 15, got '%s'"):format(s.prompt, shown))
   end
 end)
 

@@ -139,6 +139,44 @@ function Theme.fitEnd(text, width)
   return text:sub(#text - width + 1)
 end
 
+--- Word-wrap `text` into a list of lines no wider than `width`, breaking on spaces. A single word
+--- longer than the width is hard-split across lines rather than lost. With `maxLines` set, any
+--- overflow past the last line is truncated onto it (Theme.fit) so nothing vanishes without a
+--- trace. Used where cropping the tail would drop the word that matters -- e.g. the SENSOR CAL move
+--- prompt, whose DIRECTION word lives at the end ("... NOSE UP", "... wing DOWN").
+function Theme.wrap(text, width, maxLines)
+  text = tostring(text or "")
+  if width < 1 then return { text } end
+  local lines, cur = {}, ""
+  local function flush() if cur ~= "" then lines[#lines + 1] = cur; cur = "" end end
+  for word in text:gmatch("%S+") do
+    while #word > width do            -- a word too long to ever fit: hard-split it
+      flush()
+      lines[#lines + 1] = word:sub(1, width)
+      word = word:sub(width + 1)
+    end
+    if cur == "" then
+      cur = word
+    elseif #cur + 1 + #word <= width then
+      cur = cur .. " " .. word
+    else
+      flush(); cur = word
+    end
+  end
+  flush()
+  if #lines == 0 then lines[1] = "" end
+  if maxLines and #lines > maxLines then
+    -- Keep the first maxLines lines; fold the remaining words onto the last kept line, truncated,
+    -- so the operator at least sees the start of what did not fit rather than silence.
+    local tail = table.concat(lines, " ", maxLines)
+    local kept = {}
+    for i = 1, maxLines - 1 do kept[i] = lines[i] end
+    kept[maxLines] = Theme.fit(tail, width)
+    lines = kept
+  end
+  return lines
+end
+
 --- The stale banner every panel shows when telemetry has stopped. Returning it lets the panel
 --- update the text with the age.
 function Theme.staleBanner(frame, y, width)

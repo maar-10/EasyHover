@@ -451,13 +451,16 @@ function Nav.build(frame, opts)
   -- craft's own sensorCal facts, never what a button asked for. The craft owns the detection; this
   -- screen only relays it and sends the six commands.
   Theme.line(calPage, 1, width, Theme.centre("SENSOR CAL", width), Theme.accent)
-  -- Mandatory: title, the step/ready line, the craft's detail, the button row, BACK. Extras spent.
-  local calSpare = height - (1 + 1 + 1 + 1 + 1)
+  -- Mandatory: title, the TWO move lines, the craft's detail, the button row, BACK. The move spans
+  -- two lines so a long prompt's DIRECTION word is never cropped off the end -- the point of this
+  -- screen. Extras (warn/checks/rule) spend whatever height is left.
+  local calSpare = height - (1 + 2 + 1 + 1 + 1)
   local qk = 2
   local function takeCal() local r = qk; qk = qk + 1; return r end
   local calWarn = optionalLine(calPage, calSpare >= 1 and takeCal() or nil,
     "GROUND, DISARMED", Theme.caution)
   local calStep = Theme.line(calPage, takeCal(), width, "", Theme.fg)
+  local calStep2 = Theme.line(calPage, takeCal(), width, "", Theme.accent)
   local calStatus = Theme.line(calPage, takeCal(), width, "", Theme.dim)
   local calChecks = optionalLine(calPage, calSpare >= 2 and takeCal() or nil, "", Theme.warning)
   if calSpare >= 3 then Theme.rule(calPage, takeCal(), width) end
@@ -488,20 +491,21 @@ function Nav.build(frame, opts)
     local state = tostring(c.state or "idle")
 
     if state == "running" then
-      -- The MOVE owns this bright line ALONE and uncropped: the prompts are short and direction-first
-      -- (see sensorcal.lua) so the one word that says WHICH WAY survives on a 15-wide monitor. The
-      -- step counter that used to prefix it -- and truncate the direction off the end -- now rides the
-      -- status line below. A cropped "Pitch the NOSE [UP]" once risked a mis-signed calibration.
-      calStep:setText(Theme.fit(tostring(c.prompt or ""), width))
+      -- The MOVE owns TWO bright lines, word-wrapped, so the one word that says WHICH WAY ("... NOSE
+      -- UP", "... wing DOWN") is never cropped off the end -- no matter the prompt's length or the
+      -- monitor's width. The step counter that used to prefix it (and truncate the direction) now
+      -- rides the dim status line below. A cropped "Pitch the NOSE [UP]" once risked a mis-signed cal.
+      local move = Theme.wrap(tostring(c.prompt or ""), width, 2)
+      calStep:setText(move[1] or ""); calStep2:setText(move[2] or "")
       calStep:setForeground(Theme.accent)
     elseif state == "review" then
-      calStep:setText(Theme.fit("REVIEW -- APPLY to save", width))
+      calStep:setText(Theme.fit("REVIEW -- APPLY to save", width)); calStep2:setText("")
       calStep:setForeground(Theme.ok)
     elseif c.ready then
-      calStep:setText(Theme.fit(c.ready.ok and "READY -- press START" or "NOT READY", width))
+      calStep:setText(Theme.fit(c.ready.ok and "READY -- press START" or "NOT READY", width)); calStep2:setText("")
       calStep:setForeground(c.ready.ok and Theme.ok or Theme.warning)
     else
-      calStep:setText(Theme.fit("press CHECK READY", width))
+      calStep:setText(Theme.fit("press CHECK READY", width)); calStep2:setText("")
       calStep:setForeground(Theme.dim)
     end
     -- Status: the craft's live detail ("do the move" -> "elem 2 +15 -- confirm"), prefixed while
@@ -1096,7 +1100,7 @@ function Nav.build(frame, opts)
       comStatus = comStatus, comDetail = comDetail, comTrim = comTrimLine,
       comProposal = comProposal, comStart = comStart, comAccept = comAccept,
       comDiscard = comDiscard, comWarn = comWarn,
-      calStep = calStep, calStatus = calStatus, calChecks = calChecks,
+      calStep = calStep, calStep2 = calStep2, calStatus = calStatus, calChecks = calChecks,
       calPrimary = calPrimary, calSecondary = calSecondary, calAbort = calAbort, calWarn = calWarn,
       headingTape = headingTapeLine, headingDetail = headingDetail, hwAnnun = hwAnnun,
       navPos = navPosLine, navInfo = navInfoLine, times = timesLine,
