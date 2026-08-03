@@ -570,6 +570,23 @@ end
 function Config.migrate(cfg)
   local changes = {}
 
+  -- Vertical velocity sensing was SCRAPPED -- vertical speed comes from the barometer (d altitude /
+  -- dt) now, never a velocity sensor. An old config still carries the y-axis (vertical) entry it was
+  -- set up with: inert to the flight loop, but peripherals.lua still tries to resolve its peripheral,
+  -- so once that (removed) sensor is gone it shows up as missing hardware -- the "HW MISSING: vel"
+  -- report. There is no vertical role to reassign it to, so drop it outright.
+  local sensors = type(cfg.hardware) == "table" and cfg.hardware.sensors
+  local vv = type(sensors) == "table" and sensors.velocityVector
+  if type(vv) == "table" then
+    for i = #vv, 1, -1 do
+      if type(vv[i]) == "table" and vv[i].axis == "y" then
+        changes[#changes + 1] = ("dropped a scrapped vertical velocity sensor (%s)")
+          :format(tostring(vv[i].peripheral or "?"))
+        table.remove(vv, i)
+      end
+    end
+  end
+
   local engine = cfg.engine
   if type(engine) == "table" and type(engine.intervalMs) == "number" then
     -- The feed interval used to allow 200 ms. It must now match a fuel unit's burn time, so

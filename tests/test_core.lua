@@ -211,6 +211,28 @@ T.it("only laterals, no medial, still warns about a degraded vector", function()
   T.containsMatch(warnings, "velocity vector configured", "missing-medial warning")
 end)
 
+T.it("a scrapped vertical (y-axis) velocity sensor is dropped on load", function()
+  -- The old config panel had a VERTICAL slot; a craft set up then keeps a y-axis entry the new,
+  -- baro-only model has no home for. It is inert to flight but reads as MISSING HARDWARE once the
+  -- (removed) sensor is gone. withDefaults -> migrate must strip it, keeping the real sensors.
+  local cfg = Config.withDefaults({ hardware = { sensors = { velocityVector = {
+    { peripheral = "velocity_sensor_0", role = "medial", axis = "z" },
+    { peripheral = "velocity_sensor_9", axis = "y" },
+    { peripheral = "velocity_sensor_1", role = "lateralFront", axis = "x" },
+  } } } })
+  local vv = cfg.hardware.sensors.velocityVector
+  T.eq(#vv, 2, "the vertical entry is gone, the rest survive")
+  for _, e in ipairs(vv) do T.isFalse(e.axis == "y", "no y-axis entry remains") end
+end)
+
+T.it("migrate REPORTS dropping the vertical sensor rather than doing it silently", function()
+  local cfg = { hardware = { sensors = { velocityVector = {
+    { peripheral = "velocity_sensor_9", axis = "y" } } } } }
+  local changes = Config.migrate(cfg)
+  T.eq(#cfg.hardware.sensors.velocityVector, 0, "dropped")
+  T.containsMatch(changes, "vertical velocity", "and it says what it did")
+end)
+
 
 
 
